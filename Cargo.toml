@@ -1,0 +1,74 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/mdwork-core",
+    "crates/mdwork-render",
+    "crates/mdwork-export",
+    "crates/mdwork-mcp",
+    "apps/gui",
+    "apps/cli",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+authors = ["lidawei"]
+
+[workspace.dependencies]
+gpui-kit = "=0.8.0"
+
+# Keep these pinned when the crates are introduced; gpui-kit re-exports the
+# matching gpui-pre snapshot. Do not add the crates.io `gpui` 0.2.2 alongside it.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+sha2 = "0.10"
+clap = { version = "4", features = ["derive"] }
+
+typst = "=0.15.1"
+typst-layout = "=0.15.1"
+typst-library = "=0.15.1"
+typst-pdf = "=0.15.1"
+typst-render = "=0.15.1"
+typst-kit = "=0.15.1"
+typst-svg = "=0.15.1"
+mitex = "0.2.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+rmcp = { version = "=3.7.0", features = [
+    "server",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "io-util"] }
+axum = "0.8"
+schemars = "1"
+known-folders = "1"
+encoding_rs = "0.8"
+chardetng = "0.1"
+walkdir = "2"
+regex = "1"
+notify = "8"
+comrak = { version = "0.59", default-features = false }
+rust-i18n = "4"
+ureq = { version = "=2.9.1", features = ["json"] }
+windows = { version = "0.61.3", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

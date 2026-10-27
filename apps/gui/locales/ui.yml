@@ -1,0 +1,709 @@
+_version: 2
+app.name:
+  en: "MoJian"
+  zh-CN: "墨笺"
+app.subtitle:
+  en: "Markdown notebook"
+  zh-CN: "Markdown 笔记本"
+sidebar.notebooks:
+  en: "Notebooks"
+  zh-CN: "笔记本"
+sidebar.new_note:
+  en: "New note"
+  zh-CN: "新建笔记"
+sidebar.new_notebook:
+  en: "New notebook"
+  zh-CN: "新建笔记本"
+sidebar.refresh:
+  en: "Rescan"
+  zh-CN: "重新扫描"
+sidebar.empty:
+  en: "No notebooks yet"
+  zh-CN: "还没有笔记本"
+sidebar.notes:
+  en: "notes"
+  zh-CN: "篇笔记"
+tab.close:
+  en: "Close"
+  zh-CN: "关闭"
+editor.empty:
+  en: "Select a note on the left, or create a new one."
+  zh-CN: "从左侧选择一篇笔记，或新建一篇。"
+editor.no_notebook:
+  en: "Create a notebook to get started."
+  zh-CN: "创建一个笔记本开始使用。"
+status.lines:
+  en: "%{count} lines"
+  zh-CN: "%{count} 行"
+status.words:
+  en: "%{count} words"
+  zh-CN: "%{count} 词"
+status.chars:
+  en: "%{count} chars"
+  zh-CN: "%{count} 字符"
+status.saved:
+  en: "Saved"
+  zh-CN: "已保存"
+status.unsaved:
+  en: "Unsaved"
+  zh-CN: "未保存"
+status.autosave:
+  en: "Autosave"
+  zh-CN: "自动保存"
+status.error:
+  en: "Save failed"
+  zh-CN: "保存失败"
+status.no_doc:
+  en: "No note open"
+  zh-CN: "未打开笔记"
+status.external:
+  en: "External file"
+  zh-CN: "外部文件"
+status.cursor:
+  en: "Ln %{line}, Col %{column}"
+  zh-CN: "第 %{line} 行，第 %{column} 列"
+conflict.modified:
+  en: "\"%{title}\" changed on disk. Reloading discards your edits; keeping yours overwrites the file on save."
+  zh-CN: "「%{title}」已在磁盘上被修改。重新加载会丢弃当前编辑，保留我的会在保存时覆盖磁盘文件。"
+conflict.removed:
+  en: "\"%{title}\" was deleted from disk. Recreate it from this tab, or close the tab."
+  zh-CN: "「%{title}」已从磁盘删除。可从当前标签重新创建，或关闭标签。"
+conflict.reload:
+  en: "Reload"
+  zh-CN: "重新加载"
+conflict.keep:
+  en: "Keep mine"
+  zh-CN: "保留我的"
+conflict.recreate:
+  en: "Recreate"
+  zh-CN: "重新创建"
+conflict.close:
+  en: "Close tab"
+  zh-CN: "关闭标签"
+theme.label:
+  en: "Theme"
+  zh-CN: "主题"
+theme.light:
+  en: "Light"
+  zh-CN: "亮色"
+theme.dark:
+  en: "Dark"
+  zh-CN: "暗色"
+theme.system:
+  en: "System"
+  zh-CN: "跟随系统"
+language.label:
+  en: "Language"
+  zh-CN: "语言"
+workspace.label:
+  en: "Workspace"
+  zh-CN: "工作区"
+error.open:
+  en: "Cannot open %{path}: %{reason}"
+  zh-CN: "无法打开 %{path}：%{reason}"
+preview.show:
+  en: "Preview"
+  zh-CN: "预览"
+preview.edit:
+  en: "Edit"
+  zh-CN: "编辑"
+preview.copy:
+  en: "Copy all"
+  zh-CN: "复制全文"
+preview.copied:
+  en: "Copied"
+  zh-CN: "已复制"
+preview.wrap:
+  en: "Wrap: on"
+  zh-CN: "换行：开"
+preview.nowrap:
+  en: "Wrap: off"
+  zh-CN: "换行：关"
+panel.notes:
+  en: "Notes"
+  zh-CN: "笔记"
+panel.outline:
+  en: "Outline"
+  zh-CN: "大纲"
+panel.search:
+  en: "Search"
+  zh-CN: "搜索"
+panel.bookmarks:
+  en: "Bookmarks"
+  zh-CN: "书签"
+outline.no_doc:
+  en: "Open a note to see its outline."
+  zh-CN: "打开一篇笔记后显示大纲。"
+outline.empty:
+  en: "No headings in this note."
+  zh-CN: "这篇笔记还没有标题。"
+outline.bookmark:
+  en: "Bookmark this heading"
+  zh-CN: "书签此标题"
+search.placeholder:
+  en: "Search note contents"
+  zh-CN: "搜索笔记内容"
+search.hint:
+  en: "Type to search across notes."
+  zh-CN: "输入关键词开始搜索。"
+search.running:
+  en: "Searching…"
+  zh-CN: "搜索中…"
+search.count:
+  en: "%{count} matches"
+  zh-CN: "%{count} 处匹配"
+search.current:
+  en: "This notebook"
+  zh-CN: "当前笔记本"
+search.all:
+  en: "All notebooks"
+  zh-CN: "全部笔记本"
+search.empty:
+  en: "No matches."
+  zh-CN: "没有匹配内容。"
+bookmark.empty:
+  en: "No bookmarks yet."
+  zh-CN: "还没有书签。"
+bookmark.external:
+  en: "External files cannot be bookmarked."
+  zh-CN: "外部文件不能添加书签。"
+bookmark.toggle_note:
+  en: "Bookmark this note"
+  zh-CN: "书签这篇笔记"
+bookmark.remove:
+  en: "Remove bookmark"
+  zh-CN: "移除书签"
+panel.trash:
+  en: "Trash"
+  zh-CN: "回收站"
+tree.rename:
+  en: "Rename"
+  zh-CN: "重命名"
+tree.delete:
+  en: "Delete"
+  zh-CN: "删除"
+tree.rename_failed:
+  en: "Rename failed: %{error}"
+  zh-CN: "重命名失败：%{error}"
+tree.delete_failed:
+  en: "Delete failed: %{error}"
+  zh-CN: "删除失败：%{error}"
+tree.delete_busy:
+  en: "Cannot delete while an affected note is still open."
+  zh-CN: "有受影响的笔记未能关闭，暂不能删除。"
+trash.empty:
+  en: "Trash is empty."
+  zh-CN: "回收站是空的。"
+trash.restore:
+  en: "Restore"
+  zh-CN: "恢复"
+trash.moved:
+  en: "Moved to trash"
+  zh-CN: "已移入回收站"
+trash.restored:
+  en: "Restored"
+  zh-CN: "已恢复"
+trash.failed:
+  en: "Restore failed: %{error}"
+  zh-CN: "恢复失败：%{error}"
+trash.just_now:
+  en: "Just now"
+  zh-CN: "刚刚"
+trash.minutes_ago:
+  en: "%{n} min ago"
+  zh-CN: "%{n} 分钟前"
+trash.hours_ago:
+  en: "%{n} h ago"
+  zh-CN: "%{n} 小时前"
+trash.days_ago:
+  en: "%{n} d ago"
+  zh-CN: "%{n} 天前"
+export.label:
+  en: "Export"
+  zh-CN: "导出"
+export.title:
+  en: "Export note"
+  zh-CN: "导出笔记"
+export.format:
+  en: "Format"
+  zh-CN: "格式"
+export.pdf:
+  en: "PDF"
+  zh-CN: "PDF"
+export.png:
+  en: "PNG"
+  zh-CN: "PNG"
+export.paper:
+  en: "Paper"
+  zh-CN: "纸张"
+export.cover:
+  en: "Cover"
+  zh-CN: "封面"
+export.toc:
+  en: "Contents"
+  zh-CN: "目录"
+export.page_numbers:
+  en: "Page numbers"
+  zh-CN: "页码"
+export.code_wrap:
+  en: "Wrap code"
+  zh-CN: "代码换行"
+export.code_highlight:
+  en: "Highlight code"
+  zh-CN: "代码高亮"
+export.page_files:
+  en: "One file per page"
+  zh-CN: "每页一个文件"
+export.dpi:
+  en: "%{dpi} DPI"
+  zh-CN: "%{dpi} DPI"
+export.header:
+  en: "Header"
+  zh-CN: "页眉"
+export.footer:
+  en: "Footer"
+  zh-CN: "页脚"
+export.header_placeholder:
+  en: "Supports {title}, {notebook}, {page}, {date}"
+  zh-CN: "支持 {title}、{notebook}、{page}、{date}"
+export.footer_placeholder:
+  en: "Supports {title}, {notebook}, {page}, {date}"
+  zh-CN: "支持 {title}、{notebook}、{page}、{date}"
+export.output:
+  en: "Output"
+  zh-CN: "输出"
+export.browse:
+  en: "Browse…"
+  zh-CN: "选择…"
+export.start:
+  en: "Export"
+  zh-CN: "开始导出"
+export.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+export.close:
+  en: "Close"
+  zh-CN: "关闭"
+export.busy:
+  en: "Exporting…"
+  zh-CN: "正在导出…"
+export.stage.read:
+  en: "Reading note…"
+  zh-CN: "正在读取笔记…"
+export.stage.compile:
+  en: "Typesetting…"
+  zh-CN: "正在排版…"
+export.stage.write:
+  en: "Writing PDF…"
+  zh-CN: "正在写入 PDF…"
+export.stage.render:
+  en: "Rendering PNG…"
+  zh-CN: "正在渲染 PNG…"
+export.page:
+  en: "Page %{page} / %{pages}"
+  zh-CN: "第 %{page} / %{pages} 页"
+export.warnings:
+  en: "%{count} warnings"
+  zh-CN: "%{count} 条警告"
+export.done:
+  en: "Exported %{path}"
+  zh-CN: "已导出 %{path}"
+export.done_count:
+  en: "Exported %{count} files"
+  zh-CN: "已导出 %{count} 个文件"
+export.failed:
+  en: "Export failed"
+  zh-CN: "导出失败"
+export.no_doc:
+  en: "Open a note before exporting."
+  zh-CN: "先打开一篇笔记再导出。"
+export.invalid_output:
+  en: "Choose a valid output file."
+  zh-CN: "请选择有效的输出文件。"
+export.missing_cli:
+  en: "md-work-cli.exe was not found next to md-work.exe."
+  zh-CN: "找不到 md-work-cli.exe，它应与 md-work.exe 位于同一目录。"
+zip.export_label:
+  en: "Notebook zip"
+  zh-CN: "整本导出"
+zip.import_label:
+  en: "Import zip"
+  zh-CN: "导入 zip"
+zip.export_title:
+  en: "Export whole notebook"
+  zh-CN: "导出整本笔记本"
+zip.export_hint:
+  en: "Packs notes, assets and metadata into one zip file."
+  zh-CN: "把笔记、附件和元数据打包成一个 zip 文件。"
+zip.import_title:
+  en: "Import notebook from zip"
+  zh-CN: "从 zip 导入笔记本"
+zip.notebook:
+  en: "Notebook"
+  zh-CN: "笔记本"
+zip.file:
+  en: "File"
+  zh-CN: "文件"
+zip.browse:
+  en: "Browse…"
+  zh-CN: "选择…"
+zip.pick_prompt:
+  en: "Select a notebook zip"
+  zh-CN: "选择笔记本 zip 文件"
+zip.path_placeholder:
+  en: "Choose a .zip file"
+  zh-CN: "选择 .zip 文件"
+zip.mode:
+  en: "Mode"
+  zh-CN: "模式"
+zip.mode.merge:
+  en: "Merge"
+  zh-CN: "合并"
+zip.mode.overwrite:
+  en: "Overwrite"
+  zh-CN: "覆盖"
+zip.mode.rename:
+  en: "Rename"
+  zh-CN: "重命名"
+zip.rename_to:
+  en: "New name"
+  zh-CN: "新名称"
+zip.rename_placeholder:
+  en: "Leave blank to avoid name clashes"
+  zh-CN: "留空则自动避开重名"
+zip.checking:
+  en: "Inspecting archive…"
+  zh-CN: "正在检查压缩包…"
+zip.preview_failed:
+  en: "Cannot read archive: %{message}"
+  zh-CN: "无法读取压缩包：%{message}"
+zip.target:
+  en: "Target"
+  zh-CN: "目标"
+zip.target_exists:
+  en: "(exists)"
+  zh-CN: "（已存在）"
+zip.target_new:
+  en: "(new)"
+  zh-CN: "（新建）"
+zip.summary:
+  en: "%{new} new · %{same} unchanged · %{conflicts} conflicts · %{size}"
+  zh-CN: "新增 %{new} · 相同 %{same} · 冲突 %{conflicts} · 共 %{size}"
+zip.default_policy:
+  en: "Default"
+  zh-CN: "默认"
+zip.policy.keep_existing:
+  en: "Keep existing"
+  zh-CN: "保留现有"
+zip.policy.use_imported:
+  en: "Use imported"
+  zh-CN: "使用导入"
+zip.policy.keep_both:
+  en: "Keep both"
+  zh-CN: "都保留"
+zip.policy.short_keep:
+  en: "Old"
+  zh-CN: "留旧"
+zip.policy.short_use:
+  en: "New"
+  zh-CN: "用新"
+zip.policy.short_both:
+  en: "Both"
+  zh-CN: "都留"
+zip.overwrite_warning:
+  en: "An existing notebook with this name is moved to the recycle bin first."
+  zh-CN: "现有同名笔记本会先移入回收站，再导入压缩包内容。"
+zip.import_merge:
+  en: "Merge import"
+  zh-CN: "合并导入"
+zip.import_overwrite:
+  en: "Overwrite import"
+  zh-CN: "覆盖导入"
+zip.confirm_overwrite:
+  en: "Confirm overwrite"
+  zh-CN: "确认覆盖"
+zip.import_rename:
+  en: "Import as copy"
+  zh-CN: "重命名导入"
+zip.export_start:
+  en: "Export"
+  zh-CN: "开始导出"
+zip.exporting:
+  en: "Packing…"
+  zh-CN: "正在打包…"
+zip.importing:
+  en: "Importing…"
+  zh-CN: "正在导入…"
+zip.export_done:
+  en: "Wrote %{files} files to %{path}"
+  zh-CN: "已导出 %{files} 个文件到 %{path}"
+zip.import_done:
+  en: "Imported %{name}: %{imported} new, %{same} unchanged, %{both} kept both"
+  zh-CN: "已导入「%{name}」：新增 %{imported}，跳过相同 %{same}，都保留 %{both}"
+zip.invalid_path:
+  en: "Choose a valid file path."
+  zh-CN: "请选择有效的文件路径。"
+zip.save_failed:
+  en: "A note could not be saved, import cancelled: %{path}"
+  zh-CN: "有笔记保存失败，未继续导入：%{path}"
+zip.no_notebook:
+  en: "Select a notebook first."
+  zh-CN: "先选择一个笔记本。"
+zip.no_workspace:
+  en: "Workspace is unavailable."
+  zh-CN: "工作区不可用。"
+image.host:
+  en: "Images"
+  zh-CN: "图床"
+image.host_hint:
+  en: "Where pasted and dropped images are stored"
+  zh-CN: "设置粘贴/拖入图片的保存位置"
+image.host_title:
+  en: "Image storage"
+  zh-CN: "图床设置"
+image.mode:
+  en: "Store in"
+  zh-CN: "保存方式"
+image.mode.local:
+  en: "Notebook assets"
+  zh-CN: "笔记本 assets"
+image.mode.picgo:
+  en: "PicGo"
+  zh-CN: "PicGo"
+image.mode.http:
+  en: "Generic HTTP"
+  zh-CN: "通用 HTTP"
+image.local_hint:
+  en: "Images are saved to the notebook's assets folder and inserted as relative paths."
+  zh-CN: "图片保存到笔记本的 assets 目录，并插入相对路径。"
+image.endpoint:
+  en: "Endpoint"
+  zh-CN: "地址"
+image.field:
+  en: "Form field"
+  zh-CN: "表单字段"
+image.url_path:
+  en: "URL path in JSON"
+  zh-CN: "响应 URL 路径"
+image.headers:
+  en: "Headers"
+  zh-CN: "请求头"
+image.headers_hint:
+  en: "One per line, for example: Authorization: Bearer xxx"
+  zh-CN: "每行一个，例如：Authorization: Bearer xxx"
+image.picgo_hint:
+  en: "Uses the PicGo HTTP server (default http://127.0.0.1:36677/upload). Start PicGo first."
+  zh-CN: "调用 PicGo 的 HTTP 服务（默认 http://127.0.0.1:36677/upload），需先启动 PicGo。"
+image.http_hint:
+  en: "POST multipart/form-data. The image URL is read from the response using the JSON path above. Upload failures keep the local copy."
+  zh-CN: "以 multipart/form-data 上传，按上面的 JSON 路径取图片地址；上传失败会保留本地文件。"
+image.save:
+  en: "Save"
+  zh-CN: "保存"
+image.failed:
+  en: "Image could not be saved: %{message}"
+  zh-CN: "图片保存失败：%{message}"
+image.upload_failed:
+  en: "Image upload failed, saved to the notebook assets instead: %{message}"
+  zh-CN: "图床上传失败，已保存到本地 assets：%{message}"
+mcp.settings:
+  en: "MCP"
+  zh-CN: "MCP"
+mcp.settings_hint:
+  en: "Local MCP server, access tokens and audit log"
+  zh-CN: "本地 MCP 服务、访问令牌与审计日志"
+mcp.title:
+  en: "MCP server and tokens"
+  zh-CN: "MCP 服务与令牌"
+mcp.tab.server:
+  en: "Server"
+  zh-CN: "服务"
+mcp.tab.tokens:
+  en: "Tokens"
+  zh-CN: "令牌"
+mcp.tab.audit:
+  en: "Audit"
+  zh-CN: "审计"
+mcp.enable:
+  en: "Run the local MCP server while md-work is open"
+  zh-CN: "打开墨笺时启动本地 MCP 服务"
+mcp.enable_hint:
+  en: "Listens on 127.0.0.1 only. Requests without a valid bearer token are rejected with 401."
+  zh-CN: "只监听 127.0.0.1；没有有效令牌的请求一律返回 401。"
+mcp.port:
+  en: "Port"
+  zh-CN: "端口"
+mcp.apply:
+  en: "Apply"
+  zh-CN: "应用"
+mcp.started:
+  en: "MCP server started on port %{port}."
+  zh-CN: "MCP 服务已在端口 %{port} 启动。"
+mcp.stopped:
+  en: "MCP server is not running."
+  zh-CN: "MCP 服务未运行。"
+mcp.running:
+  en: "Running: http://127.0.0.1:%{port}/mcp"
+  zh-CN: "运行中：http://127.0.0.1:%{port}/mcp"
+mcp.save_failed:
+  en: "Settings could not be saved:"
+  zh-CN: "保存设置失败："
+mcp.create:
+  en: "New token"
+  zh-CN: "新建令牌"
+mcp.no_tokens:
+  en: "No tokens yet."
+  zh-CN: "还没有令牌。"
+mcp.select_or_new:
+  en: "Select a token on the left, or create a new one."
+  zh-CN: "从左侧选择令牌，或新建一个。"
+mcp.name:
+  en: "Name"
+  zh-CN: "名称"
+mcp.name_placeholder:
+  en: "For example: VS Code"
+  zh-CN: "例如：VS Code"
+mcp.scopes:
+  en: "Scopes"
+  zh-CN: "权限"
+mcp.notebooks:
+  en: "Allowed notebooks"
+  zh-CN: "可访问的笔记本"
+mcp.unknown_notebook:
+  en: "Unknown notebook %{id}"
+  zh-CN: "未知笔记本 %{id}"
+mcp.allow:
+  en: "Note allow list"
+  zh-CN: "笔记路径白名单"
+mcp.deny:
+  en: "Note deny list"
+  zh-CN: "笔记路径黑名单"
+mcp.allow_placeholder:
+  en: "For example: 工作/**"
+  zh-CN: "例如：工作/**"
+mcp.deny_placeholder:
+  en: "For example: **/private*"
+  zh-CN: "例如：**/私密*"
+mcp.globs_hint:
+  en: "Globs with * and **, separated by commas. Deny wins; leave the allow list empty to allow every note."
+  zh-CN: "支持 * 与 ** 通配符，多个用逗号分隔；黑名单优先，白名单留空表示全部笔记。"
+mcp.save:
+  en: "Save"
+  zh-CN: "保存"
+mcp.rotate:
+  en: "Rotate secret"
+  zh-CN: "轮换密钥"
+mcp.confirm_rotate:
+  en: "Confirm rotation"
+  zh-CN: "确认轮换"
+mcp.revoke:
+  en: "Revoke"
+  zh-CN: "吊销"
+mcp.confirm_revoke:
+  en: "Confirm revoke"
+  zh-CN: "确认吊销"
+mcp.delete:
+  en: "Delete"
+  zh-CN: "删除"
+mcp.confirm_delete:
+  en: "Confirm delete"
+  zh-CN: "确认删除"
+mcp.secret_title:
+  en: "New secret (shown once)"
+  zh-CN: "新密钥（仅显示一次）"
+mcp.secret_warning:
+  en: "Copy it now; closing this window discards it for good."
+  zh-CN: "请立即复制，关闭窗口后将无法再次查看。"
+mcp.copy:
+  en: "Copy"
+  zh-CN: "复制"
+mcp.copied:
+  en: "Copied to clipboard."
+  zh-CN: "已复制到剪贴板。"
+mcp.created:
+  en: "Token created. Copy the secret now."
+  zh-CN: "令牌已创建，请立即复制密钥。"
+mcp.saved:
+  en: "Token saved."
+  zh-CN: "令牌已保存。"
+mcp.rotated:
+  en: "Secret rotated; the old one stopped working."
+  zh-CN: "密钥已轮换，旧密钥已失效。"
+mcp.revoked:
+  en: "Token revoked."
+  zh-CN: "令牌已吊销。"
+mcp.deleted:
+  en: "Token deleted."
+  zh-CN: "令牌已删除。"
+mcp.status.active:
+  en: "active"
+  zh-CN: "有效"
+mcp.status.revoked:
+  en: "revoked"
+  zh-CN: "已吊销"
+mcp.status.expired:
+  en: "expired"
+  zh-CN: "已过期"
+mcp.err.name:
+  en: "Enter a token name."
+  zh-CN: "请填写令牌名称。"
+mcp.err.scopes:
+  en: "Choose at least one scope."
+  zh-CN: "至少选择一个权限。"
+mcp.err.notebooks:
+  en: "Choose at least one notebook; otherwise the token can read nothing."
+  zh-CN: "至少选择一个笔记本，否则令牌无法访问任何内容。"
+mcp.err.select:
+  en: "Select a token first."
+  zh-CN: "请先选择令牌。"
+mcp.err.port:
+  en: "The port must be between 1 and 65535."
+  zh-CN: "端口需在 1 到 65535 之间。"
+mcp.token_error:
+  en: "Token operation failed: %{message}"
+  zh-CN: "令牌操作失败：%{message}"
+mcp.audit_error:
+  en: "Cannot read the audit log: %{message}"
+  zh-CN: "读取审计日志失败：%{message}"
+mcp.audit_hint:
+  en: "Latest tool calls, newest first. Note contents are never recorded."
+  zh-CN: "最近的工具调用，最新在前；不会记录笔记正文。"
+mcp.audit_empty:
+  en: "No calls recorded yet."
+  zh-CN: "还没有调用记录。"
+mcp.audit_refresh:
+  en: "Refresh"
+  zh-CN: "刷新"
+mcp.audit_query:
+  en: "search “%{query}”"
+  zh-CN: "搜索「%{query}」"
+mcp.clients:
+  en: "Client configuration"
+  zh-CN: "客户端配置"
+mcp.snippet_hint:
+  en: "HTTP endpoint %{url} with an Authorization: Bearer header; stdio example below."
+  zh-CN: "HTTP 端点为 %{url}，需携带 Authorization: Bearer 头；stdio 示例见下。"
+mcp.token_placeholder:
+  en: "mdt_<token id>_<secret shown on creation>"
+  zh-CN: "mdt_<令牌ID>_<创建时显示的密钥>"
+mcp.scope.read:
+  en: "Read"
+  zh-CN: "读取"
+mcp.scope.write:
+  en: "Write"
+  zh-CN: "写入"
+mcp.scope.search:
+  en: "Search"
+  zh-CN: "搜索"
+mcp.scope.delete:
+  en: "Delete (trash)"
+  zh-CN: "删除（回收站）"
+mcp.scope.delete_permanent:
+  en: "Permanent delete"
+  zh-CN: "永久删除"
+mcp.scope.export:
+  en: "Export"
+  zh-CN: "导出"
+mcp.scope.admin:
+  en: "Admin"
+  zh-CN: "管理员"

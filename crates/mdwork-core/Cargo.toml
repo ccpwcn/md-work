@@ -1,0 +1,23 @@
+[package]
+name = "mdwork-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+known-folders.workspace = true
+encoding_rs.workspace = true
+chardetng.workspace = true
+walkdir.workspace = true
+regex.workspace = true
+ureq.workspace = true
+windows.workspace = true
+notify.workspace = true
+zip = { version = "9.1.2", default-features = false, features = ["deflate"] }

@@ -1,0 +1,23 @@
+[package]
+name = "mdwork-export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mdwork-core = { path = "../mdwork-core" }
+mdwork-render = { path = "../mdwork-render" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+typst.workspace = true
+typst-layout.workspace = true
+typst-library.workspace = true
+typst-pdf.workspace = true
+typst-render.workspace = true
+typst-kit = { workspace = true, features = ["scan-fonts", "embedded-fonts"] }
+typst-svg.workspace = true
+mitex.workspace = true
+image.workspace = true

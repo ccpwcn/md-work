@@ -1,0 +1,12 @@
+[package]
+name = "mdwork-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mdwork-core = { path = "../mdwork-core" }
+comrak.workspace = true
+mitex.workspace = true
+serde.workspace = true

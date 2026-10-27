@@ -1,0 +1,20 @@
+[package]
+name = "md-work-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "md-work-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+mdwork-core = { path = "../../crates/mdwork-core" }
+mdwork-mcp = { path = "../../crates/mdwork-mcp" }
+mdwork-export = { path = "../../crates/mdwork-export" }

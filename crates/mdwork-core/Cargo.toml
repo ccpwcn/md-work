@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -21,3 +22,6 @@ ureq.workspace = true
 windows.workspace = true
 notify.workspace = true
 zip = { version = "9.1.2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+mdwork-log = { path = "../mdwork-log" }

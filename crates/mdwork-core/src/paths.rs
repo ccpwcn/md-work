@@ -9,7 +9,8 @@ pub const WORKSPACE_FILE: &str = "workspace.json";
 pub const NOTEBOOK_FILE: &str = "notebook.json";
 
 pub fn documents_dir() -> Result<PathBuf> {
-    if let Some(path) = known_folders::get_known_folder_path(known_folders::KnownFolder::Documents) {
+    if let Some(path) = known_folders::get_known_folder_path(known_folders::KnownFolder::Documents)
+    {
         return Ok(path);
     }
     let home = std::env::var_os("USERPROFILE")
@@ -61,6 +62,10 @@ pub fn exports_dir() -> PathBuf {
 
 pub fn logs_dir() -> PathBuf {
     app_data_dir().join("logs")
+}
+
+pub fn crashes_dir() -> PathBuf {
+    app_data_dir().join("crashes")
 }
 
 pub fn workspace_meta_dir(root: &std::path::Path) -> PathBuf {

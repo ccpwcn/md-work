@@ -4,7 +4,7 @@
 //! Markdown, so headings, tables and code blocks stay consistent everywhere.
 
 use comrak::nodes::{AstNode, ListType, NodeList, NodeTable, NodeValue, TableAlignment};
-use comrak::{parse_document, Arena, Options};
+use comrak::{Arena, Options, parse_document};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PreviewIr {
@@ -174,7 +174,11 @@ fn collect_blocks<'a>(node: &'a AstNode<'a>, out: &mut Vec<Block>) {
 fn collect_outline(blocks: &[Block], out: &mut Vec<OutlineItem>) {
     for block in blocks {
         match block {
-            Block::Heading { level, content, line } => out.push(OutlineItem {
+            Block::Heading {
+                level,
+                content,
+                line,
+            } => out.push(OutlineItem {
                 level: *level,
                 title: inline_plain_text(content),
                 line: *line,
@@ -408,10 +412,10 @@ fn title(title: &str) -> Option<String> {
 
 fn block_plain_text(block: &Block) -> String {
     match block {
-        Block::Heading { content, .. } | Block::Paragraph { content, .. } => inline_plain_text(content),
-        Block::CodeBlock {
-            language, text, ..
-        } => {
+        Block::Heading { content, .. } | Block::Paragraph { content, .. } => {
+            inline_plain_text(content)
+        }
+        Block::CodeBlock { language, text, .. } => {
             let fence = "```";
             let language = language.as_deref().unwrap_or("");
             let body = text.trim_end_matches('\n');
@@ -483,11 +487,7 @@ fn block_plain_text(block: &Block) -> String {
         }
         Block::Image { src, alt, .. } => {
             let alt = inline_plain_text(alt);
-            if alt.is_empty() {
-                src.clone()
-            } else {
-                alt
-            }
+            if alt.is_empty() { src.clone() } else { alt }
         }
         Block::Rule { .. } => "---".to_string(),
         Block::Math { tex, display, .. } => {
@@ -520,9 +520,9 @@ fn inline_plain_text(inlines: &[Inline]) -> String {
                 out.push_str(code);
                 out.push('`');
             }
-            Inline::Emphasis(children)
-            | Inline::Strong(children)
-            | Inline::Strike(children) => out.push_str(&inline_plain_text(children)),
+            Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strike(children) => {
+                out.push_str(&inline_plain_text(children))
+            }
             Inline::Link { url, children, .. } => {
                 if children.is_empty() {
                     out.push_str(url);
@@ -597,7 +597,10 @@ mod tests {
     #[test]
     fn parses_table_and_alignment() {
         let ir = PreviewIr::from_markdown("| a | b |\n|:--|--:|\n| 1 | 2 |\n");
-        let Block::Table { head, rows, aligns, .. } = &ir.blocks[0] else {
+        let Block::Table {
+            head, rows, aligns, ..
+        } = &ir.blocks[0]
+        else {
             panic!("expected table, got {:?}", ir.blocks[0]);
         };
         assert_eq!(head.len(), 2);
@@ -624,15 +627,21 @@ mod tests {
     fn parses_math_and_footnotes() {
         let markdown = "$$\na^2 + b^2\n$$\n\n引用[^1]\n\n[^1]: 脚注内容\n";
         let ir = PreviewIr::from_markdown(markdown);
-        assert!(matches!(&ir.blocks[0], Block::Math { tex, display: true, .. } if tex.contains("a^2")));
-        assert!(matches!(&ir.blocks[1], Block::Paragraph { content, .. } if content.iter().any(|i| matches!(i, Inline::FootnoteRef(name) if name == "1"))));
+        assert!(
+            matches!(&ir.blocks[0], Block::Math { tex, display: true, .. } if tex.contains("a^2"))
+        );
+        assert!(
+            matches!(&ir.blocks[1], Block::Paragraph { content, .. } if content.iter().any(|i| matches!(i, Inline::FootnoteRef(name) if name == "1")))
+        );
         assert!(matches!(&ir.blocks[2], Block::FootnoteDefinition { label, .. } if label == "1"));
     }
 
     #[test]
     fn detects_standalone_images() {
         let ir = PreviewIr::from_markdown("![示意图](assets/demo.png)\n");
-        assert!(matches!(&ir.blocks[0], Block::Image { src, alt, .. } if src == "assets/demo.png" && !alt.is_empty()));
+        assert!(
+            matches!(&ir.blocks[0], Block::Image { src, alt, .. } if src == "assets/demo.png" && !alt.is_empty())
+        );
     }
 
     #[test]
@@ -640,8 +649,22 @@ mod tests {
         let ir = PreviewIr::from_markdown("# 一\n\n正文\n\n## 二 **加粗**\n\n> ### 三\n");
         let outline = ir.outline();
         assert_eq!(outline.len(), 3);
-        assert_eq!(outline[0], OutlineItem { level: 1, title: "一".into(), line: 1 });
-        assert_eq!(outline[1], OutlineItem { level: 2, title: "二 加粗".into(), line: 5 });
+        assert_eq!(
+            outline[0],
+            OutlineItem {
+                level: 1,
+                title: "一".into(),
+                line: 1
+            }
+        );
+        assert_eq!(
+            outline[1],
+            OutlineItem {
+                level: 2,
+                title: "二 加粗".into(),
+                line: 5
+            }
+        );
         assert_eq!(outline[2].title, "三");
         assert_eq!(outline[2].line, 7);
     }

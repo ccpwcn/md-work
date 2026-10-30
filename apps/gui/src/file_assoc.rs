@@ -8,7 +8,12 @@ use windows::core::{HSTRING, PCWSTR};
 const PROGID: &str = "MoJian.Markdown";
 const VERB: &str = "OpenWithMoJian";
 
-fn set_string(root: HKEY, subkey: &str, name: Option<&str>, value: &str) -> windows::core::Result<()> {
+fn set_string(
+    root: HKEY,
+    subkey: &str,
+    name: Option<&str>,
+    value: &str,
+) -> windows::core::Result<()> {
     unsafe {
         let subkey = HSTRING::from(subkey);
         let mut key = HKEY::default();
@@ -31,7 +36,9 @@ fn set_string(root: HKEY, subkey: &str, name: Option<&str>, value: &str) -> wind
         let bytes = std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2);
         let result = RegSetValueExW(
             key,
-            name.as_ref().map(|name| PCWSTR(name.as_ptr())).unwrap_or(PCWSTR::null()),
+            name.as_ref()
+                .map(|name| PCWSTR(name.as_ptr()))
+                .unwrap_or(PCWSTR::null()),
             None,
             REG_SZ,
             Some(bytes),
@@ -90,14 +97,22 @@ pub fn register(exe: &str, icon: &str) -> windows::core::Result<()> {
 }
 
 pub fn ensure_registered() -> windows::core::Result<()> {
+    if is_registered() {
+        return Ok(());
+    }
     let exe = std::env::current_exe()?;
     let exe = exe.to_string_lossy().into_owned();
     let icon = format!("{exe},0");
-    let expected = format!("\"{exe}\" \"%1\"");
-    if current_command().as_deref() == Some(expected.as_str()) {
-        return Ok(());
-    }
     register(&exe, &icon)
+}
+
+/// Whether the HKCU context-menu entry already points at this executable.
+pub fn is_registered() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let expected = format!("\"{}\" \"%1\"", exe.to_string_lossy());
+    current_command().as_deref() == Some(expected.as_str())
 }
 
 fn current_command() -> Option<String> {

@@ -1,19 +1,21 @@
 //! Renders a [`PreviewIr`] with native GPUI elements.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use mdwork_render::preview::{Align, Block, Inline, ListItem, PreviewIr};
+use rust_i18n::t;
 
-const BODY_SIZE: f32 = 16.0;
+const DEFAULT_BODY_SIZE: f32 = 16.0;
 const CODE_FAMILY: &str = "Consolas";
 /// Point size used when rasterising equations for the preview.
 pub const MATH_SIZE_PT: f32 = 12.0;
@@ -24,6 +26,7 @@ struct InlineStyle {
     link: Hsla,
     code_background: Hsla,
     code_foreground: Hsla,
+    family: SharedString,
     size: f32,
 }
 
@@ -32,6 +35,7 @@ struct RenderCtx<'a> {
     style: InlineStyle,
     math: &'a HashMap<u64, Option<PathBuf>>,
     wrap_code: bool,
+    body_size: f32,
 }
 
 pub fn render(
@@ -39,9 +43,21 @@ pub fn render(
     base: Option<&Path>,
     math: &HashMap<u64, Option<PathBuf>>,
     wrap_code: bool,
+    note_font: &str,
+    note_size: f32,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
+    let body_size = if note_size > 0.0 {
+        note_size.clamp(10.0, 32.0)
+    } else {
+        DEFAULT_BODY_SIZE
+    };
+    let family = if note_font.trim().is_empty() {
+        theme.font_family.clone()
+    } else {
+        SharedString::from(note_font.trim().to_string())
+    };
     let context = RenderCtx {
         base,
         style: InlineStyle {
@@ -50,13 +66,21 @@ pub fn render(
             link: theme.link,
             code_background: theme.list_hover,
             code_foreground: theme.foreground,
-            size: BODY_SIZE,
+            family: family.clone(),
+            size: body_size,
         },
         math,
         wrap_code,
+        body_size,
     };
 
-    let mut column = div().v_flex().w_full().gap_3().px(px(28.)).py(px(20.));
+    let mut column = div()
+        .v_flex()
+        .w_full()
+        .gap_3()
+        .px(px(28.))
+        .py(px(20.))
+        .font_family(family);
     if ir.blocks.is_empty() {
         column = column.child(
             div()
@@ -82,13 +106,14 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
     let style = &context.style;
     match block {
         Block::Heading { level, content, .. } => {
-            let size = match level {
-                1 => 30.,
-                2 => 24.,
-                3 => 20.,
-                4 => 18.,
-                _ => 16.,
-            };
+            let size = context.body_size
+                * match level {
+                    1 => 1.875,
+                    2 => 1.5,
+                    3 => 1.25,
+                    4 => 1.125,
+                    _ => 1.0,
+                };
             let heading_style = InlineStyle {
                 size,
                 foreground: theme.foreground,
@@ -106,6 +131,7 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
         }
         Block::Paragraph { content, .. } => render_paragraph(content, context),
         Block::CodeBlock { language, text, .. } => {
+            let code_text = text.trim_end_matches('\n').to_string();
             let mut block = div()
                 .w_full()
                 .rounded_md()
@@ -113,30 +139,52 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
                 .p_3()
                 .v_flex()
                 .gap_1();
+
+            let mut header = div().h_flex().w_full().items_center().gap_2();
             if let Some(language) = language.as_deref().filter(|lang| !lang.is_empty()) {
-                block = block.child(
+                header = header.child(
                     div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(language.to_string()),
                 );
             }
-            let mut code = div()
-                .id(code_block_id(text, context.wrap_code))
-                .w_full()
-                .font_family(CODE_FAMILY)
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(text.trim_end_matches('\n').to_string());
+            header = header.child(div().flex_1());
+            if !code_text.is_empty() {
+                let copy = code_text.clone();
+                header = header.child(
+                    Button::new(code_copy_id(&code_text))
+                        .ghost()
+                        .compact()
+                        .label(t!("preview.copy_code").to_string())
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                        }),
+                );
+            }
+            block = block.child(header);
+
+            let mut text_style = TextStyle::default();
+            text_style.color = theme.foreground;
+            text_style.font_family = SharedString::from(CODE_FAMILY);
+            text_style.font_size = px((context.body_size - 2.0).max(10.0)).into();
+            let spans =
+                crate::highlight::code_spans(language.as_deref(), &code_text, theme.is_dark());
+            let styled = StyledText::new(code_text.clone())
+                .with_default_highlights(&text_style, spans.as_ref().clone());
             let body: AnyElement = if context.wrap_code {
-                code.into_any_element()
-            } else {
-                code = code.whitespace_nowrap();
                 div()
-                    .id(code_block_id(text, false))
+                    .id(code_block_id(&code_text, true))
+                    .w_full()
+                    .child(styled)
+                    .into_any_element()
+            } else {
+                div()
+                    .id(code_block_id(&code_text, false))
                     .w_full()
                     .overflow_x_scrollbar()
-                    .child(code)
+                    .whitespace_nowrap()
+                    .child(styled)
                     .into_any_element()
             };
             block.child(body).into_any_element()
@@ -161,10 +209,7 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
                 .into_any_element()
         }
         Block::Table {
-            head,
-            rows,
-            aligns,
-            ..
+            head, rows, aligns, ..
         } => render_table(head, rows, aligns, style, cx),
         Block::Image { src, alt, .. } => {
             let label = if alt.is_empty() {
@@ -244,7 +289,12 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
     }
 }
 
-fn math_placeholder(tex: &str, display: bool, theme: &gpui_kit::component::Theme, align: bool) -> AnyElement {
+fn math_placeholder(
+    tex: &str,
+    display: bool,
+    theme: &gpui_kit::component::Theme,
+    align: bool,
+) -> AnyElement {
     let mut block = div()
         .rounded_md()
         .bg(theme.list_hover)
@@ -259,11 +309,7 @@ fn math_placeholder(tex: &str, display: bool, theme: &gpui_kit::component::Theme
             format!("${tex}$")
         });
     if align {
-        block = div()
-            .w_full()
-            .v_flex()
-            .items_center()
-            .child(block);
+        block = div().w_full().v_flex().items_center().child(block);
     }
     block.into_any_element()
 }
@@ -283,7 +329,10 @@ fn render_paragraph(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyElement {
     let mut index = 0;
     while index < inlines.len() {
         let tex = match &inlines[index] {
-            Inline::Math { tex, display: false } => tex,
+            Inline::Math {
+                tex,
+                display: false,
+            } => tex,
             _ => {
                 index += 1;
                 continue;
@@ -292,14 +341,21 @@ fn render_paragraph(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyElement {
         if start < index {
             row = row.child(styled_text(&inlines[start..index], &context.style));
         }
-        let key = math_key(tex, false, &fill_hex(context.style.foreground), MATH_SIZE_PT);
-        row = row.child(match context.math.get(&key).and_then(|path| path.as_ref()) {
-            Some(path) => img(path.clone())
-                .h(px(BODY_SIZE * 1.25))
-                .max_w_full()
-                .into_any_element(),
-            None => styled_text(&inlines[index..index + 1], &context.style),
-        });
+        let key = math_key(
+            tex,
+            false,
+            &fill_hex(context.style.foreground),
+            MATH_SIZE_PT,
+        );
+        row = row.child(
+            match context.math.get(&key).and_then(|path| path.as_ref()) {
+                Some(path) => img(path.clone())
+                    .h(px(context.body_size * 1.25))
+                    .max_w_full()
+                    .into_any_element(),
+                None => styled_text(&inlines[index..index + 1], &context.style),
+            },
+        );
         start = index + 1;
         index += 1;
     }
@@ -409,16 +465,9 @@ fn table_row(
             FontWeight::NORMAL
         };
         let text = styled_inlines(cell, style, weight);
-        let mut cell_div = div()
-            .flex_1()
-            .min_w_0()
-            .px_2()
-            .py_1()
-            .text_sm()
-            .child(
-                StyledText::new(text.text)
-                    .with_default_highlights(&text.style, text.highlights),
-            );
+        let mut cell_div = div().flex_1().min_w_0().px_2().py_1().text_sm().child(
+            StyledText::new(text.text).with_default_highlights(&text.style, text.highlights),
+        );
         cell_div = match align {
             Align::Center => cell_div.text_center(),
             Align::Right => cell_div.text_right(),
@@ -443,17 +492,20 @@ fn code_block_id(text: &str, wrap: bool) -> ElementId {
     ElementId::Name(format!("code-{:016x}", hasher.finish()).into())
 }
 
-fn styled_inlines(
-    inlines: &[Inline],
-    style: &InlineStyle,
-    weight: FontWeight,
-) -> StyledContent {
+fn code_copy_id(text: &str) -> ElementId {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    ElementId::Name(format!("copy-{:016x}", hasher.finish()).into())
+}
+
+fn styled_inlines(inlines: &[Inline], style: &InlineStyle, weight: FontWeight) -> StyledContent {
     let mut text = String::new();
     let mut highlights = Vec::new();
     append_inlines(inlines, style, 0, &mut text, &mut highlights);
 
     let mut text_style = TextStyle::default();
     text_style.color = style.foreground;
+    text_style.font_family = style.family.clone();
     text_style.font_size = px(style.size).into();
     text_style.font_weight = weight;
     StyledContent {
@@ -589,9 +641,9 @@ fn plain_inlines(inlines: &[Inline]) -> String {
         match inline {
             Inline::Text(text) => out.push_str(text),
             Inline::Code(code) => out.push_str(code),
-            Inline::Emphasis(children)
-            | Inline::Strong(children)
-            | Inline::Strike(children) => out.push_str(&plain_inlines(children)),
+            Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strike(children) => {
+                out.push_str(&plain_inlines(children))
+            }
             Inline::Link { url, children, .. } => {
                 if children.is_empty() {
                     out.push_str(url);
@@ -619,6 +671,7 @@ fn clone_style(style: &InlineStyle) -> InlineStyle {
         link: style.link,
         code_background: style.code_background,
         code_foreground: style.code_foreground,
+        family: style.family.clone(),
         size: style.size,
     }
 }

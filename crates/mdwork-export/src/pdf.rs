@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use mdwork_render::typst::TypstDoc;
-use typst::compile;
 use typst::WorldExt;
+use typst::compile;
 use typst_layout::PagedDocument;
 use typst_pdf::PdfOptions;
 

@@ -169,6 +169,13 @@ pub fn export_zip(notebook: &Notebook, output: &Path) -> Result<ArchiveSummary> 
         fs::remove_file(output)?;
     }
     fs::rename(&tmp, output)?;
+    tracing::info!(
+        notebook = %notebook.display_name(),
+        output = %output.display(),
+        files = entries.len(),
+        bytes = total,
+        "导出笔记本压缩包"
+    );
     Ok(ArchiveSummary {
         files: entries.len(),
         bytes: total,
@@ -209,10 +216,33 @@ pub fn import_zip(
 
     let outcome = (|| {
         extract_archive(zip_path, &inspection, &staged_notebook)?;
-        apply_import(workspace_root, &plan, &inspection, &staged_notebook, options)
+        apply_import(
+            workspace_root,
+            &plan,
+            &inspection,
+            &staged_notebook,
+            options,
+        )
     })();
 
     let _ = fs::remove_dir_all(&staging);
+    match &outcome {
+        Ok(result) => tracing::info!(
+            zip = %zip_path.display(),
+            mode = ?options.mode,
+            notebook = %result.notebook.display_name(),
+            imported = result.imported,
+            skipped = result.skipped_identical,
+            kept_both = result.kept_both,
+            "导入笔记本压缩包"
+        ),
+        Err(err) => tracing::error!(
+            zip = %zip_path.display(),
+            mode = ?options.mode,
+            error = %err,
+            "导入笔记本压缩包失败"
+        ),
+    }
     outcome
 }
 
@@ -227,8 +257,7 @@ fn write_archive(
 
     let mut files = Vec::with_capacity(entries.len());
     for (rel, abs, size) in entries {
-        let mut source = File::open(abs)
-            .map_err(|err| Error::Io(io_with_path(err, abs)))?;
+        let mut source = File::open(abs).map_err(|err| Error::Io(io_with_path(err, abs)))?;
         zip.start_file(rel.as_str(), options).map_err(zip_error)?;
         let mut reader = HashReader {
             inner: &mut source,
@@ -237,10 +266,7 @@ fn write_archive(
         };
         std::io::copy(&mut reader, &mut zip)?;
         if reader.bytes != *size {
-            return Err(Error::InvalidArchive(format!(
-                "{} 在导出期间发生变化",
-                rel
-            )));
+            return Err(Error::InvalidArchive(format!("{} 在导出期间发生变化", rel)));
         }
         files.push(ManifestFile {
             path: rel.clone(),
@@ -308,8 +334,7 @@ fn collect_export_entries(notebook: &Notebook) -> Result<Vec<(String, PathBuf, u
 }
 
 fn inspect(zip_path: &Path) -> Result<Inspection> {
-    let file = File::open(zip_path)
-        .map_err(|err| Error::Io(io_with_path(err, zip_path)))?;
+    let file = File::open(zip_path).map_err(|err| Error::Io(io_with_path(err, zip_path)))?;
     let mut archive = ZipArchive::new(BufReader::new(file)).map_err(zip_error)?;
 
     let mut names = Vec::new();
@@ -327,12 +352,9 @@ fn inspect(zip_path: &Path) -> Result<Inspection> {
                 return Err(Error::ArchiveLimit("manifest.json 过大".to_string()));
             }
             let mut text = String::new();
-            entry
-                .take(MAX_MANIFEST_BYTES)
-                .read_to_string(&mut text)?;
-            let parsed: Manifest = serde_json::from_str(&text).map_err(|err| {
-                Error::InvalidArchive(format!("manifest.json 解析失败：{err}"))
-            })?;
+            entry.take(MAX_MANIFEST_BYTES).read_to_string(&mut text)?;
+            let parsed: Manifest = serde_json::from_str(&text)
+                .map_err(|err| Error::InvalidArchive(format!("manifest.json 解析失败：{err}")))?;
             manifest = Some(parsed);
             continue;
         }
@@ -340,9 +362,7 @@ fn inspect(zip_path: &Path) -> Result<Inspection> {
             return Err(Error::InvalidArchive("不支持加密条目".to_string()));
         }
         if entry.is_symlink() {
-            return Err(Error::InvalidArchive(format!(
-                "不支持符号链接：{raw}"
-            )));
+            return Err(Error::InvalidArchive(format!("不支持符号链接：{raw}")));
         }
         let path = validate_entry_path(&raw)?;
         if entry.is_dir() {
@@ -362,8 +382,8 @@ fn inspect(zip_path: &Path) -> Result<Inspection> {
         names.push(path);
     }
 
-    let manifest = manifest
-        .ok_or_else(|| Error::InvalidArchive("缺少 manifest.json".to_string()))?;
+    let manifest =
+        manifest.ok_or_else(|| Error::InvalidArchive("缺少 manifest.json".to_string()))?;
     if manifest.format != ARCHIVE_FORMAT {
         return Err(Error::UnsupportedFormat {
             path: zip_path.to_path_buf(),
@@ -381,10 +401,7 @@ fn inspect(zip_path: &Path) -> Result<Inspection> {
             )));
         }
         if file.sha256.len() != 64 || !file.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(Error::InvalidArchive(format!(
-                "sha256 无效：{}",
-                file.path
-            )));
+            return Err(Error::InvalidArchive(format!("sha256 无效：{}", file.path)));
         }
         if listed.insert(path.clone(), file.clone()).is_some() {
             return Err(Error::InvalidArchive(format!("manifest 重复列出：{path}")));
@@ -416,9 +433,9 @@ fn inspect(zip_path: &Path) -> Result<Inspection> {
 
 fn read_marker(archive: &mut ZipArchive<BufReader<File>>) -> Result<crate::notebook::Marker> {
     let path = format!("{META_DIR}/{NOTEBOOK_FILE}");
-    let mut entry = archive.by_name(&path).map_err(|_| {
-        Error::InvalidArchive(format!("缺少 {path}"))
-    })?;
+    let mut entry = archive
+        .by_name(&path)
+        .map_err(|_| Error::InvalidArchive(format!("缺少 {path}")))?;
     if entry.size() > 1024 * 1024 {
         return Err(Error::ArchiveLimit(format!("{path} 过大")));
     }
@@ -436,8 +453,7 @@ fn read_marker(archive: &mut ZipArchive<BufReader<File>>) -> Result<crate::noteb
 }
 
 fn extract_archive(zip_path: &Path, inspection: &Inspection, dest: &Path) -> Result<()> {
-    let file = File::open(zip_path)
-        .map_err(|err| Error::Io(io_with_path(err, zip_path)))?;
+    let file = File::open(zip_path).map_err(|err| Error::Io(io_with_path(err, zip_path)))?;
     let mut archive = ZipArchive::new(BufReader::new(file)).map_err(zip_error)?;
     let mut total: u64 = 0;
 
@@ -455,8 +471,7 @@ fn extract_archive(zip_path: &Path, inspection: &Inspection, dest: &Path) -> Res
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut out = File::create(&target)
-            .map_err(|err| Error::Io(io_with_path(err, &target)))?;
+        let mut out = File::create(&target).map_err(|err| Error::Io(io_with_path(err, &target)))?;
         let mut hasher = Sha256::new();
         let mut buffer = [0u8; 64 * 1024];
         loop {
@@ -495,9 +510,7 @@ fn plan_with(
     };
     let base = sanitize_notebook_folder_name(rename_to.unwrap_or(&display));
     let (folder_name, target_root) = match mode {
-        ImportMode::Merge | ImportMode::Overwrite => {
-            (base.clone(), workspace_root.join(&base))
-        }
+        ImportMode::Merge | ImportMode::Overwrite => (base.clone(), workspace_root.join(&base)),
         ImportMode::Rename => {
             let unique = unique_folder_name(workspace_root, &base);
             (unique.clone(), workspace_root.join(&unique))
@@ -505,8 +518,7 @@ fn plan_with(
     };
 
     let target_exists = target_root.exists();
-    let target_is_notebook =
-        target_root.join(META_DIR).join(NOTEBOOK_FILE).is_file();
+    let target_is_notebook = target_root.join(META_DIR).join(NOTEBOOK_FILE).is_file();
     if mode == ImportMode::Merge && target_exists && !target_is_notebook {
         return Err(Error::Exists(format!(
             "{} 已存在且不是墨笺笔记本",
@@ -660,7 +672,10 @@ fn apply_merge(
     let mut kept_existing = 0;
     let mut kept_both = 0;
 
-    for item in WalkDir::new(staged_notebook).follow_links(false).min_depth(1) {
+    for item in WalkDir::new(staged_notebook)
+        .follow_links(false)
+        .min_depth(1)
+    {
         let item = item.map_err(walk_error)?;
         if !item.file_type().is_file() {
             continue;
@@ -692,11 +707,7 @@ fn apply_merge(
             continue;
         }
 
-        let policy = options
-            .choices
-            .get(&rel)
-            .copied()
-            .unwrap_or(options.policy);
+        let policy = options.choices.get(&rel).copied().unwrap_or(options.policy);
         match policy {
             ConflictPolicy::KeepExisting => {
                 kept_existing += 1;
@@ -784,10 +795,12 @@ fn merge_encoding(target_root: &Path, staged_notebook: &Path) -> Result<()> {
         }
     }
     if changed {
-        let bytes = serde_json::to_vec_pretty(&serde_json::Value::Object(merged))
-            .map_err(|source| Error::Json {
-                path: target.clone(),
-                source,
+        let bytes =
+            serde_json::to_vec_pretty(&serde_json::Value::Object(merged)).map_err(|source| {
+                Error::Json {
+                    path: target.clone(),
+                    source,
+                }
             })?;
         write_atomic(&target, &bytes)?;
     }
@@ -827,9 +840,7 @@ fn validate_entry_path(raw: &str) -> Result<String> {
         return Err(Error::InvalidArchive("条目路径为空".to_string()));
     }
     if raw.contains('\\') {
-        return Err(Error::InvalidArchive(format!(
-            "条目路径包含反斜杠：{raw}"
-        )));
+        return Err(Error::InvalidArchive(format!("条目路径包含反斜杠：{raw}")));
     }
     if raw.starts_with('/') {
         return Err(Error::InvalidArchive(format!("条目路径为绝对路径：{raw}")));
@@ -860,14 +871,10 @@ fn validate_entry_path(raw: &str) -> Result<String> {
             )));
         }
         if segment.contains(':') {
-            return Err(Error::InvalidArchive(format!(
-                "条目路径含冒号：{raw}"
-            )));
+            return Err(Error::InvalidArchive(format!("条目路径含冒号：{raw}")));
         }
         if is_windows_device_name(segment) {
-            return Err(Error::InvalidArchive(format!(
-                "条目路径含设备名：{raw}"
-            )));
+            return Err(Error::InvalidArchive(format!("条目路径含设备名：{raw}")));
         }
         if index == 0 {
             let lower = segment.to_ascii_lowercase();
@@ -876,21 +883,15 @@ fn validate_entry_path(raw: &str) -> Result<String> {
                     .iter()
                     .any(|name| trimmed.eq_ignore_ascii_case(&format!("{META_DIR}/{name}")));
                 if !allowed {
-                    return Err(Error::InvalidArchive(format!(
-                        "不允许的元数据文件：{raw}"
-                    )));
+                    return Err(Error::InvalidArchive(format!("不允许的元数据文件：{raw}")));
                 }
             } else if lower == ASSETS_DIR {
                 // assets/ may contain arbitrary file names, including dotfiles.
             } else if segment.starts_with('.') {
-                return Err(Error::InvalidArchive(format!(
-                    "条目路径以点开头：{raw}"
-                )));
+                return Err(Error::InvalidArchive(format!("条目路径以点开头：{raw}")));
             }
         } else if segment.starts_with('.') && !in_assets {
-            return Err(Error::InvalidArchive(format!(
-                "条目路径以点开头：{raw}"
-            )));
+            return Err(Error::InvalidArchive(format!("条目路径以点开头：{raw}")));
         }
         segments.push(segment);
     }
@@ -920,9 +921,28 @@ fn is_windows_device_name(segment: &str) -> bool {
         .to_ascii_uppercase();
     matches!(
         stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     )
 }
 
@@ -972,8 +992,7 @@ fn unique_file_name(path: &Path) -> PathBuf {
 }
 
 fn sha256_file(path: &Path) -> Result<(String, u64)> {
-    let mut file = File::open(path)
-        .map_err(|err| Error::Io(io_with_path(err, path)))?;
+    let mut file = File::open(path).map_err(|err| Error::Io(io_with_path(err, path)))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut size = 0u64;
@@ -1157,8 +1176,13 @@ mod tests {
         assert!(outcome.notebook.assets_dir().join(".gitkeep").is_file());
         assert_eq!(Bookmarks::load(&outcome.notebook).unwrap().entries.len(), 1);
         assert!(outcome.notebook.list_trash().unwrap().is_empty());
-        assert!(!workspace.join(STAGING_DIR).exists()
-            || fs::read_dir(workspace.join(STAGING_DIR)).unwrap().next().is_none());
+        assert!(
+            !workspace.join(STAGING_DIR).exists()
+                || fs::read_dir(workspace.join(STAGING_DIR))
+                    .unwrap()
+                    .next()
+                    .is_none()
+        );
 
         let _ = fs::remove_dir_all(source_root);
         let _ = fs::remove_dir_all(target_root);
@@ -1406,7 +1430,11 @@ mod tests {
         let marker = crate::notebook::Marker::new("坏本");
         let files = vec![
             meta_file(&marker),
-            ("assets/link".to_string(), b"target".to_vec(), Some(0o120777)),
+            (
+                "assets/link".to_string(),
+                b"target".to_vec(),
+                Some(0o120777),
+            ),
         ];
         let manifest = manifest_for(&files, &marker);
         let zip_path = root.join("symlink.zip");
@@ -1436,8 +1464,13 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         let err = import_zip(&workspace, &zip_path, &ImportOptions::default()).unwrap_err();
         assert!(matches!(err, Error::InvalidArchive(_)));
-        assert!(!workspace.join(STAGING_DIR).exists()
-            || fs::read_dir(workspace.join(STAGING_DIR)).unwrap().next().is_none());
+        assert!(
+            !workspace.join(STAGING_DIR).exists()
+                || fs::read_dir(workspace.join(STAGING_DIR))
+                    .unwrap()
+                    .next()
+                    .is_none()
+        );
         assert!(!workspace.join("坏本").exists());
 
         let files = vec![note_file("a.md", "a")];

@@ -89,10 +89,28 @@ impl Drop for TempDir {
     }
 }
 
-pub fn run(
-    request: &ExportRequest,
-    emit: &mut dyn FnMut(ExportEvent),
-) -> Result<ExportOutcome> {
+pub fn run(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Result<ExportOutcome> {
+    tracing::info!(
+        notebook = %request.notebook_name,
+        note = %request.note_rel,
+        format = ?request.format,
+        output = %request.output.display(),
+        "开始导出"
+    );
+    let result = run_inner(request, emit);
+    match &result {
+        Ok(outcome) => tracing::info!(
+            format = ?request.format,
+            pages = outcome.pages,
+            files = outcome.paths.len(),
+            "导出完成"
+        ),
+        Err(err) => tracing::error!(format = ?request.format, error = %err, "导出失败"),
+    }
+    result
+}
+
+fn run_inner(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Result<ExportOutcome> {
     emit(ExportEvent::Stage {
         stage: "read".to_string(),
     });
@@ -205,7 +223,9 @@ pub fn run(
             for (index, page) in compiled.pages().iter().enumerate() {
                 let image = png::render_page(page, dpi);
                 if let Some(chunk) = stitcher.push(image) {
-                    let file = temp.path().join(format!("chunk-{:03}.png", staged.len() + 1));
+                    let file = temp
+                        .path()
+                        .join(format!("chunk-{:03}.png", staged.len() + 1));
                     fs::write(&file, png::encode_png(&chunk)?)?;
                     staged.push(file);
                 }
@@ -215,7 +235,9 @@ pub fn run(
                 });
             }
             if let Some(chunk) = stitcher.finish() {
-                let file = temp.path().join(format!("chunk-{:03}.png", staged.len() + 1));
+                let file = temp
+                    .path()
+                    .join(format!("chunk-{:03}.png", staged.len() + 1));
                 fs::write(&file, png::encode_png(&chunk)?)?;
                 staged.push(file);
             }
@@ -290,8 +312,7 @@ fn move_files(staged: &[PathBuf], targets: &[PathBuf]) -> Result<()> {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::rename(source, target)
-            .with_context(|| format!("无法写入 {}", target.display()))?;
+        fs::rename(source, target).with_context(|| format!("无法写入 {}", target.display()))?;
     }
     Ok(())
 }

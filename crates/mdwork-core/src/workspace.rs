@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::notebook::{sanitize_notebook_folder_name, Notebook};
+use crate::notebook::{Notebook, sanitize_notebook_folder_name};
 use crate::paths::{
-    default_workspace_root, registry_path, workspace_meta_dir, META_DIR, NOTEBOOK_FILE,
+    META_DIR, NOTEBOOK_FILE, default_workspace_root, registry_path, workspace_meta_dir,
 };
 use crate::{Error, Result, WORKSPACE_FORMAT};
 
@@ -62,6 +62,7 @@ impl Workspace {
     pub fn open(path: &Path) -> Result<Self> {
         let workspace = Self::new(path);
         fs::create_dir_all(workspace_meta_dir(&workspace.root))?;
+        tracing::info!(root = %workspace.root.display(), "打开工作区");
         Ok(workspace)
     }
 
@@ -86,7 +87,14 @@ impl Workspace {
             counter += 1;
         }
         fs::create_dir_all(&self.root)?;
-        Notebook::create(&self.root.join(&candidate), display_name)
+        let notebook = Notebook::create(&self.root.join(&candidate), display_name)?;
+        tracing::info!(
+            workspace = %self.root.display(),
+            notebook = %notebook.display_name(),
+            id = %notebook.marker.id,
+            "新建笔记本"
+        );
+        Ok(notebook)
     }
 
     /// Scans registry cache, child notebook folders and external registrations.
@@ -108,13 +116,18 @@ impl Workspace {
                     }
                     let marker = path.join(META_DIR).join(NOTEBOOK_FILE);
                     if !marker.is_file() {
+                        if looks_like_notes(&path) {
+                            result.issues.push(ScanIssue {
+                                path,
+                                kind: ScanIssueKind::NotNotebook,
+                                message: "缺少 .mdwork/notebook.json：请确认这是墨笺笔记本，或在墨笺中重新创建".to_string(),
+                            });
+                        }
                         continue;
                     }
                     match Notebook::open(&path) {
                         Ok(mut notebook) => {
-                            if let Some(issue) =
-                                deduplicate(&mut notebook, &mut ids, &mut names)
-                            {
+                            if let Some(issue) = deduplicate(&mut notebook, &mut ids, &mut names) {
                                 result.issues.push(issue);
                             }
                             result.notebooks.push(notebook);
@@ -156,9 +169,17 @@ impl Workspace {
             }
         }
 
-        result
-            .notebooks
-            .sort_by(|a, b| a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase()));
+        result.notebooks.sort_by(|a, b| {
+            a.display_name()
+                .to_lowercase()
+                .cmp(&b.display_name().to_lowercase())
+        });
+        tracing::debug!(
+            root = %self.root.display(),
+            notebooks = result.notebooks.len(),
+            issues = result.issues.len(),
+            "扫描工作区"
+        );
         result
     }
 
@@ -179,6 +200,11 @@ impl Workspace {
             .collect();
         notebooks.push(notebook.clone());
         self.save_registry(&notebooks)?;
+        tracing::info!(
+            notebook = %notebook.display_name(),
+            root = %notebook.root.display(),
+            "注册外部笔记本"
+        );
         Ok(notebook)
     }
 
@@ -269,8 +295,14 @@ fn unique_name(base: &str, names: &mut HashSet<String>) -> String {
 }
 
 pub fn same_path(a: &Path, b: &Path) -> bool {
-    a.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase()
-        == b.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase()
+    a.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase()
+        == b.to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_lowercase()
 }
 
 fn is_inside(path: &Path, root: &Path) -> bool {
@@ -281,6 +313,30 @@ fn is_inside(path: &Path, root: &Path) -> bool {
         .trim_end_matches('/')
         .to_lowercase();
     path.starts_with(&format!("{root}/"))
+}
+
+/// Heuristic for reporting a folder that was copied into the workspace but has
+/// no notebook marker: it is probably a notebook, so tell the user why it was
+/// skipped instead of silently ignoring it.
+fn looks_like_notes(path: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            return false;
+        }
+        entry
+            .file_type()
+            .map(|kind| {
+                kind.is_dir()
+                    || name.to_lowercase().ends_with(".md")
+                    || name.to_lowercase().ends_with(".markdown")
+            })
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(test)]
@@ -324,10 +380,11 @@ mod tests {
 
         let scan = workspace.scan();
         assert_eq!(scan.notebooks.len(), 2);
-        assert!(scan
-            .issues
-            .iter()
-            .any(|issue| issue.kind == ScanIssueKind::DuplicateIdFixed));
+        assert!(
+            scan.issues
+                .iter()
+                .any(|issue| issue.kind == ScanIssueKind::DuplicateIdFixed)
+        );
         let ids: HashSet<Uuid> = scan.notebooks.iter().map(|n| n.marker.id).collect();
         assert_eq!(ids.len(), 2);
         fs::remove_dir_all(root).unwrap();
@@ -347,6 +404,23 @@ mod tests {
     }
 
     #[test]
+    fn folder_without_marker_is_reported() {
+        let (root, workspace) = temp_workspace();
+        let plain = root.join("散落的笔记");
+        fs::create_dir_all(&plain).unwrap();
+        fs::write(plain.join("a.md"), "# a\n").unwrap();
+        let scan = workspace.scan();
+        assert!(scan.notebooks.is_empty());
+        assert_eq!(scan.issues.len(), 1);
+        assert_eq!(scan.issues[0].kind, ScanIssueKind::NotNotebook);
+
+        let empty = root.join("空目录");
+        fs::create_dir_all(&empty).unwrap();
+        assert!(workspace.scan().issues.len() == 1, "quiet folders stay quiet");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn external_registration_round_trips() {
         let (root, workspace) = temp_workspace();
         let outside = std::env::temp_dir().join(format!("mdwork-ext-{}", Uuid::new_v4()));
@@ -354,9 +428,7 @@ mod tests {
         workspace.register_external(&notebook.root).unwrap();
         let scan = workspace.scan();
         assert_eq!(scan.notebooks.len(), 1);
-        assert!(workspace
-            .notebook_for_path(&outside.join("a.md"))
-            .is_some());
+        assert!(workspace.notebook_for_path(&outside.join("a.md")).is_some());
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
     }

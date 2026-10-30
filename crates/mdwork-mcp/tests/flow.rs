@@ -43,7 +43,10 @@ async fn connect(
 ) {
     let (server_io, client_io) = tokio::io::duplex(1 << 20);
     let server_task = tokio::spawn(async move {
-        let service = MdworkServer::new(ctx).serve(server_io).await.expect("serve");
+        let service = MdworkServer::new(ctx)
+            .serve(server_io)
+            .await
+            .expect("serve");
         let _ = service.waiting().await;
     });
     let client = ().serve(client_io).await.expect("mcp client");
@@ -167,10 +170,13 @@ async fn write_flow_honors_acl_conflicts_and_dirty_buffers() {
     .await;
 
     // A marker left behind by a dead process must not block writes.
-    DirtyState::with_notes(0xFFFF_FFF0, vec![DirtyDoc {
-        notebook_id: notebook.marker.id,
-        rel_path: "工作/设计.md".to_string(),
-    }])
+    DirtyState::with_notes(
+        0xFFFF_FFF0,
+        vec![DirtyDoc {
+            notebook_id: notebook.marker.id,
+            rel_path: "工作/设计.md".to_string(),
+        }],
+    )
     .save_to(&dirty_path)
     .unwrap();
     let updated = expect_ok(
@@ -295,7 +301,11 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
         "# 设计\n\n## 细节\n正文 ALPHA\n仅正文标记 BODYSECRET\n",
     )
     .unwrap();
-    std::fs::write(notebook.root.join("notes/private.md"), "# 私密\n秘密 BETA\n").unwrap();
+    std::fs::write(
+        notebook.root.join("notes/private.md"),
+        "# 私密\n秘密 BETA\n",
+    )
+    .unwrap();
     std::fs::write(notebook.root.join("root.md"), "# 根\n首页 GAMMA\n").unwrap();
     let _other = Notebook::create(&root.join("别的笔记本"), "别的").unwrap();
 
@@ -424,7 +434,11 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
     .await;
 
     let resources = peer.list_resources(None).await.expect("list resources");
-    let uris: Vec<&str> = resources.resources.iter().map(|item| item.uri.as_str()).collect();
+    let uris: Vec<&str> = resources
+        .resources
+        .iter()
+        .map(|item| item.uri.as_str())
+        .collect();
     assert_eq!(uris.len(), 2, "{uris:?}");
     let design_uri = format!(
         "mdwork://notebook/{}/note/notes/design.md",
@@ -435,8 +449,7 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
         .read_resource(ReadResourceRequestParams::new(design_uri.clone()))
         .await
         .expect("read resource");
-    let rmcp::model::ResourceContents::TextResourceContents { text, .. } = &read.contents[0]
-    else {
+    let rmcp::model::ResourceContents::TextResourceContents { text, .. } = &read.contents[0] else {
         panic!("expected text resource")
     };
     assert!(text.contains("ALPHA"));
@@ -452,7 +465,11 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
 
     let audit = AuditLog::new(root.join("audit"));
     let recent = audit.recent(100).unwrap();
-    assert!(recent.iter().any(|entry| entry.tool == "read_note" && entry.result == "ok"));
+    assert!(
+        recent
+            .iter()
+            .any(|entry| entry.tool == "read_note" && entry.result == "ok")
+    );
     assert!(recent.iter().any(|entry| {
         entry.tool == "search_notes"
             && entry.query.as_deref() == Some("ALPHA")
@@ -463,7 +480,10 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
     for file in std::fs::read_dir(audit.dir()).unwrap().flatten() {
         raw.push_str(&std::fs::read_to_string(file.path()).unwrap());
     }
-    assert!(!raw.contains("BODYSECRET"), "audit must not record note bodies");
+    assert!(
+        !raw.contains("BODYSECRET"),
+        "audit must not record note bodies"
+    );
 
     drop(peer);
     drop(client);

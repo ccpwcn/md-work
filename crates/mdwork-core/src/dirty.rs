@@ -91,9 +91,9 @@ impl DirtyState {
 
     pub fn is_dirty(&self, notebook_id: &Uuid, rel_path: &str) -> bool {
         let path = normalize_acl_path(rel_path);
-        self.notes.iter().any(|doc| {
-            doc.notebook_id == *notebook_id && normalize_acl_path(&doc.rel_path) == path
-        })
+        self.notes
+            .iter()
+            .any(|doc| doc.notebook_id == *notebook_id && normalize_acl_path(&doc.rel_path) == path)
     }
 }
 

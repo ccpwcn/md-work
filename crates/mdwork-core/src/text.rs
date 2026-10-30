@@ -42,7 +42,11 @@ pub fn text_stats(text: &str) -> TextStats {
         text.chars().filter(|ch| *ch == '\n').count() + 1
     };
 
-    TextStats { lines, words, chars }
+    TextStats {
+        lines,
+        words,
+        chars,
+    }
 }
 
 pub fn is_cjk(ch: char) -> bool {
@@ -74,7 +78,14 @@ mod tests {
     #[test]
     fn empty_text_has_one_line() {
         let stats = text_stats("");
-        assert_eq!(stats, TextStats { lines: 1, words: 0, chars: 0 });
+        assert_eq!(
+            stats,
+            TextStats {
+                lines: 1,
+                words: 0,
+                chars: 0
+            }
+        );
     }
 
     #[test]

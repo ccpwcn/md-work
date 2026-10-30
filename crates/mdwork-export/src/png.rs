@@ -2,7 +2,7 @@
 
 use std::io::Cursor;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use image::{ImageFormat, RgbaImage};
 use typst::layout::Abs;
 use typst::utils::Scalar;

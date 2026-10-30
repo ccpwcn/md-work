@@ -1,29 +1,37 @@
 //! Headless core: workspace/notebook model, file services, encoding, search.
 
+pub mod ai;
 pub mod archive;
 pub mod atomic;
 pub mod bookmarks;
 pub mod config;
+pub mod crash;
 pub mod dirty;
 pub mod doc;
 pub mod image;
 pub mod notebook;
 pub mod paths;
 pub mod permissions;
+pub mod recovery;
 pub mod search;
 pub mod text;
 pub mod watch;
 pub mod workspace;
 
+pub use ai::{
+    AiMessage, AiProvider, AiRole, AiUsage, CompletionRequest, CompletionResponse, ProviderRegistry,
+};
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use config::{AppConfig, Session, ThemePreference};
 pub use dirty::{DirtyDoc, DirtyState};
-pub use doc::{DecodedDoc, Eol, TextEncoding};
+pub use doc::{DecodedDoc, EncodingHint, Eol, TextEncoding};
 pub use image::{ImageHost, ImageKind};
-pub use permissions::{Scope, TokenRecord};
-pub use search::{search_notebook, search_notebook_filtered, SearchHit, SearchOutcome, SearchQuery};
-pub use text::{TextStats, text_stats};
 pub use notebook::{Entry, EntryKind, Notebook};
+pub use permissions::{Scope, TokenRecord};
+pub use search::{
+    SearchHit, SearchOutcome, SearchQuery, search_notebook, search_notebook_filtered,
+};
+pub use text::{TextStats, text_stats};
 pub use workspace::{ScanIssue, Workspace};
 
 use std::path::PathBuf;
@@ -90,6 +98,9 @@ pub enum Error {
 
     #[error("{0}")]
     Upload(String),
+
+    #[error("AI provider error: {0}")]
+    Ai(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

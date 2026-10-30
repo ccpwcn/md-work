@@ -15,15 +15,16 @@ impl WorkspaceWatcher {
     /// Starts watching `root`; the receiver yields debounced batches of changed paths.
     pub fn start(root: &Path) -> crate::Result<(Self, Receiver<Vec<PathBuf>>)> {
         let (raw_tx, raw_rx) = channel::<Vec<PathBuf>>();
-        let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            let Ok(event) = event else {
-                return;
-            };
-            if event.kind.is_access() {
-                return;
-            }
-            let _ = raw_tx.send(event.paths);
-        })?;
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else {
+                    return;
+                };
+                if event.kind.is_access() {
+                    return;
+                }
+                let _ = raw_tx.send(event.paths);
+            })?;
         watcher.watch(root, RecursiveMode::Recursive)?;
 
         let (tx, rx) = channel::<Vec<PathBuf>>();

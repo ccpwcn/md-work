@@ -70,12 +70,8 @@ impl TokenStore {
             anyhow::bail!("令牌名称不能为空");
         }
         let secret = permissions::new_secret();
-        let mut record = TokenRecord::new(
-            name,
-            permissions::hash_secret(&secret),
-            scopes,
-            notebooks,
-        );
+        let mut record =
+            TokenRecord::new(name, permissions::hash_secret(&secret), scopes, notebooks);
         record.note_allow = note_allow;
         record.note_deny = note_deny;
         let mut file = self.load()?;
@@ -144,8 +140,8 @@ impl TokenStore {
             }
             Err(err) => return Err(err).with_context(|| format!("读取 {}", self.path.display())),
         };
-        let plain = unprotect(&bytes)
-            .with_context(|| format!("解密令牌文件 {}", self.path.display()))?;
+        let plain =
+            unprotect(&bytes).with_context(|| format!("解密令牌文件 {}", self.path.display()))?;
         let file: TokensFile = serde_json::from_slice(&plain)
             .with_context(|| format!("解析令牌文件 {}", self.path.display()))?;
         if file.format != TOKENS_FORMAT {
@@ -246,7 +242,13 @@ mod tests {
         let (dir, store) = temp_store();
         let notebook = Uuid::new_v4();
         let (record, wire) = store
-            .create("代理", vec![Scope::Read, Scope::Search], vec![notebook], vec![], vec![])
+            .create(
+                "代理",
+                vec![Scope::Read, Scope::Search],
+                vec![notebook],
+                vec![],
+                vec![],
+            )
             .unwrap();
         let found = store.verify(&wire).unwrap();
         assert_eq!(found.id, record.id);

@@ -13,3 +13,4 @@ path = "src/main.rs"
 anyhow.workspace = true
 resvg = "0.47"
 ico = "0.5"
+zip = { version = "9.1.2", default-features = false, features = ["deflate"] }

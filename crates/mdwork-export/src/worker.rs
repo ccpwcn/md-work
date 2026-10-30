@@ -180,7 +180,12 @@ fn unique_suffix() -> String {
 
 impl Drop for ExportJob {
     fn drop(&mut self) {
-        if self.child.lock().map(|slot| slot.is_some()).unwrap_or(false) {
+        if self
+            .child
+            .lock()
+            .map(|slot| slot.is_some())
+            .unwrap_or(false)
+        {
             self.cancel();
         }
     }

@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 mdwork-core = { path = "../mdwork-core" }
 mdwork-render = { path = "../mdwork-render" }
+tracing.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

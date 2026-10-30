@@ -48,11 +48,7 @@ async fn request(port: u16, authorization: Option<&str>, body: &str) -> String {
     );
     stream.write_all(raw.as_bytes()).await.unwrap();
     let mut response = Vec::new();
-    let _ = tokio::time::timeout(
-        Duration::from_secs(10),
-        stream.read_to_end(&mut response),
-    )
-    .await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut response)).await;
     String::from_utf8_lossy(&response).into_owned()
 }
 
@@ -79,7 +75,10 @@ async fn http_requires_a_valid_bearer_token() {
     // Wait until the listener accepts connections.
     let mut ready = false;
     for _ in 0..100 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             ready = true;
             break;
         }
@@ -94,12 +93,7 @@ async fn http_requires_a_valid_bearer_token() {
     let bad = request(port, Some("Bearer mdt_bogus_secret"), &initialize_body()).await;
     assert!(bad.starts_with("HTTP/1.1 401"), "{bad}");
 
-    let good = request(
-        port,
-        Some(&format!("Bearer {wire}")),
-        &initialize_body(),
-    )
-    .await;
+    let good = request(port, Some(&format!("Bearer {wire}")), &initialize_body()).await;
     assert!(
         !good.starts_with("HTTP/1.1 401"),
         "valid token rejected: {good}"

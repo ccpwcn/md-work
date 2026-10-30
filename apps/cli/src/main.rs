@@ -12,7 +12,11 @@ use serde_json::json;
 use uuid::Uuid;
 
 #[derive(Parser)]
-#[command(name = "md-work-cli", version, about = "墨笺 md-work command line interface")]
+#[command(
+    name = "md-work-cli",
+    version,
+    about = "墨笺 md-work command line interface"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -163,24 +167,59 @@ impl From<PolicyArg> for ConflictPolicy {
 }
 
 fn main() -> anyhow::Result<()> {
+    let logging = mdwork_log::init(mdwork_log::Options {
+        dir: mdwork_core::paths::logs_dir(),
+        console: true,
+        retention: mdwork_log::DEFAULT_RETENTION,
+    });
+    match &logging {
+        Ok(info) => tracing::info!(
+            version = mdwork_core::version(),
+            pid = std::process::id(),
+            log_dir = %info.dir.display(),
+            args = ?std::env::args().skip(1).collect::<Vec<_>>(),
+            "命令行启动"
+        ),
+        Err(err) => eprintln!("md-work-cli: 日志不可用：{err}"),
+    }
+    mdwork_core::crash::install_hook();
+
     let cli = Cli::parse();
+    let result = run(cli);
+    match &result {
+        Ok(()) => tracing::info!("命令行结束"),
+        Err(err) => tracing::error!(error = %err, "命令行失败"),
+    }
+    result
+}
+
+fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Mcp(args) => match args.command {
             McpCommand::Serve(args) => {
                 let runtime = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()?;
-                runtime.block_on(async {
+                tracing::info!(http = args.http, port = args.port, "MCP 服务启动");
+                let result = runtime.block_on(async {
                     if args.http {
                         mdwork_mcp::serve_http(args.port).await
                     } else {
                         mdwork_mcp::serve_stdio().await
                     }
-                })
+                });
+                tracing::info!(http = args.http, "MCP 服务退出");
+                result
             }
         },
-        Command::Export(args) => run_export(&args.request),
-        Command::Search(args) => run_search(&args),
+        Command::Export(args) => {
+            tracing::info!(request = %args.request.display(), "导出请求");
+            run_export(&args.request)
+        }
+        Command::Search(args) => {
+            tracing::info!(query = %args.query, json = args.json, "搜索笔记");
+            run_search(&args)
+        }
         Command::Notebook(args) => match args.command {
             NotebookCommand::List { json } => run_notebook_list(json),
             NotebookCommand::Export(args) => run_notebook_export(&args),
@@ -194,7 +233,11 @@ fn run_export(path: &PathBuf) -> anyhow::Result<()> {
     let request: ExportRequest = serde_json::from_slice(&bytes)?;
     let mut stdout = std::io::stdout().lock();
     let result = mdwork_export::run(&request, &mut |event| {
-        let _ = writeln!(stdout, "{}", serde_json::to_string(&event).unwrap_or_default());
+        let _ = writeln!(
+            stdout,
+            "{}",
+            serde_json::to_string(&event).unwrap_or_default()
+        );
         let _ = stdout.flush();
     });
     match result {
@@ -280,17 +323,18 @@ fn run_search(args: &SearchArgs) -> anyhow::Result<()> {
     });
 
     if args.json {
-        let value = json!(hits
-            .iter()
-            .map(|hit| json!({
-                "notebook_id": hit.notebook_id.to_string(),
-                "notebook_name": hit.notebook_name,
-                "path": hit.rel_path,
-                "line": hit.line,
-                "column": hit.column,
-                "text": hit.text,
-            }))
-            .collect::<Vec<_>>());
+        let value = json!(
+            hits.iter()
+                .map(|hit| json!({
+                    "notebook_id": hit.notebook_id.to_string(),
+                    "notebook_name": hit.notebook_name,
+                    "path": hit.rel_path,
+                    "line": hit.line,
+                    "column": hit.column,
+                    "text": hit.text,
+                }))
+                .collect::<Vec<_>>()
+        );
         println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
         for hit in &hits {
@@ -313,16 +357,17 @@ fn run_notebook_list(json_output: bool) -> anyhow::Result<()> {
         eprintln!("警告：{}：{}", issue.path.display(), issue.message);
     }
     if json_output {
-        let value = json!(scan
-            .notebooks
-            .iter()
-            .map(|notebook| json!({
-                "id": notebook.marker.id.to_string(),
-                "name": notebook.display_name(),
-                "path": notebook.root.display().to_string(),
-                "notes": notebook.list_entries().map(|entries| entries.len()).unwrap_or(0),
-            }))
-            .collect::<Vec<_>>());
+        let value = json!(
+            scan.notebooks
+                .iter()
+                .map(|notebook| json!({
+                    "id": notebook.marker.id.to_string(),
+                    "name": notebook.display_name(),
+                    "path": notebook.root.display().to_string(),
+                    "notes": notebook.list_entries().map(|entries| entries.len()).unwrap_or(0),
+                }))
+                .collect::<Vec<_>>()
+        );
         println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
         for notebook in &scan.notebooks {
@@ -375,7 +420,11 @@ fn run_notebook_import(args: &NotebookImportArgs) -> anyhow::Result<()> {
     println!(
         "目标：{}（{}）新文件 {}，冲突 {}，相同 {}，共 {} 字节",
         plan.folder_name,
-        if plan.target_exists { "已存在" } else { "新建" },
+        if plan.target_exists {
+            "已存在"
+        } else {
+            "新建"
+        },
         plan.new_files,
         plan.conflicts.len(),
         plan.identical_files,

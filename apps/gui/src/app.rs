@@ -5,27 +5,27 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{
-    Editor, Input, InputEvent, InputState, Textarea, TextareaState,
-};
+use gpui_kit::component::input::{Editor, Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, Disableable as _, Sizable as _};
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::{ActiveTheme, Disableable as _, Icon, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use mdwork_core::Workspace;
 use mdwork_core::archive::{self, Conflict, ConflictPolicy, ImportMode, ImportOptions, ImportPlan};
 use mdwork_core::bookmarks::Bookmarks;
 use mdwork_core::config::{
-    AppConfig, CursorPos, NotebookSession, Session, ThemePreference,
+    AppConfig, CursorPos, NotebookSession, PanelArrangement, PanelDock, Session, ThemePreference,
 };
+use mdwork_core::doc::{Eol, TextEncoding};
 use mdwork_core::image::{self, ImageHost, ImageKind};
 use mdwork_core::notebook::{Entry, EntryKind, Notebook, TrashItem};
 use mdwork_core::permissions::{self as perms, Scope, TokenRecord};
 use mdwork_core::search::{self, SearchHit, SearchQuery};
 use mdwork_core::text::text_stats;
-use mdwork_core::Workspace;
 use mdwork_export::{
     ExportEvent, ExportFormat, ExportJob, ExportOptions, ExportRequest, NotebookPrefs, PaperSize,
 };
@@ -34,8 +34,11 @@ use mdwork_render::preview::{OutlineItem, PreviewIr};
 use rust_i18n::t;
 use uuid::Uuid;
 
-use crate::doc::{read_external_doc, read_notebook_doc, DiskConflict, Doc, DocOrigin};
+use crate::doc::{DiskConflict, Doc, DocOrigin, read_external_doc, read_notebook_doc};
 use crate::{preview, theme};
+
+const PANEL_MIN_WIDTH: f32 = 240.0;
+const PANEL_MAX_WIDTH: f32 = 560.0;
 
 const WELCOME_NOTE: &str = r#"# 欢迎使用墨笺
 
@@ -98,6 +101,13 @@ enum SearchStatus {
     Idle,
     Running,
     Failed(String),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearchOption {
+    Case,
+    Regex,
+    Filename,
 }
 
 struct ExportDialog {
@@ -163,6 +173,91 @@ struct ZipDialog {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    Appearance,
+    Panels,
+    Images,
+    Mcp,
+    Windows,
+}
+
+struct SettingsDialog {
+    tab: SettingsTab,
+    ui_font: Entity<InputState>,
+    note_font: Entity<InputState>,
+    ui_size: Entity<InputState>,
+    note_size: Entity<InputState>,
+}
+
+enum PromptKind {
+    NewFolder { notebook_id: Uuid },
+    MoveEntry { notebook_id: Uuid, from: String },
+    OpenNotebook,
+}
+
+struct PromptDialog {
+    kind: PromptKind,
+    title: String,
+    hint: String,
+    input: Entity<InputState>,
+    error: Option<String>,
+}
+
+struct RecoveryDialog {
+    entries: Vec<mdwork_core::recovery::Snapshot>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaletteCommand {
+    NewNote,
+    NewFolder,
+    NewNotebook,
+    OpenNotebook,
+    Save,
+    TogglePreview,
+    CloseTab,
+    Settings,
+    Search,
+    Outline,
+    Bookmarks,
+    Trash,
+    NotesPanel,
+    ExportPdf,
+    ExportPng,
+    ExportNotebookZip,
+    ImportNotebookZip,
+    MoveEntry,
+    ThemeSystem,
+    ThemeLight,
+    ThemeDark,
+    ToggleCodeWrap,
+    ToggleAutosave,
+    SaveAsUtf8,
+    SaveAsGb18030,
+    SaveAsWindows1252,
+    SaveAsUtf16,
+    SaveEolLf,
+    SaveEolCrlf,
+    OpenWorkspaceFolder,
+    OpenLogFolder,
+    RegisterFileAssoc,
+    Rescan,
+}
+
+struct PaletteItem {
+    label: String,
+    hint: String,
+    command: PaletteCommand,
+}
+
+struct Palette {
+    input: Entity<InputState>,
+    items: Vec<PaletteItem>,
+    filtered: Vec<usize>,
+    selected: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum McpTab {
     Server,
     Tokens,
@@ -212,6 +307,8 @@ pub struct AppShell {
     math_pending: HashSet<u64>,
     copied: bool,
     panel: SidePanel,
+    /// (mouse x at drag start, sidebar width at drag start)
+    panel_resize: Option<(f32, f32)>,
     outline: Vec<OutlineItem>,
     outline_cache: Option<(EntityId, u64)>,
     bookmarks: Bookmarks,
@@ -220,6 +317,9 @@ pub struct AppShell {
     search_status: SearchStatus,
     search_results: Vec<SearchHit>,
     search_all: bool,
+    search_case: bool,
+    search_regex: bool,
+    search_filename: bool,
     search_cancel: Arc<AtomicBool>,
     search_generation: u64,
     renaming: Option<Renaming>,
@@ -229,8 +329,15 @@ pub struct AppShell {
     zip: Option<ZipDialog>,
     image_settings: Option<ImageSettingsDialog>,
     mcp_settings: Option<McpSettingsDialog>,
+    settings: Option<SettingsDialog>,
+    prompt: Option<PromptDialog>,
+    palette: Option<Palette>,
+    recovery: Option<RecoveryDialog>,
+    scan_issues: Vec<String>,
     dirty: crate::dirty::DirtyRegistry,
     mcp: crate::mcp_server::McpHttp,
+    mcp_live: bool,
+    selection_sig: Option<(usize, usize)>,
     _watcher: Option<mdwork_core::watch::WorkspaceWatcher>,
     _appearance_subscription: Option<Subscription>,
 }
@@ -242,7 +349,12 @@ impl AppShell {
         pending: Arc<Mutex<Vec<String>>>,
         initial_path: Option<String>,
     ) -> Self {
-        let config = AppConfig::load_or_default();
+        let mut config = AppConfig::load_or_default();
+        config.panel_width = if config.panel_width.is_finite() {
+            config.panel_width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
+        } else {
+            300.0
+        };
         rust_i18n::set_locale(&config.language);
         theme::apply(&config, window, cx);
 
@@ -273,9 +385,17 @@ impl AppShell {
         let mcp_port = config.mcp_port;
         let mcp_enabled = config.mcp_http;
 
+        let session = match Session::load_from(&mdwork_core::paths::session_path()) {
+            Ok(session) => session,
+            Err(err) => {
+                tracing::warn!(error = %err, "读取会话失败，使用默认会话");
+                Session::default()
+            }
+        };
+
         let mut this = Self {
             config,
-            session: Session::load_or_default(),
+            session,
             workspace,
             notebooks: Vec::new(),
             active_notebook: None,
@@ -293,6 +413,7 @@ impl AppShell {
             math_pending: HashSet::new(),
             copied: false,
             panel: SidePanel::Notes,
+            panel_resize: None,
             outline: Vec::new(),
             outline_cache: None,
             bookmarks: Bookmarks::default(),
@@ -301,6 +422,9 @@ impl AppShell {
             search_status: SearchStatus::Idle,
             search_results: Vec::new(),
             search_all: true,
+            search_case: false,
+            search_regex: false,
+            search_filename: false,
             search_cancel: Arc::new(AtomicBool::new(false)),
             search_generation: 0,
             renaming: None,
@@ -310,14 +434,25 @@ impl AppShell {
             zip: None,
             image_settings: None,
             mcp_settings: None,
+            settings: None,
+            prompt: None,
+            palette: None,
+            recovery: None,
+            scan_issues: Vec::new(),
             dirty: crate::dirty::DirtyRegistry::new(),
             mcp: crate::mcp_server::McpHttp::new(mcp_port),
+            mcp_live: false,
+            selection_sig: None,
             _watcher: None,
             _appearance_subscription: None,
         };
 
         this.reload();
         this.start_watcher();
+        let snapshots = mdwork_core::recovery::list(&mdwork_core::paths::recovery_dir());
+        if !snapshots.is_empty() {
+            this.recovery = Some(RecoveryDialog { entries: snapshots });
+        }
         cx.subscribe(&this.search_input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.schedule_search(cx);
@@ -346,19 +481,18 @@ impl AppShell {
         this.spawn_poller(cx);
 
         if mcp_enabled {
-            this.mcp.start(mcp_port);
+            this.mcp_live = this.mcp.start(mcp_port);
         }
 
         let weak = cx.entity().downgrade();
-        this._appearance_subscription = Some(window.observe_window_appearance(
-            move |window, cx| {
+        this._appearance_subscription =
+            Some(window.observe_window_appearance(move |window, cx| {
                 let _ = weak.update(cx, |this, cx| {
                     if this.config.theme == ThemePreference::System {
                         theme::apply(&this.config, window, cx);
                     }
                 });
-            },
-        ));
+            }));
 
         let weak = cx.entity().downgrade();
         cx.on_window_closed(move |app, _| {
@@ -380,50 +514,73 @@ impl AppShell {
                 self._watcher = Some(watcher);
                 self.changed = Some(Arc::new(Mutex::new(rx)));
             }
-            Err(err) => eprintln!("md-work: file watcher unavailable: {err}"),
+            Err(err) => tracing::warn!(error = %err, "文件监视不可用"),
         }
     }
 
     fn spawn_poller(&self, cx: &mut Context<Self>) {
         let pending = self.pending.clone();
         let changed = self.changed.clone();
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(250))
-                .await;
-            let paths: Vec<String> = {
-                let mut guard = pending.lock().expect("pending paths lock");
-                std::mem::take(&mut *guard)
-            };
-            let disk: Vec<PathBuf> = match &changed {
-                Some(rx) => {
-                    let rx = rx.lock().expect("watcher receiver lock");
-                    let mut paths = Vec::new();
-                    while let Ok(batch) = rx.try_recv() {
-                        paths.extend(batch);
+        cx.spawn(async move |this, cx| {
+            let mut tick: u32 = 0;
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                tick = tick.wrapping_add(1);
+                let _ = this.update(cx, |this, cx| {
+                    let sig = this.active_doc_entity().map(|doc| {
+                        let range = doc.read(cx).editor.read(cx).selected_range();
+                        (range.start, range.end)
+                    });
+                    if sig != this.selection_sig {
+                        this.selection_sig = sig;
+                        cx.notify();
                     }
-                    paths
-                }
-                None => Vec::new(),
-            };
-            if paths.is_empty() && disk.is_empty() {
-                continue;
-            }
-            let Ok(handle) = this.read_with(cx, |this, _| this.window_handle) else {
-                continue;
-            };
-            let weak = this.clone();
-            let _ = handle.update(cx, |_, window, cx| {
-                let _ = weak.update(cx, |this, cx| {
-                    for path in &paths {
-                        this.open_path(path, window, cx);
-                    }
-                    if !disk.is_empty() {
-                        this.handle_external_changes(disk, window, cx);
-                    }
-                    cx.notify();
                 });
-            });
+                if tick % 8 == 0 {
+                    let _ = this.update(cx, |this, cx| {
+                        let live = this.mcp.running();
+                        if live != this.mcp_live {
+                            this.mcp_live = live;
+                            cx.notify();
+                        }
+                    });
+                }
+                let paths: Vec<String> = {
+                    let mut guard = pending.lock().expect("pending paths lock");
+                    std::mem::take(&mut *guard)
+                };
+                let disk: Vec<PathBuf> = match &changed {
+                    Some(rx) => {
+                        let rx = rx.lock().expect("watcher receiver lock");
+                        let mut paths = Vec::new();
+                        while let Ok(batch) = rx.try_recv() {
+                            paths.extend(batch);
+                        }
+                        paths
+                    }
+                    None => Vec::new(),
+                };
+                if paths.is_empty() && disk.is_empty() {
+                    continue;
+                }
+                let Ok(handle) = this.read_with(cx, |this, _| this.window_handle) else {
+                    continue;
+                };
+                let weak = this.clone();
+                let _ = handle.update(cx, |_, window, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        for path in &paths {
+                            this.open_path(path, window, cx);
+                        }
+                        if !disk.is_empty() {
+                            this.handle_external_changes(disk, window, cx);
+                        }
+                        cx.notify();
+                    });
+                });
+            }
         })
         .detach();
     }
@@ -434,9 +591,19 @@ impl AppShell {
         };
         match workspace.refresh() {
             Ok(scan) => {
-                for issue in &scan.issues {
-                    eprintln!("md-work: {} ({:?})", issue.message, issue.path);
-                }
+                self.scan_issues = scan
+                    .issues
+                    .iter()
+                    .map(|issue| {
+                        tracing::warn!(
+                            path = %issue.path.display(),
+                            kind = ?issue.kind,
+                            message = %issue.message,
+                            "扫描工作区发现问题"
+                        );
+                        format!("{}：{}", issue.path.display(), issue.message)
+                    })
+                    .collect();
                 let previous: Vec<(Uuid, HashSet<String>)> = self
                     .notebooks
                     .iter()
@@ -534,9 +701,7 @@ impl AppShell {
             let notebook_touched = root.is_some_and(|root| {
                 paths.iter().any(|path| {
                     path.parent() == Some(root.as_path())
-                        || path
-                            .file_name()
-                            .is_some_and(|name| name == "notebook.json")
+                        || path.file_name().is_some_and(|name| name == "notebook.json")
                 })
             });
             if notebook_touched {
@@ -697,17 +862,20 @@ impl AppShell {
             }) {
                 self.active_doc = Some(index);
             }
+        } else if let Some(id) = session.active_notebook {
+            // Opening external notes above makes the last one active; put the
+            // focus back on the notebook note that was active at shutdown.
+            if let Some(saved) = session.notebook(&id) {
+                if let Some(active) = &saved.active_note {
+                    self.activate_note(&id, active, cx);
+                }
+            }
         }
 
         self.restore_cursor(&saved_cursors, window, cx);
     }
 
-    fn restore_cursor(
-        &mut self,
-        saved: &Session,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn restore_cursor(&mut self, saved: &Session, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.active_doc else {
             return;
         };
@@ -797,9 +965,10 @@ impl AppShell {
                 let autosave = self.config.autosave;
                 let rel_path = rel_path.to_string();
                 let registry = self.dirty.clone();
+                let root = Some(notebook.root.clone());
                 let doc = cx.new(|cx| {
                     Doc::new(
-                        origin, rel_path, path, decoded, hash, autosave, registry, window, cx,
+                        origin, root, rel_path, path, decoded, hash, autosave, registry, window, cx,
                     )
                 });
                 cx.observe(&doc, |_, _, cx| cx.notify()).detach();
@@ -859,6 +1028,7 @@ impl AppShell {
                 let doc = cx.new(|cx| {
                     Doc::new(
                         DocOrigin::External,
+                        None,
                         file_name,
                         path_buf,
                         decoded,
@@ -881,6 +1051,114 @@ impl AppShell {
                 cx.notify();
             }
         }
+    }
+
+    /// Copies an externally opened buffer into the active notebook as a new
+    /// note. The original file on disk is left untouched.
+    fn save_external_into_notebook(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.active_doc else {
+            return;
+        };
+        let Some(doc) = self.docs.get(index).cloned() else {
+            return;
+        };
+        let (text, encoding, bom, eol, file_name) = {
+            let doc = doc.read(cx);
+            if doc.notebook_id.is_some() {
+                return;
+            }
+            (
+                doc.text(cx).to_string(),
+                doc.encoding,
+                doc.bom,
+                doc.eol,
+                doc.path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "note.md".to_string()),
+            )
+        };
+
+        let notebook = self
+            .active_notebook
+            .and_then(|id| {
+                self.notebooks
+                    .iter()
+                    .find(|entry| entry.notebook.marker.id == id)
+            })
+            .or_else(|| self.notebooks.first())
+            .map(|entry| entry.notebook.clone());
+        let Some(notebook) = notebook else {
+            self.notice = Some(t!("external.no_notebook").to_string());
+            cx.notify();
+            return;
+        };
+
+        let (stem, ext) = match file_name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+                (stem.to_string(), Some(ext.to_string()))
+            }
+            _ => (file_name.clone(), None),
+        };
+        let mut rel_path = file_name.clone();
+        let mut counter = 2;
+        while notebook
+            .note_path(&rel_path)
+            .map(|path| path.exists())
+            .unwrap_or(true)
+        {
+            rel_path = match &ext {
+                Some(ext) => format!("{stem} ({counter}).{ext}"),
+                None => format!("{stem} ({counter})"),
+            };
+            counter += 1;
+        }
+
+        let Some(path) = notebook.note_path(&rel_path).ok() else {
+            self.notice = Some(format!("存入笔记本失败：{rel_path}"));
+            cx.notify();
+            return;
+        };
+        let bytes = match mdwork_core::doc::encode_text(&text, encoding, bom, eol) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.notice = Some(format!("存入笔记本失败：{err}"));
+                cx.notify();
+                return;
+            }
+        };
+        if let Err(err) = mdwork_core::atomic::write_atomic(&path, &bytes) {
+            self.notice = Some(format!("存入笔记本失败：{err}"));
+            cx.notify();
+            return;
+        }
+        let hint = mdwork_core::doc::EncodingHint { encoding, bom, eol };
+        if let Err(err) =
+            mdwork_core::notebook::store_encoding_hint(&notebook.root, &rel_path, hint)
+        {
+            tracing::warn!(
+                path = %rel_path,
+                error = %err,
+                "写入编码记录失败"
+            );
+        }
+        tracing::info!(
+            notebook = %notebook.display_name(),
+            path = %rel_path,
+            "外部文件已存入笔记本"
+        );
+
+        self.docs.remove(index);
+        self.active_doc = match self.active_doc {
+            Some(active) if active == index => None,
+            Some(active) if active > index => Some(active - 1),
+            other => other,
+        };
+        self.active_notebook = Some(notebook.marker.id);
+        self.reload_entries();
+        self.open_note(&notebook, &rel_path, window, cx);
+        self.notice = Some(t!("external.saved", path = rel_path.clone()).to_string());
+        cx.notify();
     }
 
     fn activate_note(&mut self, notebook_id: &Uuid, rel_path: &str, cx: &mut Context<Self>) {
@@ -979,7 +1257,11 @@ impl AppShell {
 
         let mut name = "新笔记.md".to_string();
         let mut counter = 2;
-        while notebook.note_path(&name).map(|p| p.exists()).unwrap_or(true) {
+        while notebook
+            .note_path(&name)
+            .map(|p| p.exists())
+            .unwrap_or(true)
+        {
             name = format!("新笔记 {counter}.md");
             counter += 1;
         }
@@ -1022,6 +1304,283 @@ impl AppShell {
                 cx.notify();
             }
         }
+    }
+
+    fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(notebook_id) = self.active_notebook else {
+            self.notice = Some(t!("editor.no_notebook").to_string());
+            cx.notify();
+            return;
+        };
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value("新文件夹")
+                .clean_on_escape()
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+        cx.subscribe(&input, move |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.submit_prompt(cx);
+            }
+        })
+        .detach();
+        self.prompt = Some(PromptDialog {
+            kind: PromptKind::NewFolder { notebook_id },
+            title: t!("prompt.new_folder").to_string(),
+            hint: t!("prompt.new_folder_hint").to_string(),
+            input,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    fn begin_move(
+        &mut self,
+        notebook_id: Uuid,
+        from: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(from.to_string())
+                .clean_on_escape()
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+        cx.subscribe(&input, move |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.submit_prompt(cx);
+            }
+        })
+        .detach();
+        self.prompt = Some(PromptDialog {
+            kind: PromptKind::MoveEntry {
+                notebook_id,
+                from: from.to_string(),
+            },
+            title: t!("prompt.move").to_string(),
+            hint: t!("prompt.move_hint").to_string(),
+            input,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    fn open_external_notebook_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(String::new())
+                .placeholder(t!("prompt.open_notebook_placeholder").to_string())
+                .clean_on_escape()
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+        cx.subscribe(&input, move |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.submit_prompt(cx);
+            }
+        })
+        .detach();
+        self.prompt = Some(PromptDialog {
+            kind: PromptKind::OpenNotebook,
+            title: t!("prompt.open_notebook").to_string(),
+            hint: t!("prompt.open_notebook_hint").to_string(),
+            input,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    fn close_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.prompt.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn close_recovery(&mut self, cx: &mut Context<Self>) {
+        if self.recovery.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn restore_recovery(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.recovery.as_ref() else {
+            return;
+        };
+        let Some(snapshot) = dialog.entries.get(index).cloned() else {
+            return;
+        };
+        if !snapshot.note_path.exists() {
+            self.notice = Some(t!("recovery.missing").to_string());
+            cx.notify();
+            return;
+        }
+        let snapshot_path = snapshot.note_path.to_string_lossy().into_owned();
+        self.open_path(&snapshot_path, window, cx);
+        let restored = self
+            .docs
+            .iter()
+            .find(|doc| doc.read(cx).path == snapshot.note_path)
+            .cloned();
+        let mut disk_changed = false;
+        if let Some(doc) = restored {
+            disk_changed = snapshot
+                .base_sha256
+                .as_deref()
+                .is_some_and(|base| base != doc.read(cx).base_hash.as_str());
+            let text = snapshot.text.clone();
+            doc.update(cx, |doc, cx| doc.replace_all(text, window, cx));
+        }
+        let _ = mdwork_core::recovery::remove(
+            &mdwork_core::paths::recovery_dir(),
+            &snapshot.note_path,
+        );
+        let mut empty = false;
+        if let Some(dialog) = self.recovery.as_mut() {
+            dialog.entries.retain(|entry| entry.note_path != snapshot.note_path);
+            empty = dialog.entries.is_empty();
+        }
+        if empty {
+            self.recovery = None;
+        }
+        self.notice = Some(if disk_changed {
+            t!("recovery.disk_changed").to_string()
+        } else {
+            t!("recovery.restored").to_string()
+        });
+        cx.notify();
+    }
+
+    fn discard_recovery(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(dialog) = self.recovery.as_mut() else {
+            return;
+        };
+        let Some(snapshot) = dialog.entries.get(index).cloned() else {
+            return;
+        };
+        let _ = mdwork_core::recovery::remove(
+            &mdwork_core::paths::recovery_dir(),
+            &snapshot.note_path,
+        );
+        dialog.entries.retain(|entry| entry.note_path != snapshot.note_path);
+        let empty = dialog.entries.is_empty();
+        if empty {
+            self.recovery = None;
+        }
+        cx.notify();
+    }
+
+    fn discard_all_recovery(&mut self, cx: &mut Context<Self>) {
+        let _ = mdwork_core::recovery::clear(&mdwork_core::paths::recovery_dir());
+        self.recovery = None;
+        cx.notify();
+    }
+
+    fn submit_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(prompt) = self.prompt.take() else {
+            return;
+        };
+        let value = prompt.input.read(cx).value().trim().to_string();
+        if value.is_empty() {
+            self.prompt = Some(PromptDialog {
+                error: Some(t!("prompt.empty").to_string()),
+                ..prompt
+            });
+            cx.notify();
+            return;
+        }
+        let result = match &prompt.kind {
+            PromptKind::NewFolder { notebook_id } => self
+                .notebooks
+                .iter()
+                .find(|entry| entry.notebook.marker.id == *notebook_id)
+                .map(|entry| entry.notebook.clone())
+                .ok_or_else(|| "notebook not found".to_string())
+                .and_then(|notebook| {
+                    notebook
+                        .create_folder(&value)
+                        .map(|_| ())
+                        .map_err(|err| err.to_string())
+                }),
+            PromptKind::MoveEntry { notebook_id, from } => {
+                let notebook = self
+                    .notebooks
+                    .iter()
+                    .find(|entry| entry.notebook.marker.id == *notebook_id)
+                    .map(|entry| entry.notebook.clone());
+                let Some(notebook) = notebook else {
+                    cx.notify();
+                    return;
+                };
+                match notebook.rename_entry(from, &value) {
+                    Ok(new_rel) => {
+                        self.update_docs_after_rename(*notebook_id, from, &new_rel, cx);
+                        if self.bookmarks_notebook == Some(*notebook_id) {
+                            self.bookmarks.rekey(from, &new_rel);
+                            self.save_bookmarks();
+                        }
+                        Ok(())
+                    }
+                    Err(err) => Err(err.to_string()),
+                }
+            }
+            PromptKind::OpenNotebook => {
+                let path = PathBuf::from(&value);
+                let Some(workspace) = self.workspace.clone() else {
+                    cx.notify();
+                    return;
+                };
+                match workspace.register_external(&path) {
+                    Ok(notebook) => {
+                        self.active_notebook = Some(notebook.marker.id);
+                        Ok(())
+                    }
+                    Err(err) => Err(err.to_string()),
+                }
+            }
+        };
+        match result {
+            Ok(()) => {
+                self.reload();
+                self.persist_session(cx);
+                self.reveal_active(cx);
+            }
+            Err(err) => {
+                self.prompt = Some(PromptDialog {
+                    error: Some(err),
+                    ..prompt
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    fn save_as_encoding(
+        &mut self,
+        encoding: TextEncoding,
+        bom: bool,
+        eol: Eol,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(doc) = self.active_doc_entity().cloned() else {
+            self.notice = Some(t!("encoding.no_doc").to_string());
+            cx.notify();
+            return;
+        };
+        let result = doc.update(cx, |doc, cx| doc.save_as_encoding(encoding, bom, eol, cx));
+        match result {
+            Ok(()) => {
+                self.notice = Some(
+                    t!(
+                        "encoding.saved_as",
+                        encoding = encoding.label(),
+                        eol = eol.label()
+                    )
+                    .to_string(),
+                );
+            }
+            Err(err) => self.notice = Some(format!("{}：{err}", t!("encoding.failed"))),
+        }
+        cx.notify();
     }
 
     fn set_panel(&mut self, panel: SidePanel, cx: &mut Context<Self>) {
@@ -1176,7 +1735,12 @@ impl AppShell {
         }
         match notebook.rename_entry(&renaming.rel_path, &target) {
             Ok(new_rel) => {
-                self.update_docs_after_rename(renaming.notebook_id, &renaming.rel_path, &new_rel, cx);
+                self.update_docs_after_rename(
+                    renaming.notebook_id,
+                    &renaming.rel_path,
+                    &new_rel,
+                    cx,
+                );
                 if let Some(entry) = self
                     .notebooks
                     .iter_mut()
@@ -1207,8 +1771,7 @@ impl AppShell {
                 self.reveal_active(cx);
             }
             Err(err) => {
-                self.notice =
-                    Some(t!("tree.rename_failed", error = err.to_string()).to_string());
+                self.notice = Some(t!("tree.rename_failed", error = err.to_string()).to_string());
             }
         }
         cx.notify();
@@ -1301,8 +1864,7 @@ impl AppShell {
                 self.notice = Some(format!("{}：{}", t!("trash.moved"), item.rel_path));
             }
             Err(err) => {
-                self.notice =
-                    Some(t!("tree.delete_failed", error = err.to_string()).to_string());
+                self.notice = Some(t!("tree.delete_failed", error = err.to_string()).to_string());
             }
         }
         cx.notify();
@@ -1342,12 +1904,10 @@ impl AppShell {
                 self.trash.retain(|item| item.id != id);
                 self.reload_entries();
                 self.persist_session(cx);
-                self.notice =
-                    Some(format!("{}：{rel_path}", t!("trash.restored")));
+                self.notice = Some(format!("{}：{rel_path}", t!("trash.restored")));
             }
             Err(err) => {
-                self.notice =
-                    Some(t!("trash.failed", error = err.to_string()).to_string());
+                self.notice = Some(t!("trash.failed", error = err.to_string()).to_string());
             }
         }
         cx.notify();
@@ -1431,6 +1991,15 @@ impl AppShell {
         self.schedule_search(cx);
     }
 
+    fn toggle_search_option(&mut self, option: SearchOption, cx: &mut Context<Self>) {
+        match option {
+            SearchOption::Case => self.search_case = !self.search_case,
+            SearchOption::Regex => self.search_regex = !self.search_regex,
+            SearchOption::Filename => self.search_filename = !self.search_filename,
+        }
+        self.schedule_search(cx);
+    }
+
     fn schedule_search(&mut self, cx: &mut Context<Self>) {
         self.search_generation += 1;
         let generation = self.search_generation;
@@ -1438,7 +2007,10 @@ impl AppShell {
         self.search_cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.search_cancel.clone();
 
-        let query = SearchQuery::new(self.search_input.read(cx).value().to_string());
+        let mut query = SearchQuery::new(self.search_input.read(cx).value().to_string());
+        query.case_sensitive = self.search_case;
+        query.regex = self.search_regex;
+        query.filename = self.search_filename;
         if query.is_blank() {
             self.search_results.clear();
             self.search_status = SearchStatus::Idle;
@@ -1547,6 +2119,34 @@ impl AppShell {
         cx.notify();
     }
 
+    fn wrap_selection(
+        &mut self,
+        prefix: &str,
+        suffix: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preview_mode {
+            return;
+        }
+        let Some(doc) = self.active_doc_entity().cloned() else {
+            return;
+        };
+        let selection = doc.read(cx).editor.read(cx).selected_value().to_string();
+        let (text, caret_back) = if selection.is_empty() {
+            (format!("{prefix}{suffix}"), suffix.chars().count() as u32)
+        } else {
+            (format!("{prefix}{selection}{suffix}"), 0)
+        };
+        doc.update(cx, |doc, cx| doc.insert_text(&text, window, cx));
+        if caret_back > 0 {
+            let (line, column) = doc.read(cx).cursor(cx);
+            let target = column.saturating_sub(caret_back);
+            doc.update(cx, |doc, cx| doc.set_cursor(line, target, window, cx));
+        }
+        cx.notify();
+    }
+
     fn ensure_preview(&mut self, cx: &mut Context<Self>) {
         let Some(doc) = self.active_doc_entity().cloned() else {
             self.preview_cache = None;
@@ -1628,6 +2228,273 @@ impl AppShell {
         cx.notify();
     }
 
+    fn palette_items(&self) -> Vec<PaletteItem> {
+        let item = |key: &str, hint: &str, command: PaletteCommand| PaletteItem {
+            label: t!(key).to_string(),
+            hint: hint.to_string(),
+            command,
+        };
+        vec![
+            item("palette.new_note", "Ctrl+N", PaletteCommand::NewNote),
+            item("palette.new_folder", "", PaletteCommand::NewFolder),
+            item("palette.new_notebook", "", PaletteCommand::NewNotebook),
+            item("palette.open_notebook", "", PaletteCommand::OpenNotebook),
+            item("palette.save", "Ctrl+S", PaletteCommand::Save),
+            item(
+                "palette.toggle_preview",
+                "Ctrl+T",
+                PaletteCommand::TogglePreview,
+            ),
+            item("palette.close_tab", "", PaletteCommand::CloseTab),
+            item("palette.settings", "", PaletteCommand::Settings),
+            item("palette.search", "", PaletteCommand::Search),
+            item("palette.outline", "", PaletteCommand::Outline),
+            item("palette.bookmarks", "", PaletteCommand::Bookmarks),
+            item("palette.trash", "", PaletteCommand::Trash),
+            item("palette.notes_panel", "", PaletteCommand::NotesPanel),
+            item("palette.export_pdf", "", PaletteCommand::ExportPdf),
+            item("palette.export_png", "", PaletteCommand::ExportPng),
+            item("palette.export_zip", "", PaletteCommand::ExportNotebookZip),
+            item("palette.import_zip", "", PaletteCommand::ImportNotebookZip),
+            item("palette.move_note", "", PaletteCommand::MoveEntry),
+            item("palette.theme_system", "", PaletteCommand::ThemeSystem),
+            item("palette.theme_light", "", PaletteCommand::ThemeLight),
+            item("palette.theme_dark", "", PaletteCommand::ThemeDark),
+            item("palette.code_wrap", "", PaletteCommand::ToggleCodeWrap),
+            item("palette.autosave", "", PaletteCommand::ToggleAutosave),
+            item("palette.save_utf8", "", PaletteCommand::SaveAsUtf8),
+            item("palette.save_gb18030", "", PaletteCommand::SaveAsGb18030),
+            item(
+                "palette.save_windows1252",
+                "",
+                PaletteCommand::SaveAsWindows1252,
+            ),
+            item("palette.save_utf16", "", PaletteCommand::SaveAsUtf16),
+            item("palette.eol_lf", "", PaletteCommand::SaveEolLf),
+            item("palette.eol_crlf", "", PaletteCommand::SaveEolCrlf),
+            item(
+                "palette.open_workspace",
+                "",
+                PaletteCommand::OpenWorkspaceFolder,
+            ),
+            item("palette.open_logs", "", PaletteCommand::OpenLogFolder),
+            item(
+                "palette.register_assoc",
+                "",
+                PaletteCommand::RegisterFileAssoc,
+            ),
+            item("palette.rescan", "", PaletteCommand::Rescan),
+        ]
+    }
+
+    fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("palette.placeholder").to_string())
+                .clean_on_escape()
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+        cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
+            InputEvent::Change => {
+                this.refresh_palette(cx);
+            }
+            InputEvent::PressEnter { .. } => {
+                let handle = this.window_handle;
+                let weak = cx.entity().downgrade();
+                let _ = handle.update(cx, |_, window, cx| {
+                    let _ = weak.update(cx, |this, cx| this.run_palette_selected(window, cx));
+                });
+            }
+            _ => {}
+        })
+        .detach();
+        let items = self.palette_items();
+        let filtered = (0..items.len()).collect();
+        self.palette = Some(Palette {
+            input,
+            items,
+            filtered,
+            selected: 0,
+        });
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, cx: &mut Context<Self>) {
+        if self.palette.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn refresh_palette(&mut self, cx: &mut Context<Self>) {
+        let Some(palette) = self.palette.as_mut() else {
+            return;
+        };
+        let query = palette.input.read(cx).value().trim().to_lowercase();
+        let mut scored: Vec<(i64, usize)> = palette
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                let score = fuzzy_score(&item.label.to_lowercase(), &query)?;
+                Some((score, index))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        palette.filtered = scored.into_iter().map(|(_, index)| index).collect();
+        palette.selected = 0;
+        cx.notify();
+    }
+
+    fn palette_step(&mut self, delta: i64, cx: &mut Context<Self>) {
+        let Some(palette) = self.palette.as_mut() else {
+            return;
+        };
+        if palette.filtered.is_empty() {
+            return;
+        }
+        let len = palette.filtered.len() as i64;
+        let next = (palette.selected as i64 + delta).rem_euclid(len);
+        palette.selected = next as usize;
+        cx.notify();
+    }
+
+    fn run_palette_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(palette) = self.palette.as_ref() else {
+            return;
+        };
+        let command = palette
+            .filtered
+            .get(palette.selected)
+            .and_then(|index| palette.items.get(*index))
+            .map(|item| item.command);
+        let Some(command) = command else {
+            return;
+        };
+        self.close_palette(cx);
+        self.run_palette_command(command, window, cx);
+    }
+
+    fn run_palette_command(
+        &mut self,
+        command: PaletteCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            PaletteCommand::NewNote => self.new_note(window, cx),
+            PaletteCommand::NewFolder => self.new_folder(window, cx),
+            PaletteCommand::NewNotebook => self.new_notebook(cx),
+            PaletteCommand::OpenNotebook => self.open_external_notebook_prompt(window, cx),
+            PaletteCommand::Save => self.save_active(cx),
+            PaletteCommand::TogglePreview => self.toggle_preview(window, cx),
+            PaletteCommand::CloseTab => {
+                if let Some(index) = self.active_doc {
+                    self.close_doc(index, cx);
+                }
+            }
+            PaletteCommand::Settings => self.open_settings(window, cx),
+            PaletteCommand::Search => {
+                self.set_panel(SidePanel::Search, cx);
+                self.search_input
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            PaletteCommand::Outline => self.set_panel(SidePanel::Outline, cx),
+            PaletteCommand::Bookmarks => self.set_panel(SidePanel::Bookmarks, cx),
+            PaletteCommand::Trash => self.set_panel(SidePanel::Trash, cx),
+            PaletteCommand::NotesPanel => self.set_panel(SidePanel::Notes, cx),
+            PaletteCommand::ExportPdf => {
+                self.open_export_dialog_with(ExportFormat::Pdf, window, cx)
+            }
+            PaletteCommand::ExportPng => {
+                self.open_export_dialog_with(ExportFormat::Png, window, cx)
+            }
+            PaletteCommand::ExportNotebookZip => {
+                if let Some(id) = self.active_notebook {
+                    self.open_zip_export(id, window, cx);
+                } else {
+                    self.notice = Some(t!("zip.no_notebook").to_string());
+                    cx.notify();
+                }
+            }
+            PaletteCommand::ImportNotebookZip => self.open_zip_import(window, cx),
+            PaletteCommand::MoveEntry => {
+                let target = self.active_doc_entity().and_then(|doc| {
+                    let doc = doc.read(cx);
+                    doc.notebook_id.map(|id| (id, doc.rel_path.clone()))
+                });
+                if let Some((notebook_id, rel_path)) = target {
+                    self.begin_move(notebook_id, &rel_path, window, cx);
+                } else {
+                    self.notice = Some(t!("tree.move_external").to_string());
+                    cx.notify();
+                }
+            }
+            PaletteCommand::ThemeSystem => {
+                self.set_theme_preference(ThemePreference::System, window, cx)
+            }
+            PaletteCommand::ThemeLight => {
+                self.set_theme_preference(ThemePreference::Light, window, cx)
+            }
+            PaletteCommand::ThemeDark => {
+                self.set_theme_preference(ThemePreference::Dark, window, cx)
+            }
+            PaletteCommand::ToggleCodeWrap => self.toggle_code_wrap(cx),
+            PaletteCommand::ToggleAutosave => self.set_autosave(!self.config.autosave, cx),
+            PaletteCommand::SaveAsUtf8 => {
+                let (_, _, eol) = self.current_encoding(cx);
+                self.save_as_encoding(TextEncoding::Utf8, false, eol, cx)
+            }
+            PaletteCommand::SaveAsGb18030 => {
+                let (_, _, eol) = self.current_encoding(cx);
+                self.save_as_encoding(TextEncoding::Gb18030, false, eol, cx)
+            }
+            PaletteCommand::SaveAsWindows1252 => {
+                let (_, _, eol) = self.current_encoding(cx);
+                self.save_as_encoding(TextEncoding::Windows1252, false, eol, cx)
+            }
+            PaletteCommand::SaveAsUtf16 => {
+                let (_, _, eol) = self.current_encoding(cx);
+                self.save_as_encoding(TextEncoding::Utf16Le, true, eol, cx)
+            }
+            PaletteCommand::SaveEolLf => {
+                let (encoding, bom, _) = self.current_encoding(cx);
+                self.save_as_encoding(encoding, bom, Eol::Lf, cx)
+            }
+            PaletteCommand::SaveEolCrlf => {
+                let (encoding, bom, _) = self.current_encoding(cx);
+                self.save_as_encoding(encoding, bom, Eol::Crlf, cx)
+            }
+            PaletteCommand::OpenWorkspaceFolder => {
+                let root = self
+                    .workspace
+                    .as_ref()
+                    .map(|workspace| workspace.root().to_path_buf());
+                self.open_path_in_explorer(root, cx);
+            }
+            PaletteCommand::OpenLogFolder => {
+                self.open_path_in_explorer(Some(mdwork_core::paths::logs_dir()), cx)
+            }
+            PaletteCommand::RegisterFileAssoc => self.register_file_assoc(cx),
+            PaletteCommand::Rescan => {
+                self.reload();
+                self.persist_session(cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn current_encoding(&self, cx: &App) -> (TextEncoding, bool, Eol) {
+        self.active_doc_entity()
+            .map(|doc| {
+                let doc = doc.read(cx);
+                (doc.encoding, doc.bom, doc.eol)
+            })
+            .unwrap_or((TextEncoding::Utf8, false, Eol::Lf))
+    }
+
     fn copy_preview(&mut self, cx: &mut Context<Self>) {
         self.ensure_preview(cx);
         let Some(cache) = &self.preview_cache else {
@@ -1647,28 +2514,6 @@ impl AppShell {
             });
         })
         .detach();
-    }
-
-    fn cycle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.config.theme = theme::next(self.config.theme);
-        theme::apply(&self.config, window, cx);
-        if let Err(err) = self.config.save() {
-            self.notice = Some(format!("保存设置失败：{err}"));
-        }
-        cx.notify();
-    }
-
-    fn toggle_language(&mut self, cx: &mut Context<Self>) {
-        self.config.language = if self.config.language == "zh-CN" {
-            "en".to_string()
-        } else {
-            "zh-CN".to_string()
-        };
-        rust_i18n::set_locale(&self.config.language);
-        if let Err(err) = self.config.save() {
-            self.notice = Some(format!("保存设置失败：{err}"));
-        }
-        cx.refresh_windows();
     }
 
     fn persist_session(&mut self, cx: &App) {
@@ -1723,7 +2568,7 @@ impl AppShell {
         }
 
         if let Err(err) = session.save() {
-            eprintln!("md-work: failed to save session: {err}");
+            tracing::warn!(error = %err, "保存会话失败");
         }
         self.session = session;
     }
@@ -1735,128 +2580,75 @@ impl AppShell {
     fn render_title(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .h_flex()
-            .w_full()
-            .gap_2()
+            .flex_1()
+            .min_w_0()
+            .gap_1()
             .child(
                 div()
-                    .text_sm()
-                    .font_bold()
-                    .child(t!("app.name").to_string()),
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .pr_3()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_bold()
+                            .child(t!("app.name").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("app.subtitle").to_string()),
+                    ),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("app.subtitle").to_string()),
-            )
-            .into_any_element()
-    }
-
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme_label = match self.config.theme {
-            ThemePreference::System => t!("theme.system"),
-            ThemePreference::Light => t!("theme.light"),
-            ThemePreference::Dark => t!("theme.dark"),
-        };
-        let language_label = if self.config.language == "zh-CN" {
-            "English"
-        } else {
-            "中文"
-        };
-
-        div()
-            .h(px(36.))
-            .h_flex()
-            .w_full()
-            .gap_2()
-            .px_3()
-            .border_b_1()
-            .border_color(cx.theme().border)
             .child(div().flex_1())
             .child(
-                Button::new("btn-theme")
-                    .ghost()
-                    .compact()
-                    .label(theme_label.to_string())
-                    .tooltip(t!("theme.label").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| this.cycle_theme(window, cx))),
+                title_icon(
+                    "title-new-note",
+                    IconName::SquarePen,
+                    t!("sidebar.new_note").to_string(),
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.new_note(window, cx))),
             )
             .child(
-                Button::new("btn-language")
-                    .ghost()
-                    .compact()
-                    .label(language_label)
-                    .tooltip(t!("language.label").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_language(cx))),
+                title_icon(
+                    "title-export",
+                    IconName::Download,
+                    t!("export.title").to_string(),
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx))),
             )
             .child(
-                Button::new("btn-export")
-                    .ghost()
-                    .compact()
-                    .label(t!("export.label").to_string())
-                    .tooltip(t!("export.title").to_string())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx)),
-                    ),
+                title_icon(
+                    "title-zip-export",
+                    IconName::Package,
+                    t!("zip.export_label").to_string(),
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let Some(id) = this.active_notebook else {
+                        this.notice = Some(t!("zip.no_notebook").to_string());
+                        cx.notify();
+                        return;
+                    };
+                    this.open_zip_export(id, window, cx);
+                })),
             )
             .child(
-                Button::new("btn-zip-export")
-                    .ghost()
-                    .compact()
-                    .label(t!("zip.export_label").to_string())
-                    .tooltip(t!("zip.export_hint").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let Some(id) = this.active_notebook else {
-                            this.notice = Some(t!("zip.no_notebook").to_string());
-                            cx.notify();
-                            return;
-                        };
-                        this.open_zip_export(id, window, cx);
-                    })),
+                title_icon(
+                    "title-zip-import",
+                    IconName::FolderInput,
+                    t!("zip.import_label").to_string(),
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.open_zip_import(window, cx))),
             )
             .child(
-                Button::new("btn-zip-import")
-                    .ghost()
-                    .compact()
-                    .label(t!("zip.import_label").to_string())
-                    .tooltip(t!("zip.import_title").to_string())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_zip_import(window, cx)),
-                    ),
-            )
-            .child(
-                Button::new("btn-image-host")
-                    .ghost()
-                    .compact()
-                    .label(t!("image.host").to_string())
-                    .tooltip(t!("image.host_hint").to_string())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_image_settings(window, cx)),
-                    ),
-            )
-            .child(
-                Button::new("btn-mcp-settings")
-                    .ghost()
-                    .compact()
-                    .label(t!("mcp.settings").to_string())
-                    .tooltip(t!("mcp.settings_hint").to_string())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_mcp_settings(window, cx)),
-                    ),
-            )
-            .child(
-                Button::new("btn-save")
-                    .ghost()
-                    .compact()
-                    .label("Ctrl+S")
-                    .on_click(cx.listener(|this, _, _, cx| this.save_active(cx))),
-            )
-            .child(
-                Button::new("btn-new-note")
-                    .primary()
-                    .compact()
-                    .label(t!("sidebar.new_note").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| this.new_note(window, cx))),
+                title_icon(
+                    "title-settings",
+                    IconName::Settings,
+                    t!("settings.title").to_string(),
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
             )
             .into_any_element()
     }
@@ -1889,6 +2681,15 @@ impl AppShell {
     }
 
     fn open_export_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_export_dialog_with(ExportFormat::Pdf, window, cx);
+    }
+
+    fn open_export_dialog_with(
+        &mut self,
+        format: ExportFormat,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.export.is_some() {
             return;
         }
@@ -1912,10 +2713,7 @@ impl AppShell {
                 ),
                 None => (
                     String::new(),
-                    doc.path
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_default(),
+                    doc.path.parent().map(Path::to_path_buf).unwrap_or_default(),
                 ),
             };
             let note_rel = if notebook_id.is_some() {
@@ -1940,7 +2738,6 @@ impl AppShell {
             .map(|id| NotebookPrefs::load(&id))
             .unwrap_or_default();
         let options = prefs.export.clone();
-        let format = ExportFormat::Pdf;
         let dir = prefs
             .export_dir(true)
             .unwrap_or_else(|| notebook_root.clone());
@@ -2054,9 +2851,9 @@ impl AppShell {
                     if let Some(dialog) = this.export.as_mut() {
                         let path = ensure_export_extension(path, dialog.format);
                         let display = path.display().to_string();
-                        dialog.output_input.update(cx, |state, cx| {
-                            state.set_value(display, window, cx)
-                        });
+                        dialog
+                            .output_input
+                            .update(cx, |state, cx| state.set_value(display, window, cx));
                         cx.notify();
                     }
                 });
@@ -2114,7 +2911,7 @@ impl AppShell {
                 prefs.set_export_dir(dialog.format == ExportFormat::Pdf, parent);
             }
             if let Err(err) = prefs.save(&id) {
-                eprintln!("md-work: failed to save notebook prefs: {err}");
+                tracing::warn!(error = %err, "保存笔记本偏好失败");
             }
         }
 
@@ -2128,9 +2925,9 @@ impl AppShell {
                     dialog.warnings.clear();
                     dialog.error = None;
                     let display = output.display().to_string();
-                    dialog.output_input.update(cx, |state, cx| {
-                        state.set_value(display, window, cx)
-                    });
+                    dialog
+                        .output_input
+                        .update(cx, |state, cx| state.set_value(display, window, cx));
                 }
                 self.spawn_export_poll(cx);
             }
@@ -2145,15 +2942,17 @@ impl AppShell {
 
     fn spawn_export_poll(&self, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
-        cx.spawn(async move |_, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(120))
-                .await;
-            let keep = weak
-                .update(cx, |this, cx| this.poll_export(cx))
-                .unwrap_or(false);
-            if !keep {
-                break;
+        cx.spawn(async move |_, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                let keep = weak
+                    .update(cx, |this, cx| this.poll_export(cx))
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
             }
         })
         .detach();
@@ -2207,12 +3006,7 @@ impl AppShell {
         dialog.job.is_some()
     }
 
-    fn open_zip_export(
-        &mut self,
-        notebook_id: Uuid,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn open_zip_export(&mut self, notebook_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         if self.zip.is_some() {
             return;
         }
@@ -2358,11 +3152,7 @@ impl AppShell {
             return None;
         }
         let value = dialog.rename_input.read(cx).value().trim().to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
     }
 
     fn schedule_zip_plan(&mut self, cx: &mut Context<Self>) {
@@ -2403,7 +3193,9 @@ impl AppShell {
                 .await;
             let result = cx
                 .background_executor()
-                .spawn(async move { archive::plan_import(&root, &path, mode, rename_to.as_deref()) })
+                .spawn(
+                    async move { archive::plan_import(&root, &path, mode, rename_to.as_deref()) },
+                )
                 .await;
             let _ = this.update(cx, |this, cx| {
                 let Some(dialog) = this.zip.as_mut() else {
@@ -2542,9 +3334,9 @@ impl AppShell {
                 if this.zip.is_some() {
                     let path = ensure_zip_extension(path);
                     if let Some(dialog) = this.zip.as_mut() {
-                        dialog
-                            .path_input
-                            .update(cx, |state, cx| state.set_value(path.display().to_string(), window, cx));
+                        dialog.path_input.update(cx, |state, cx| {
+                            state.set_value(path.display().to_string(), window, cx)
+                        });
                     }
                     cx.notify();
                 }
@@ -2607,11 +3399,10 @@ impl AppShell {
                     Ok(summary) => {
                         this.zip = None;
                         let mut prefs = NotebookPrefs::load(&notebook_id);
-                        prefs.last_zip_dir = output
-                            .parent()
-                            .map(|parent| parent.display().to_string());
+                        prefs.last_zip_dir =
+                            output.parent().map(|parent| parent.display().to_string());
                         if let Err(err) = prefs.save(&notebook_id) {
-                            eprintln!("md-work: failed to save notebook prefs: {err}");
+                            tracing::warn!(error = %err, "保存笔记本偏好失败");
                         }
                         t!(
                             "zip.export_done",
@@ -2718,11 +3509,10 @@ impl AppShell {
                         this.zip = None;
                         if let Some(id) = notebook_id {
                             let mut prefs = NotebookPrefs::load(&id);
-                            prefs.last_import_dir = zip_path
-                                .parent()
-                                .map(|parent| parent.display().to_string());
+                            prefs.last_import_dir =
+                                zip_path.parent().map(|parent| parent.display().to_string());
                             if let Err(err) = prefs.save(&id) {
-                                eprintln!("md-work: failed to save notebook prefs: {err}");
+                                tracing::warn!(error = %err, "保存笔记本偏好失败");
                             }
                         }
                         this.reload();
@@ -2806,25 +3596,20 @@ impl AppShell {
         let foreground = cx.theme().popover_foreground;
         let overlay = cx.theme().overlay;
         let danger = cx.theme().danger;
-        let label = |text: String| {
-            div()
-                .w(px(64.))
-                .text_xs()
-                .text_color(muted)
-                .child(text)
-        };
-        let format_button = |format: ExportFormat, label_key: &'static str, cx: &mut Context<Self>| {
-            let active = dialog.format == format;
-            Button::new(format!("export-format-{}", format.extension()))
-                .ghost()
-                .compact()
-                .label(t!(label_key).to_string())
-                .when(active, |button| button.primary())
-                .disabled(dialog.busy)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.set_export_format(format, window, cx)
-                }))
-        };
+        let label = |text: String| div().w(px(64.)).text_xs().text_color(muted).child(text);
+        let format_button =
+            |format: ExportFormat, label_key: &'static str, cx: &mut Context<Self>| {
+                let active = dialog.format == format;
+                Button::new(format!("export-format-{}", format.extension()))
+                    .ghost()
+                    .compact()
+                    .label(t!(label_key).to_string())
+                    .when(active, |button| button.primary())
+                    .disabled(dialog.busy)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_export_format(format, window, cx)
+                    }))
+            };
         let checkbox = |id: &'static str,
                         label_key: &'static str,
                         checked: bool,
@@ -2837,6 +3622,17 @@ impl AppShell {
                 .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                     this.set_export_option(|options| apply(options, *checked), cx)
                 }))
+        };
+        let cycle = |id: &'static str,
+                     text: String,
+                     apply: fn(&mut ExportOptions),
+                     cx: &mut Context<Self>| {
+            Button::new(id)
+                .ghost()
+                .compact()
+                .label(text)
+                .disabled(dialog.busy)
+                .on_click(cx.listener(move |this, _, _, cx| this.set_export_option(apply, cx)))
         };
 
         let paper_label = match dialog.options.paper {
@@ -2855,7 +3651,10 @@ impl AppShell {
                 .unwrap_or_else(|| t!("export.busy").to_string());
             let text = match dialog.progress {
                 Some((page, pages)) => {
-                    format!("{stage} · {}", t!("export.page", page = page, pages = pages))
+                    format!(
+                        "{stage} · {}",
+                        t!("export.page", page = page, pages = pages)
+                    )
                 }
                 None => stage,
             };
@@ -2912,9 +3711,9 @@ impl AppShell {
                                     .ghost()
                                     .compact()
                                     .label("×")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_export_dialog(cx)
-                                    })),
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.close_export_dialog(cx)),
+                                    ),
                             ),
                     )
                     .child(
@@ -3023,6 +3822,128 @@ impl AppShell {
                                     cx,
                                 ))
                             }),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_2()
+                            .child(cycle(
+                                "export-margin",
+                                t!("export.margin", mm = dialog.options.margin_top_mm as i32)
+                                    .to_string(),
+                                |options| {
+                                    let next = match options.margin_top_mm as i32 {
+                                        10 => 15.0,
+                                        15 => 20.0,
+                                        20 => 25.0,
+                                        25 => 30.0,
+                                        _ => 10.0,
+                                    };
+                                    options.margin_top_mm = next;
+                                    options.margin_bottom_mm = next;
+                                    options.margin_left_mm = next;
+                                    options.margin_right_mm = next;
+                                },
+                                cx,
+                            ))
+                            .child(cycle(
+                                "export-font-size",
+                                t!(
+                                    "export.font_size",
+                                    pt = format_pt(dialog.options.font_size_pt)
+                                )
+                                .to_string(),
+                                |options| {
+                                    options.font_size_pt = match options.font_size_pt as i32 {
+                                        9 => 10.0,
+                                        10 => 11.0,
+                                        11 => 12.0,
+                                        12 => 13.0,
+                                        13 => 14.0,
+                                        _ => 9.0,
+                                    };
+                                },
+                                cx,
+                            ))
+                            .child(cycle(
+                                "export-line-height",
+                                t!(
+                                    "export.line_height",
+                                    value = format!("{:.2}", dialog.options.line_height)
+                                )
+                                .to_string(),
+                                |options| {
+                                    options.line_height =
+                                        match (options.line_height * 100.0).round() as i32 {
+                                            140 => 1.5,
+                                            150 => 1.65,
+                                            165 => 1.8,
+                                            180 => 2.0,
+                                            _ => 1.4,
+                                        };
+                                },
+                                cx,
+                            ))
+                            .child(cycle(
+                                "export-toc-depth",
+                                t!("export.toc_depth", depth = dialog.options.toc_depth)
+                                    .to_string(),
+                                |options| {
+                                    options.toc_depth = match options.toc_depth {
+                                        1 => 2,
+                                        2 => 3,
+                                        3 => 4,
+                                        4 => 5,
+                                        _ => 1,
+                                    };
+                                },
+                                cx,
+                            ))
+                            .child(cycle(
+                                "export-image-width",
+                                t!(
+                                    "export.image_width",
+                                    pct = dialog.options.image_max_width_pct
+                                )
+                                .to_string(),
+                                |options| {
+                                    options.image_max_width_pct = match options.image_max_width_pct
+                                    {
+                                        60 => 75,
+                                        61..=75 => 90,
+                                        76..=90 => 100,
+                                        _ => 60,
+                                    };
+                                },
+                                cx,
+                            ))
+                            .child(cycle(
+                                "export-page-format",
+                                format!(
+                                    "{}: {}",
+                                    t!("export.page_format"),
+                                    dialog.options.page_number_format
+                                ),
+                                |options| {
+                                    options.page_number_format =
+                                        match options.page_number_format.as_str() {
+                                            "1" => "1 / 1".to_string(),
+                                            "1 / 1" => "- 1 -".to_string(),
+                                            "- 1 -" => "1 / 2".to_string(),
+                                            _ => "1".to_string(),
+                                        };
+                                },
+                                cx,
+                            ))
+                            .child(checkbox(
+                                "export-justify",
+                                "export.justify",
+                                dialog.options.justify,
+                                |options, value| options.justify = value,
+                                cx,
+                            )),
                     )
                     .child(
                         div()
@@ -3140,31 +4061,23 @@ impl AppShell {
             ZipDialogMode::Import => t!("zip.import_title").to_string(),
         };
 
-        let import_mode_button =
-            |mode: ImportMode, key: &'static str, cx: &mut Context<Self>| {
-                let active = dialog.import_mode == mode;
-                Button::new(format!("zip-mode-{key}"))
-                    .ghost()
-                    .compact()
-                    .label(t!(key).to_string())
-                    .when(active, |button| button.primary())
-                    .disabled(dialog.busy)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_zip_import_mode(mode, cx)
-                    }))
-            };
+        let import_mode_button = |mode: ImportMode, key: &'static str, cx: &mut Context<Self>| {
+            let active = dialog.import_mode == mode;
+            Button::new(format!("zip-mode-{key}"))
+                .ghost()
+                .compact()
+                .label(t!(key).to_string())
+                .when(active, |button| button.primary())
+                .disabled(dialog.busy)
+                .on_click(cx.listener(move |this, _, _, cx| this.set_zip_import_mode(mode, cx)))
+        };
 
         let policy_button = |policy: ConflictPolicy,
                              key: &'static str,
                              path: Option<String>,
                              cx: &mut Context<Self>| {
             let active = match &path {
-                Some(path) => dialog
-                    .choices
-                    .get(path)
-                    .copied()
-                    .unwrap_or(dialog.policy)
-                    == policy,
+                Some(path) => dialog.choices.get(path).copied().unwrap_or(dialog.policy) == policy,
                 None => dialog.policy == policy,
             };
             let id = format!(
@@ -3177,12 +4090,10 @@ impl AppShell {
                 .label(t!(key).to_string())
                 .when(active, |button| button.primary())
                 .disabled(dialog.busy)
-                .on_click(
-                    cx.listener(move |this, _, _, cx| match &path {
-                        Some(path) => this.set_zip_choice(path, policy, cx),
-                        None => this.set_zip_policy(policy, cx),
-                    }),
-                )
+                .on_click(cx.listener(move |this, _, _, cx| match &path {
+                    Some(path) => this.set_zip_choice(path, policy, cx),
+                    None => this.set_zip_policy(policy, cx),
+                }))
         };
 
         let mut body: Vec<AnyElement> = Vec::new();
@@ -3195,11 +4106,7 @@ impl AppShell {
                         .items_center()
                         .gap_2()
                         .child(label(t!("zip.notebook").to_string()))
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(dialog.notebook_name.clone()),
-                        )
+                        .child(div().text_sm().child(dialog.notebook_name.clone()))
                         .into_any_element(),
                 );
                 body.push(
@@ -3242,11 +4149,10 @@ impl AppShell {
                         .gap_2()
                         .child(label(t!("zip.file").to_string()))
                         .child(
-                            div().flex_1().min_w_0().child(
-                                Input::new(&dialog.path_input)
-                                    .w_full()
-                                    .small(),
-                            ),
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&dialog.path_input).w_full().small()),
                         )
                         .child(
                             Button::new("zip-import-browse")
@@ -3266,11 +4172,7 @@ impl AppShell {
                         .items_center()
                         .gap_2()
                         .child(label(t!("zip.mode").to_string()))
-                        .child(import_mode_button(
-                            ImportMode::Merge,
-                            "zip.mode.merge",
-                            cx,
-                        ))
+                        .child(import_mode_button(ImportMode::Merge, "zip.mode.merge", cx))
                         .child(import_mode_button(
                             ImportMode::Overwrite,
                             "zip.mode.overwrite",
@@ -3328,11 +4230,7 @@ impl AppShell {
                             .h_flex()
                             .gap_2()
                             .text_xs()
-                            .child(
-                                div()
-                                    .text_color(muted)
-                                    .child(t!("zip.target").to_string()),
-                            )
+                            .child(div().text_color(muted).child(t!("zip.target").to_string()))
                             .child(div().child(plan.folder_name.clone()))
                             .child(div().text_color(muted).child(folder_state))
                             .into_any_element(),
@@ -3490,21 +4388,16 @@ impl AppShell {
             },
         };
 
-        let mut footer = div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .min_h(px(24.))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_xs()
-                    .when_some(status, |element, (text, color)| {
-                        element.text_color(color).child(text)
-                    }),
-            );
+        let mut footer = div().h_flex().items_center().gap_2().min_h(px(24.)).child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .when_some(status, |element, (text, color)| {
+                    element.text_color(color).child(text)
+                }),
+        );
         if dialog.busy {
             footer = footer.child(
                 Button::new("zip-cancel")
@@ -3570,9 +4463,9 @@ impl AppShell {
                                     .ghost()
                                     .compact()
                                     .label("×")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_zip_dialog(cx)
-                                    })),
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.close_zip_dialog(cx)),
+                                    ),
                             ),
                     )
                     .children(body)
@@ -3585,8 +4478,7 @@ impl AppShell {
         if self.image_settings.is_some() {
             return;
         }
-        let (mode, picgo, http_endpoint, field, url_path, headers) = match &self.config.image_host
-        {
+        let (mode, picgo, http_endpoint, field, url_path, headers) = match &self.config.image_host {
             ImageHost::Local => (
                 ImageHostMode::Local,
                 image::default_picgo_endpoint(),
@@ -3631,11 +4523,6 @@ impl AppShell {
             http_headers,
             error: None,
         });
-        cx.notify();
-    }
-
-    fn close_image_settings(&mut self, cx: &mut Context<Self>) {
-        self.image_settings = None;
         cx.notify();
     }
 
@@ -3688,15 +4575,11 @@ impl AppShell {
         cx.notify();
     }
 
-    fn render_image_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_image_settings_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(dialog) = self.image_settings.as_ref() else {
-            return div().into_any_element();
+            return empty_hint(t!("image.loading").to_string(), cx.theme().muted_foreground);
         };
-        let border = cx.theme().border;
         let muted = cx.theme().muted_foreground;
-        let popover = cx.theme().popover;
-        let foreground = cx.theme().popover_foreground;
-        let overlay = cx.theme().overlay;
         let danger = cx.theme().danger;
         let label = |text: String| {
             div()
@@ -3749,7 +4632,12 @@ impl AppShell {
                         .items_center()
                         .gap_2()
                         .child(label(t!("image.endpoint").to_string()))
-                        .child(div().flex_1().min_w_0().child(Input::new(&dialog.picgo_endpoint).w_full().small()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&dialog.picgo_endpoint).w_full().small()),
+                        )
                         .into_any_element(),
                 );
                 body.push(
@@ -3767,7 +4655,12 @@ impl AppShell {
                         .items_center()
                         .gap_2()
                         .child(label(t!("image.endpoint").to_string()))
-                        .child(div().flex_1().min_w_0().child(Input::new(&dialog.http_endpoint).w_full().small()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&dialog.http_endpoint).w_full().small()),
+                        )
                         .into_any_element(),
                 );
                 body.push(
@@ -3776,7 +4669,12 @@ impl AppShell {
                         .items_center()
                         .gap_2()
                         .child(label(t!("image.field").to_string()))
-                        .child(div().flex_1().min_w_0().child(Input::new(&dialog.http_field).w_full().small()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&dialog.http_field).w_full().small()),
+                        )
                         .into_any_element(),
                 );
                 body.push(
@@ -3785,7 +4683,12 @@ impl AppShell {
                         .items_center()
                         .gap_2()
                         .child(label(t!("image.url_path").to_string()))
-                        .child(div().flex_1().min_w_0().child(Input::new(&dialog.http_url_path).w_full().small()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(Input::new(&dialog.http_url_path).w_full().small()),
+                        )
                         .into_any_element(),
                 );
                 body.push(
@@ -3820,84 +4723,30 @@ impl AppShell {
             }
         }
 
-        let mut footer = div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .min_h(px(24.))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_xs()
-                    .text_color(danger)
-                    .when_some(dialog.error.clone(), |element, error| element.child(error)),
-            );
-        footer = footer
-            .child(
-                Button::new("image-dismiss")
-                    .ghost()
-                    .compact()
-                    .label(t!("export.close").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| this.close_image_settings(cx))),
-            )
-            .child(
-                Button::new("image-save")
-                    .primary()
-                    .compact()
-                    .label(t!("image.save").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| this.save_image_settings(cx))),
-            );
+        let mut footer = div().h_flex().items_center().gap_2().min_h(px(24.)).child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(danger)
+                .when_some(dialog.error.clone(), |element, error| element.child(error)),
+        );
+        footer = footer.child(
+            Button::new("image-save")
+                .primary()
+                .compact()
+                .label(t!("image.save").to_string())
+                .on_click(cx.listener(|this, _, _, cx| this.save_image_settings(cx))),
+        );
 
         div()
-            .id("image-settings-overlay")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(overlay)
-            .occlude()
-            .child(
-                div()
-                    .id("image-settings-dialog")
-                    .v_flex()
-                    .w(px(560.))
-                    .gap_3()
-                    .p_5()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(border)
-                    .bg(popover)
-                    .text_color(foreground)
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_base()
-                                    .font_bold()
-                                    .child(t!("image.host_title").to_string()),
-                            )
-                            .child(
-                                Button::new("image-close")
-                                    .ghost()
-                                    .compact()
-                                    .label("×")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_image_settings(cx)
-                                    })),
-                            ),
-                    )
-                    .children(body)
-                    .child(footer),
-            )
+            .v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_3()
+            .children(body)
+            .child(footer)
             .into_any_element()
     }
 
@@ -3918,18 +4767,14 @@ impl AppShell {
         .on_click(cx.listener(move |this, _, _, cx| this.set_mcp_tab(tab, cx)))
     }
 
-    fn render_mcp_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_mcp_settings_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(dialog) = self.mcp_settings.as_ref() else {
-            return div().into_any_element();
+            return empty_hint(t!("mcp.loading").to_string(), cx.theme().muted_foreground);
         };
         let tab = dialog.tab;
         let has_error = dialog.error.is_some();
         let message = dialog.error.clone().or_else(|| dialog.message.clone());
-        let border = cx.theme().border;
         let muted = cx.theme().muted_foreground;
-        let popover = cx.theme().popover;
-        let foreground = cx.theme().popover_foreground;
-        let overlay = cx.theme().overlay;
         let danger = cx.theme().danger;
 
         let body = match tab {
@@ -3939,85 +4784,31 @@ impl AppShell {
         };
 
         let message_color = if has_error { danger } else { muted };
-        let footer = div()
-            .h_flex()
-            .items_center()
-            .gap_2()
-            .min_h(px(24.))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_xs()
-                    .text_color(message_color)
-                    .when_some(message, |element, text| element.child(text)),
-            )
-            .child(
-                Button::new("mcp-dialog-done")
-                    .ghost()
-                    .compact()
-                    .label(t!("export.close").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| this.close_mcp_settings(cx))),
-            );
+        let footer = div().h_flex().items_center().gap_2().min_h(px(24.)).child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(message_color)
+                .when_some(message, |element, text| element.child(text)),
+        );
 
         div()
-            .id("mcp-settings-overlay")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(overlay)
-            .occlude()
+            .v_flex()
+            .flex_1()
+            .min_h_0()
+            .gap_3()
             .child(
                 div()
-                    .id("mcp-settings-dialog")
-                    .v_flex()
-                    .w(px(860.))
-                    .h(px(600.))
-                    .gap_3()
-                    .p_5()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(border)
-                    .bg(popover)
-                    .text_color(foreground)
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_base()
-                                    .font_bold()
-                                    .child(t!("mcp.title").to_string()),
-                            )
-                            .child(
-                                Button::new("mcp-dialog-close")
-                                    .ghost()
-                                    .compact()
-                                    .label("×")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_mcp_settings(cx)
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_1()
-                            .child(self.mcp_tab_button(McpTab::Server, "mcp.tab.server", cx))
-                            .child(self.mcp_tab_button(McpTab::Tokens, "mcp.tab.tokens", cx))
-                            .child(self.mcp_tab_button(McpTab::Audit, "mcp.tab.audit", cx)),
-                    )
-                    .child(body)
-                    .child(footer),
+                    .h_flex()
+                    .gap_1()
+                    .child(self.mcp_tab_button(McpTab::Server, "mcp.tab.server", cx))
+                    .child(self.mcp_tab_button(McpTab::Tokens, "mcp.tab.tokens", cx))
+                    .child(self.mcp_tab_button(McpTab::Audit, "mcp.tab.audit", cx)),
             )
+            .child(body)
+            .child(footer)
             .into_any_element()
     }
 
@@ -4133,7 +4924,13 @@ impl AppShell {
             div()
                 .text_xs()
                 .text_color(muted)
-                .child(t!("mcp.snippet_hint", url = format!("http://127.0.0.1:{port}/mcp")).to_string())
+                .child(
+                    t!(
+                        "mcp.snippet_hint",
+                        url = format!("http://127.0.0.1:{port}/mcp")
+                    )
+                    .to_string(),
+                )
                 .into_any_element(),
         );
         let snippet_copy = snippet.clone();
@@ -4222,7 +5019,9 @@ impl AppShell {
                     .bg(if active { active_bg } else { transparent })
                     .hover(move |style| style.bg(hover))
                     .on_click(
-                        cx.listener(move |this, _, window, cx| this.select_mcp_token(id, window, cx)),
+                        cx.listener(move |this, _, window, cx| {
+                            this.select_mcp_token(id, window, cx)
+                        }),
                     )
                     .child(
                         div()
@@ -4282,7 +5081,10 @@ impl AppShell {
         } else {
             editor.push(mcp_field(
                 t!("mcp.name").to_string(),
-                Input::new(&dialog.name_input).w_full().small().into_any_element(),
+                Input::new(&dialog.name_input)
+                    .w_full()
+                    .small()
+                    .into_any_element(),
                 muted,
             ));
             let mut scope_row = div().h_flex().flex_wrap().gap_3();
@@ -4339,12 +5141,18 @@ impl AppShell {
             ));
             editor.push(mcp_field(
                 t!("mcp.allow").to_string(),
-                Input::new(&dialog.allow_input).w_full().small().into_any_element(),
+                Input::new(&dialog.allow_input)
+                    .w_full()
+                    .small()
+                    .into_any_element(),
                 muted,
             ));
             editor.push(mcp_field(
                 t!("mcp.deny").to_string(),
-                Input::new(&dialog.deny_input).w_full().small().into_any_element(),
+                Input::new(&dialog.deny_input)
+                    .w_full()
+                    .small()
+                    .into_any_element(),
                 muted,
             ));
             editor.push(
@@ -4538,12 +5346,7 @@ impl AppShell {
                             .items_center()
                             .gap_2()
                             .child(div().text_xs().text_color(muted).child(when))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_bold()
-                                    .child(entry.tool.clone()),
-                            )
+                            .child(div().text_xs().font_bold().child(entry.tool.clone()))
                             .child(
                                 div()
                                     .text_xs()
@@ -4627,8 +5430,243 @@ impl AppShell {
         cx.notify();
     }
 
-    fn close_mcp_settings(&mut self, cx: &mut Context<Self>) {
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_some() {
+            return;
+        }
+        self.open_image_settings(window, cx);
+        self.open_mcp_settings(window, cx);
+        let ui_font = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(self.config.ui_font.clone())
+                .placeholder("Segoe UI / Microsoft YaHei UI")
+        });
+        let note_font = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(self.config.note_font.clone())
+                .placeholder("Consolas / 霞鹜文楷")
+        });
+        let ui_size = cx.new(|cx| {
+            InputState::new(window, cx).default_value(format!("{:.0}", self.config.ui_font_size))
+        });
+        let note_size = cx.new(|cx| {
+            InputState::new(window, cx).default_value(format!("{:.0}", self.config.note_font_size))
+        });
+        self.settings = Some(SettingsDialog {
+            tab: SettingsTab::Appearance,
+            ui_font,
+            note_font,
+            ui_size,
+            note_size,
+        });
+        cx.notify();
+    }
+
+    /// Copies the font fields into the config, applies them and persists.
+    fn apply_typography(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.settings.as_ref() else {
+            return;
+        };
+        let ui_font = dialog.ui_font.read(cx).value().trim().to_string();
+        let note_font = dialog.note_font.read(cx).value().trim().to_string();
+        let ui_size = parse_font_size(&dialog.ui_size.read(cx).value(), self.config.ui_font_size);
+        let note_size = parse_font_size(
+            &dialog.note_size.read(cx).value(),
+            self.config.note_font_size,
+        );
+        if self.config.ui_font == ui_font
+            && self.config.note_font == note_font
+            && self.config.ui_font_size == ui_size
+            && self.config.note_font_size == note_size
+        {
+            return;
+        }
+        self.config.ui_font = ui_font;
+        self.config.note_font = note_font;
+        self.config.ui_font_size = ui_size;
+        self.config.note_font_size = note_size;
+        theme::apply(&self.config, window, cx);
+        if let Err(err) = self.config.save() {
+            self.notice = Some(format!("保存设置失败：{err}"));
+        }
+        cx.refresh_windows();
+    }
+
+    fn set_autosave(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.config.autosave == enabled {
+            return;
+        }
+        self.config.autosave = enabled;
+        if let Err(err) = self.config.save() {
+            self.notice = Some(format!("保存设置失败：{err}"));
+        }
+        for doc in &self.docs {
+            doc.update(cx, |doc, cx| doc.set_autosave(enabled, cx));
+        }
+        cx.notify();
+    }
+
+    fn register_file_assoc(&mut self, cx: &mut Context<Self>) {
+        match crate::file_assoc::ensure_registered() {
+            Ok(()) => {
+                self.notice = Some(t!("settings.windows_register_ok").to_string());
+                tracing::info!("已注册「用墨笺打开」右键菜单");
+            }
+            Err(err) => {
+                self.notice = Some(format!("{}: {err}", t!("settings.windows_register_failed")));
+                tracing::warn!(error = %err, "注册文件关联失败");
+            }
+        }
+        cx.notify();
+    }
+
+    fn open_windows_default_apps(&mut self, cx: &mut Context<Self>) {
+        if let Err(err) = std::process::Command::new("explorer.exe")
+            .arg("ms-settings:defaultapps")
+            .spawn()
+        {
+            self.notice = Some(format!(
+                "{}: {err}",
+                t!("settings.windows_default_apps_failed")
+            ));
+        }
+        cx.notify();
+    }
+
+    fn open_path_in_explorer(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        let Some(path) = path else {
+            return;
+        };
+        if !path.exists() {
+            let _ = std::fs::create_dir_all(&path);
+        }
+        if let Err(err) = std::process::Command::new("explorer.exe")
+            .arg(&path)
+            .spawn()
+        {
+            self.notice = Some(format!(
+                "{}: {err}",
+                t!("settings.windows_open_folder_failed")
+            ));
+        }
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_typography(window, cx);
+        self.settings = None;
+        self.image_settings = None;
         self.mcp_settings = None;
+        cx.notify();
+    }
+
+    fn set_settings_tab(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.settings.as_mut() {
+            if dialog.tab == tab {
+                return;
+            }
+            dialog.tab = tab;
+        }
+        cx.notify();
+    }
+
+    fn set_theme_preference(
+        &mut self,
+        preference: ThemePreference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.config.theme == preference {
+            return;
+        }
+        let previous = self.config.theme;
+        self.config.theme = preference;
+        theme::apply(&self.config, window, cx);
+        if let Err(err) = self.config.save() {
+            self.notice = Some(format!("保存设置失败：{err}"));
+        }
+        tracing::info!(from = ?previous, to = ?preference, "切换主题");
+        cx.notify();
+    }
+
+    fn set_language(&mut self, language: &str, cx: &mut Context<Self>) {
+        if self.config.language == language {
+            return;
+        }
+        let previous = self.config.language.clone();
+        self.config.language = language.to_string();
+        rust_i18n::set_locale(&self.config.language);
+        if let Err(err) = self.config.save() {
+            self.notice = Some(format!("保存设置失败：{err}"));
+        }
+        tracing::info!(from = %previous, to = %self.config.language, "切换语言");
+        cx.refresh_windows();
+    }
+
+    fn set_panel_dock(&mut self, dock: PanelDock, cx: &mut Context<Self>) {
+        if self.config.panel_dock == dock {
+            return;
+        }
+        self.config.panel_dock = dock;
+        if let Err(err) = self.config.save() {
+            self.notice = Some(format!("保存设置失败：{err}"));
+        }
+        cx.notify();
+    }
+
+    fn set_panel_arrangement(&mut self, arrangement: PanelArrangement, cx: &mut Context<Self>) {
+        if self.config.panel_arrangement == arrangement {
+            return;
+        }
+        self.config.panel_arrangement = arrangement;
+        if let Err(err) = self.config.save() {
+            self.notice = Some(format!("保存设置失败：{err}"));
+        }
+        cx.notify();
+    }
+
+    fn set_panel_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        let width = width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+        if (self.config.panel_width - width).abs() < 0.5 {
+            return;
+        }
+        self.config.panel_width = width;
+        if let Err(err) = self.config.save() {
+            self.notice = Some(format!("保存设置失败：{err}"));
+        }
+        cx.notify();
+    }
+
+    fn begin_panel_resize(&mut self, mouse_x: f32, cx: &mut Context<Self>) {
+        self.panel_resize = Some((mouse_x, self.config.panel_width));
+        cx.notify();
+    }
+
+    fn update_panel_resize(&mut self, mouse_x: f32, cx: &mut Context<Self>) {
+        let Some((origin, start_width)) = self.panel_resize else {
+            return;
+        };
+        let delta = if self.config.panel_dock == PanelDock::Right {
+            origin - mouse_x
+        } else {
+            mouse_x - origin
+        };
+        let width = (start_width + delta).clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+        if (self.config.panel_width - width).abs() < 0.5 {
+            return;
+        }
+        self.config.panel_width = width;
+        cx.notify();
+    }
+
+    fn end_panel_resize(&mut self, cx: &mut Context<Self>) {
+        if self.panel_resize.take().is_none() {
+            return;
+        }
+        self.config.panel_width = self.config.panel_width.round();
+        if let Err(err) = self.config.save() {
+            self.notice = Some(format!("保存设置失败：{err}"));
+        }
         cx.notify();
     }
 
@@ -4682,9 +5720,9 @@ impl AppShell {
         dialog.notebooks = record.notebooks.iter().copied().collect();
         let allow = record.note_allow.join(", ");
         let deny = record.note_deny.join(", ");
-        dialog
-            .name_input
-            .update(cx, |state, cx| state.set_value(record.name.clone(), window, cx));
+        dialog.name_input.update(cx, |state, cx| {
+            state.set_value(record.name.clone(), window, cx)
+        });
         dialog
             .allow_input
             .update(cx, |state, cx| state.set_value(allow, window, cx));
@@ -4709,11 +5747,7 @@ impl AppShell {
         dialog.error = None;
         dialog.scopes = vec![Scope::Read, Scope::Search];
         dialog.notebooks = active.into_iter().collect();
-        for input in [
-            &dialog.name_input,
-            &dialog.allow_input,
-            &dialog.deny_input,
-        ] {
+        for input in [&dialog.name_input, &dialog.allow_input, &dialog.deny_input] {
             input.update(cx, |state, cx| state.set_value(String::new(), window, cx));
         }
         cx.notify();
@@ -4791,9 +5825,7 @@ impl AppShell {
                     store
                         .update(record)
                         .map(|()| t!("mcp.saved").to_string())
-                        .map_err(|err| {
-                            t!("mcp.token_error", message = err.to_string()).to_string()
-                        })
+                        .map_err(|err| t!("mcp.token_error", message = err.to_string()).to_string())
                 })
         } else {
             Err(t!("mcp.err.select").to_string())
@@ -4973,17 +6005,15 @@ impl AppShell {
     }
 
     fn apply_mcp_server(&mut self, cx: &mut Context<Self>) {
-        let Some((raw_port, enabled)) = self
-            .mcp_settings
-            .as_ref()
-            .map(|dialog| (dialog.port_input.read(cx).value().trim().to_string(), dialog.enabled))
-        else {
+        let Some((raw_port, enabled)) = self.mcp_settings.as_ref().map(|dialog| {
+            (
+                dialog.port_input.read(cx).value().trim().to_string(),
+                dialog.enabled,
+            )
+        }) else {
             return;
         };
-        let port = raw_port
-            .parse::<u16>()
-            .ok()
-            .filter(|port| *port > 0);
+        let port = raw_port.parse::<u16>().ok().filter(|port| *port > 0);
         let Some(port) = port else {
             if let Some(dialog) = self.mcp_settings.as_mut() {
                 dialog.error = Some(t!("mcp.err.port").to_string());
@@ -5002,8 +6032,10 @@ impl AppShell {
             .map(|err| format!("{} {err}", t!("mcp.save_failed")));
         let mut message = None;
         self.mcp.stop();
+        self.mcp_live = false;
         if enabled {
             if self.mcp.start(port) {
+                self.mcp_live = true;
                 message = Some(t!("mcp.started", port = port).to_string());
             } else if error.is_none() {
                 error = self.mcp.error.clone();
@@ -5036,10 +6068,1115 @@ impl AppShell {
         cx.notify();
     }
 
+    fn settings_nav(
+        &self,
+        tab: SettingsTab,
+        icon: IconName,
+        key: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let active = self
+            .settings
+            .as_ref()
+            .is_some_and(|dialog| dialog.tab == tab);
+        let color = if active {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        };
+        let hover = cx.theme().list_hover;
+        div()
+            .id(match tab {
+                SettingsTab::Appearance => "settings-nav-appearance",
+                SettingsTab::Panels => "settings-nav-panels",
+                SettingsTab::Images => "settings-nav-images",
+                SettingsTab::Mcp => "settings-nav-mcp",
+                SettingsTab::Windows => "settings-nav-windows",
+            })
+            .h_flex()
+            .h(px(32.))
+            .px_3()
+            .gap_2()
+            .rounded_md()
+            .cursor_pointer()
+            .text_sm()
+            .text_color(if active {
+                cx.theme().foreground
+            } else {
+                cx.theme().muted_foreground
+            })
+            .bg(if active {
+                cx.theme().list_active
+            } else {
+                cx.theme().transparent
+            })
+            .hover(move |style| style.bg(hover))
+            .on_click(cx.listener(move |this, _, _, cx| this.set_settings_tab(tab, cx)))
+            .child(Icon::new(icon).small().text_color(color))
+            .child(t!(key).to_string())
+            .into_any_element()
+    }
+
+    fn render_settings_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let dangerish = cx.theme().border;
+
+        let theme_button =
+            |preference: ThemePreference, key: &'static str, cx: &mut Context<Self>| {
+                let active = self.config.theme == preference;
+                let id = match preference {
+                    ThemePreference::System => "settings-theme-system",
+                    ThemePreference::Light => "settings-theme-light",
+                    ThemePreference::Dark => "settings-theme-dark",
+                };
+                Button::new(id)
+                    .ghost()
+                    .compact()
+                    .label(t!(key).to_string())
+                    .when(active, |button| button.primary())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_theme_preference(preference, window, cx)
+                    }))
+            };
+
+        let language_button =
+            |language: &'static str, label: &'static str, cx: &mut Context<Self>| {
+                let active = self.config.language == language;
+                Button::new(match language {
+                    "zh-CN" => "settings-language-zh",
+                    _ => "settings-language-en",
+                })
+                .ghost()
+                .compact()
+                .label(label)
+                .when(active, |button| button.primary())
+                .on_click(cx.listener(move |this, _, _, cx| this.set_language(language, cx)))
+            };
+
+        div()
+            .v_flex()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_bold()
+                    .child(t!("settings.theme").to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("settings.theme_hint").to_string()),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(theme_button(ThemePreference::System, "theme.system", cx))
+                    .child(theme_button(ThemePreference::Light, "theme.light", cx))
+                    .child(theme_button(ThemePreference::Dark, "theme.dark", cx)),
+            )
+            .child(div().my_2().h(px(1.)).bg(dangerish))
+            .child(
+                div()
+                    .text_sm()
+                    .font_bold()
+                    .child(t!("settings.language").to_string()),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(language_button("zh-CN", "中文", cx))
+                    .child(language_button("en", "English", cx)),
+            )
+            .child(div().my_2().h(px(1.)).bg(dangerish))
+            .child(
+                div()
+                    .text_sm()
+                    .font_bold()
+                    .child(t!("settings.typography").to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("settings.typography_hint").to_string()),
+            )
+            .child({
+                let (ui_font, note_font, ui_size, note_size) = match self.settings.as_ref() {
+                    Some(dialog) => (
+                        dialog.ui_font.clone(),
+                        dialog.note_font.clone(),
+                        dialog.ui_size.clone(),
+                        dialog.note_size.clone(),
+                    ),
+                    None => return div().into_any_element(),
+                };
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(t!("settings.ui_font").to_string()),
+                                    )
+                                    .child(Input::new(&ui_font).small()),
+                            )
+                            .child(
+                                div()
+                                    .w(px(72.))
+                                    .v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(t!("settings.size").to_string()),
+                                    )
+                                    .child(Input::new(&ui_size).small()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(t!("settings.note_font").to_string()),
+                                    )
+                                    .child(Input::new(&note_font).small()),
+                            )
+                            .child(
+                                div()
+                                    .w(px(72.))
+                                    .v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(t!("settings.size").to_string()),
+                                    )
+                                    .child(Input::new(&note_size).small()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("settings-font-apply")
+                                    .primary()
+                                    .compact()
+                                    .label(t!("settings.apply_fonts").to_string())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.apply_typography(window, cx)
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(t!("settings.fonts_empty_hint").to_string()),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .child(div().my_2().h(px(1.)).bg(dangerish))
+            .child(
+                Checkbox::new("settings-autosave")
+                    .label(t!("settings.autosave").to_string())
+                    .checked(self.config.autosave)
+                    .on_click(
+                        cx.listener(|this, checked: &bool, _, cx| this.set_autosave(*checked, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("settings.autosave_hint").to_string()),
+            )
+            .into_any_element()
+    }
+
+    fn render_palette(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(palette) = self.palette.as_ref() else {
+            return div().into_any_element();
+        };
+        let input = palette.input.clone();
+        let muted = cx.theme().muted_foreground;
+        let overlay = cx.theme().overlay;
+        let border = cx.theme().border;
+        let popover = cx.theme().popover;
+        let foreground = cx.theme().popover_foreground;
+        let active = cx.theme().list_active;
+        let hover = cx.theme().list_hover;
+
+        let rows: Vec<(usize, String, String, bool)> = palette
+            .filtered
+            .iter()
+            .take(10)
+            .enumerate()
+            .map(|(row, index)| {
+                let item = &palette.items[*index];
+                (
+                    row,
+                    item.label.clone(),
+                    item.hint.clone(),
+                    row == palette.selected,
+                )
+            })
+            .collect();
+        let shell = cx.entity();
+        let empty = rows.is_empty();
+
+        let mut list = div().v_flex().gap_0p5();
+        for (row, label, hint, selected) in rows {
+            let click_shell = shell.clone();
+            list = list.child(
+                div()
+                    .id(format!("palette-row-{row}"))
+                    .h(px(32.))
+                    .w_full()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(if selected {
+                        active
+                    } else {
+                        cx.theme().transparent
+                    })
+                    .hover(move |style| style.bg(hover))
+                    .on_click(move |_, window, cx| {
+                        click_shell.update(cx, |this, cx| {
+                            if let Some(palette) = this.palette.as_mut() {
+                                palette.selected = row;
+                            }
+                            this.run_palette_selected(window, cx);
+                        });
+                    })
+                    .child(div().flex_1().min_w_0().truncate().text_sm().child(label))
+                    .child(div().text_xs().text_color(muted).child(hint)),
+            );
+        }
+        if empty {
+            list = list.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("palette.empty").to_string()),
+            );
+        }
+
+        let key_shell = shell.clone();
+        div()
+            .id("palette-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .justify_center()
+            .items_start()
+            .pt(px(96.))
+            .bg(overlay)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, {
+                let shell = shell.clone();
+                move |_, _, cx| {
+                    shell.update(cx, |this, cx| this.close_palette(cx));
+                }
+            })
+            .on_key_down(move |event: &KeyDownEvent, _window, cx| {
+                let key = event.keystroke.key.clone();
+                key_shell.update(cx, |this, cx| match key.as_str() {
+                    "escape" => this.close_palette(cx),
+                    "up" => this.palette_step(-1, cx),
+                    "down" => this.palette_step(1, cx),
+                    _ => {}
+                });
+            })
+            .child(
+                div()
+                    .id("palette-dialog")
+                    .v_flex()
+                    .gap_2()
+                    .w(px(640.))
+                    .p_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(border)
+                    .bg(popover)
+                    .text_color(foreground)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(Input::new(&input).w_full())
+                    .child(list),
+            )
+            .into_any_element()
+    }
+
+    fn render_recovery(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(dialog) = self.recovery.as_ref() else {
+            return div().into_any_element();
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let rows: Vec<(usize, String, String)> = dialog
+            .entries
+            .iter()
+            .take(8)
+            .enumerate()
+            .map(|(index, snapshot)| {
+                let title = snapshot.display_name();
+                let notebook = snapshot
+                    .notebook_name
+                    .clone()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| t!("recovery.external").to_string());
+                let subtitle = format!(
+                    "{} · {}",
+                    notebook,
+                    format_age(snapshot.age_seconds(now))
+                );
+                (index, title, subtitle)
+            })
+            .collect();
+        let more = dialog.entries.len().saturating_sub(rows.len());
+        let overlay = cx.theme().overlay;
+        let border = cx.theme().border;
+        let popover = cx.theme().popover;
+        let foreground = cx.theme().popover_foreground;
+        let muted = cx.theme().muted_foreground;
+        let hover = cx.theme().list_hover;
+        let shell = cx.entity();
+
+        let mut list = div().v_flex().gap_1();
+        for (index, title, subtitle) in rows {
+            let restore_shell = shell.clone();
+            let discard_shell = shell.clone();
+            list = list.child(
+                div()
+                    .id(format!("recovery-row-{index}"))
+                    .h_flex()
+                    .items_center()
+                    .gap_3()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .hover(move |style| style.bg(hover))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .v_flex()
+                            .child(div().text_sm().truncate().child(title))
+                            .child(div().text_xs().text_color(muted).truncate().child(subtitle)),
+                    )
+                    .child(
+                        Button::new(format!("recovery-restore-{index}"))
+                            .primary()
+                            .compact()
+                            .label(t!("recovery.restore").to_string())
+                            .on_click(move |_, window, cx| {
+                                restore_shell.update(cx, |this, cx| {
+                                    this.restore_recovery(index, window, cx)
+                                });
+                            }),
+                    )
+                    .child(
+                        Button::new(format!("recovery-discard-{index}"))
+                            .ghost()
+                            .compact()
+                            .label(t!("recovery.discard").to_string())
+                            .on_click(move |_, _, cx| {
+                                discard_shell
+                                    .update(cx, |this, cx| this.discard_recovery(index, cx));
+                            }),
+                    ),
+            );
+        }
+        if more > 0 {
+            list = list.child(
+                div()
+                    .px_3()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("recovery.more", count = more).to_string()),
+            );
+        }
+
+        div()
+            .id("recovery-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(overlay)
+            .occlude()
+            .child(
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .w(px(560.))
+                    .p_5()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(border)
+                    .bg(popover)
+                    .text_color(foreground)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_bold()
+                                    .child(t!("recovery.title").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(t!("recovery.desc").to_string()),
+                            ),
+                    )
+                    .child(list)
+                    .child(
+                        div()
+                            .h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("recovery-discard-all")
+                                    .ghost()
+                                    .compact()
+                                    .label(t!("recovery.discard_all").to_string())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.discard_all_recovery(cx)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("recovery-close")
+                                    .compact()
+                                    .label(t!("common.close").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| this.close_recovery(cx))),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_prompt(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(prompt) = self.prompt.as_ref() else {
+            return div().into_any_element();
+        };
+        let input = prompt.input.clone();
+        let title = prompt.title.clone();
+        let hint = prompt.hint.clone();
+        let error = prompt.error.clone();
+        let overlay = cx.theme().overlay;
+        let border = cx.theme().border;
+        let popover = cx.theme().popover;
+        let foreground = cx.theme().popover_foreground;
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+
+        div()
+            .id("prompt-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(overlay)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, {
+                let shell = cx.entity();
+                move |_, _, cx| {
+                    shell.update(cx, |this, cx| this.close_prompt(cx));
+                }
+            })
+            .child(
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .w(px(520.))
+                    .p_4()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(border)
+                    .bg(popover)
+                    .text_color(foreground)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(div().text_base().font_bold().child(title))
+                    .child(div().text_xs().text_color(muted).child(hint))
+                    .child(Input::new(&input).w_full())
+                    .children(error.map(|error| div().text_xs().text_color(danger).child(error)))
+                    .child(
+                        div()
+                            .h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("prompt-cancel")
+                                    .ghost()
+                                    .compact()
+                                    .label(t!("common.cancel").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| this.close_prompt(cx))),
+                            )
+                            .child(
+                                Button::new("prompt-ok")
+                                    .primary()
+                                    .compact()
+                                    .label(t!("common.ok").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| this.submit_prompt(cx))),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_settings_windows(&self, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+        let workspace = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.root().display().to_string())
+            .unwrap_or_default();
+        let registered = crate::file_assoc::is_registered();
+
+        let mut rows = div().v_flex().gap_3();
+
+        rows =
+            rows.child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_bold()
+                            .child(t!("settings.windows_assoc").to_string()),
+                    )
+                    .child(div().text_xs().text_color(muted).child(if registered {
+                        t!("settings.windows_assoc_on").to_string()
+                    } else {
+                        t!("settings.windows_assoc_off").to_string()
+                    }))
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("settings-register-assoc")
+                                    .compact()
+                                    .label(t!("settings.windows_register").to_string())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.register_file_assoc(cx)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("settings-default-apps")
+                                    .ghost()
+                                    .compact()
+                                    .label(t!("settings.windows_default_apps").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_windows_default_apps(cx)
+                                    })),
+                            ),
+                    ),
+            );
+
+        rows = rows.child(div().h(px(1.)).bg(border)).child(
+            div()
+                .v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_bold()
+                        .child(t!("settings.windows_workspace").to_string()),
+                )
+                .child(div().text_xs().text_color(muted).child(workspace.clone()))
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("settings-open-workspace")
+                                .compact()
+                                .label(t!("settings.windows_open_workspace").to_string())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_path_in_explorer(
+                                        this.workspace
+                                            .as_ref()
+                                            .map(|workspace| workspace.root().to_path_buf()),
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(
+                            Button::new("settings-open-logs")
+                                .ghost()
+                                .compact()
+                                .label(t!("settings.windows_open_logs").to_string())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_path_in_explorer(
+                                        Some(mdwork_core::paths::logs_dir()),
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(
+                            Button::new("settings-open-crashes")
+                                .ghost()
+                                .compact()
+                                .label(t!("settings.windows_open_crashes").to_string())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_path_in_explorer(
+                                        Some(mdwork_core::paths::crashes_dir()),
+                                        cx,
+                                    )
+                                })),
+                        ),
+                ),
+        );
+
+        rows.into_any_element()
+    }
+
+    fn render_settings_panels(&self, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+
+        let dock_button =
+            |dock: PanelDock, icon: IconName, key: &'static str, cx: &mut Context<Self>| {
+                let active = self.config.panel_dock == dock;
+                Button::new(match dock {
+                    PanelDock::Left => "settings-dock-left",
+                    PanelDock::Right => "settings-dock-right",
+                })
+                .ghost()
+                .compact()
+                .icon(icon)
+                .label(t!(key).to_string())
+                .when(active, |button| button.primary())
+                .on_click(cx.listener(move |this, _, _, cx| this.set_panel_dock(dock, cx)))
+            };
+
+        let arrangement_button = |arrangement: PanelArrangement,
+                                  icon: IconName,
+                                  key: &'static str,
+                                  cx: &mut Context<Self>| {
+            let active = self.config.panel_arrangement == arrangement;
+            Button::new(match arrangement {
+                PanelArrangement::Horizontal => "settings-arrangement-horizontal",
+                PanelArrangement::Vertical => "settings-arrangement-vertical",
+            })
+            .ghost()
+            .compact()
+            .icon(icon)
+            .label(t!(key).to_string())
+            .when(active, |button| button.primary())
+            .on_click(
+                cx.listener(move |this, _, _, cx| this.set_panel_arrangement(arrangement, cx)),
+            )
+        };
+
+        let width_button =
+            |width: f32, id: &'static str, key: &'static str, cx: &mut Context<Self>| {
+                let active = (self.config.panel_width - width).abs() < 1.0;
+                Button::new(id)
+                    .ghost()
+                    .compact()
+                    .label(t!(key).to_string())
+                    .when(active, |button| button.primary())
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_panel_width(width, cx)))
+            };
+
+        div()
+            .v_flex()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_bold()
+                    .child(t!("settings.panel_dock").to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("settings.panel_dock_hint").to_string()),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(dock_button(
+                        PanelDock::Left,
+                        IconName::PanelLeft,
+                        "settings.dock.left",
+                        cx,
+                    ))
+                    .child(dock_button(
+                        PanelDock::Right,
+                        IconName::PanelRight,
+                        "settings.dock.right",
+                        cx,
+                    )),
+            )
+            .child(div().my_2().h(px(1.)).bg(border))
+            .child(
+                div()
+                    .text_sm()
+                    .font_bold()
+                    .child(t!("settings.panel_arrangement").to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("settings.panel_arrangement_hint").to_string()),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(arrangement_button(
+                        PanelArrangement::Horizontal,
+                        IconName::Rows3,
+                        "settings.arrangement.horizontal",
+                        cx,
+                    ))
+                    .child(arrangement_button(
+                        PanelArrangement::Vertical,
+                        IconName::Columns3,
+                        "settings.arrangement.vertical",
+                        cx,
+                    )),
+            )
+            .child(div().my_2().h(px(1.)).bg(border))
+            .child(
+                div()
+                    .text_sm()
+                    .font_bold()
+                    .child(t!("settings.panel_width").to_string()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("settings.panel_width_hint").to_string()),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(width_button(
+                        240.0,
+                        "settings-width-narrow",
+                        "settings.width.narrow",
+                        cx,
+                    ))
+                    .child(width_button(
+                        300.0,
+                        "settings-width-standard",
+                        "settings.width.standard",
+                        cx,
+                    ))
+                    .child(width_button(
+                        380.0,
+                        "settings-width-wide",
+                        "settings.width.wide",
+                        cx,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn render_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(dialog) = self.settings.as_ref() else {
+            return div().into_any_element();
+        };
+        let tab = dialog.tab;
+        let border = cx.theme().border;
+        let popover = cx.theme().popover;
+        let foreground = cx.theme().popover_foreground;
+        let overlay = cx.theme().overlay;
+        let muted = cx.theme().muted_foreground;
+
+        let content = match tab {
+            SettingsTab::Appearance => self.render_settings_appearance(cx),
+            SettingsTab::Panels => self.render_settings_panels(cx),
+            SettingsTab::Images => self.render_image_settings_page(cx),
+            SettingsTab::Mcp => self.render_mcp_settings_page(cx),
+            SettingsTab::Windows => self.render_settings_windows(cx),
+        };
+        let title = match tab {
+            SettingsTab::Appearance => t!("settings.tab.appearance"),
+            SettingsTab::Panels => t!("settings.tab.panels"),
+            SettingsTab::Images => t!("settings.tab.images"),
+            SettingsTab::Mcp => t!("settings.tab.mcp"),
+            SettingsTab::Windows => t!("settings.tab.windows"),
+        };
+
+        div()
+            .id("settings-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(overlay)
+            .occlude()
+            .child(
+                div()
+                    .id("settings-dialog")
+                    .v_flex()
+                    .w(px(880.))
+                    .h(px(600.))
+                    .gap_4()
+                    .p_5()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(border)
+                    .bg(popover)
+                    .text_color(foreground)
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_base()
+                                    .font_bold()
+                                    .child(t!("settings.title").to_string()),
+                            )
+                            .child(
+                                Button::new("settings-close")
+                                    .ghost()
+                                    .compact()
+                                    .icon(IconName::X)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.close_settings(window, cx)
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_1()
+                            .min_h_0()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .w(px(150.))
+                                    .h_full()
+                                    .flex_shrink_0()
+                                    .gap_1()
+                                    .child(self.settings_nav(
+                                        SettingsTab::Appearance,
+                                        IconName::Palette,
+                                        "settings.tab.appearance",
+                                        cx,
+                                    ))
+                                    .child(self.settings_nav(
+                                        SettingsTab::Panels,
+                                        IconName::LayoutPanelLeft,
+                                        "settings.tab.panels",
+                                        cx,
+                                    ))
+                                    .child(self.settings_nav(
+                                        SettingsTab::Images,
+                                        IconName::Image,
+                                        "settings.tab.images",
+                                        cx,
+                                    ))
+                                    .child(self.settings_nav(
+                                        SettingsTab::Mcp,
+                                        IconName::ServerCog,
+                                        "settings.tab.mcp",
+                                        cx,
+                                    ))
+                                    .child(self.settings_nav(
+                                        SettingsTab::Windows,
+                                        IconName::Monitor,
+                                        "settings.tab.windows",
+                                        cx,
+                                    ))
+                                    .child(
+                                        div()
+                                            .mt_auto()
+                                            .px_2()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(
+                                                t!(
+                                                    "settings.version",
+                                                    version = env!("CARGO_PKG_VERSION")
+                                                )
+                                                .to_string(),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .gap_2()
+                                    .child(
+                                        div().text_xs().text_color(muted).child(title.to_string()),
+                                    )
+                                    .child(content),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_bookmarks(cx);
 
-        let tabs = div()
+        let vertical = self.config.panel_arrangement == PanelArrangement::Vertical;
+        let dock_right = self.config.panel_dock == PanelDock::Right;
+        let border = cx.theme().border;
+        let sidebar_border = cx.theme().sidebar_border;
+
+        let body = match self.panel {
+            SidePanel::Notes => self.render_notes_panel(cx),
+            SidePanel::Outline => self.render_outline_panel(cx),
+            SidePanel::Search => self.render_search_panel(cx),
+            SidePanel::Bookmarks => self.render_bookmarks_panel(cx),
+            SidePanel::Trash => self.render_trash_panel(cx),
+        };
+
+        let workspace_path = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.root().display().to_string())
+            .unwrap_or_default();
+
+        let mut content = div().v_flex().flex_1().min_w_0().min_h_0();
+        if !vertical {
+            content = content.child(self.panel_tab_row(cx));
+        }
+        let content = content.child(body).child(
+            div()
+                .px_3()
+                .py_2()
+                .border_t_1()
+                .border_color(sidebar_border)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .truncate()
+                .child(workspace_path),
+        );
+
+        let mut root = div()
+            .w(px(self.config.panel_width))
+            .h_full()
+            .bg(cx.theme().sidebar)
+            .border_color(border);
+        root = if dock_right {
+            root.border_l_1()
+        } else {
+            root.border_r_1()
+        };
+
+        if vertical {
+            let rail = self.panel_rail(cx);
+            let mut row = div().h_flex().size_full();
+            row = if dock_right {
+                row.child(content).child(rail)
+            } else {
+                row.child(rail).child(content)
+            };
+            root.child(row).into_any_element()
+        } else {
+            root.v_flex().child(content).into_any_element()
+        }
+    }
+
+    fn render_panel_handle(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let dragging = self.panel_resize.is_some();
+        let idle = cx.theme().background;
+        let hover = cx.theme().border;
+        let active = cx.theme().primary;
+        div()
+            .id("panel-resize-handle")
+            .w(px(4.))
+            .h_full()
+            .flex_none()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .bg(if dragging { active } else { idle })
+            .hover(move |style| style.bg(hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                    if event.click_count >= 2 {
+                        this.set_panel_width(300.0, cx);
+                    } else {
+                        this.begin_panel_resize(f32::from(event.position.x), cx);
+                    }
+                }),
+            )
+            .into_any_element()
+    }
+
+    fn panel_icon(panel: SidePanel) -> IconName {
+        match panel {
+            SidePanel::Notes => IconName::NotebookPen,
+            SidePanel::Outline => IconName::ListTree,
+            SidePanel::Search => IconName::Search,
+            SidePanel::Bookmarks => IconName::Bookmark,
+            SidePanel::Trash => IconName::Trash,
+        }
+    }
+
+    fn panel_tab_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
             .h(px(34.))
             .px_2()
             .flex()
@@ -5076,43 +7213,57 @@ impl AppShell {
                 t!("panel.trash").to_string(),
                 "panel-trash",
                 cx,
-            ));
-
-        let body = match self.panel {
-            SidePanel::Notes => self.render_notes_panel(cx),
-            SidePanel::Outline => self.render_outline_panel(cx),
-            SidePanel::Search => self.render_search_panel(cx),
-            SidePanel::Bookmarks => self.render_bookmarks_panel(cx),
-            SidePanel::Trash => self.render_trash_panel(cx),
-        };
-
-        let workspace_path = self
-            .workspace
-            .as_ref()
-            .map(|workspace| workspace.root().display().to_string())
-            .unwrap_or_default();
-
-        div()
-            .w(px(280.))
-            .h_full()
-            .v_flex()
-            .border_r_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().sidebar)
-            .child(tabs)
-            .child(body)
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .border_t_1()
-                    .border_color(cx.theme().sidebar_border)
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .truncate()
-                    .child(workspace_path),
-            )
+            ))
             .into_any_element()
+    }
+
+    fn panel_rail(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut rail = div()
+            .v_flex()
+            .w(px(40.))
+            .h_full()
+            .flex_shrink_0()
+            .items_center()
+            .py_2()
+            .gap_1()
+            .border_color(cx.theme().sidebar_border);
+        rail = if self.config.panel_dock == PanelDock::Right {
+            rail.border_l_1()
+        } else {
+            rail.border_r_1()
+        };
+        for panel in [
+            SidePanel::Notes,
+            SidePanel::Outline,
+            SidePanel::Search,
+            SidePanel::Bookmarks,
+            SidePanel::Trash,
+        ] {
+            let active = self.panel == panel;
+            let label = match panel {
+                SidePanel::Notes => t!("panel.notes"),
+                SidePanel::Outline => t!("panel.outline"),
+                SidePanel::Search => t!("panel.search"),
+                SidePanel::Bookmarks => t!("panel.bookmarks"),
+                SidePanel::Trash => t!("panel.trash"),
+            };
+            rail = rail.child(
+                Button::new(match panel {
+                    SidePanel::Notes => "rail-notes",
+                    SidePanel::Outline => "rail-outline",
+                    SidePanel::Search => "rail-search",
+                    SidePanel::Bookmarks => "rail-bookmarks",
+                    SidePanel::Trash => "rail-trash",
+                })
+                .ghost()
+                .compact()
+                .icon(Self::panel_icon(panel))
+                .tooltip(label.to_string())
+                .when(active, |button| button.primary())
+                .on_click(cx.listener(move |this, _, _, cx| this.set_panel(panel, cx))),
+            );
+        }
+        rail.into_any_element()
     }
 
     fn panel_tab(
@@ -5124,21 +7275,24 @@ impl AppShell {
     ) -> AnyElement {
         let active = self.panel == panel;
         let hover = cx.theme().list_hover;
+        let color = if active {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        };
         div()
             .id(id)
             .flex_1()
+            .min_w_0()
             .h(px(26.))
             .flex()
             .items_center()
             .justify_center()
+            .gap_1()
             .rounded_md()
             .cursor_pointer()
             .text_xs()
-            .text_color(if active {
-                cx.theme().foreground
-            } else {
-                cx.theme().muted_foreground
-            })
+            .text_color(color)
             .bg(if active {
                 cx.theme().list_active
             } else {
@@ -5146,7 +7300,12 @@ impl AppShell {
             })
             .hover(move |style| style.bg(hover))
             .on_click(cx.listener(move |this, _, _, cx| this.set_panel(panel, cx)))
-            .child(label)
+            .child(
+                Icon::new(Self::panel_icon(panel))
+                    .xsmall()
+                    .text_color(color),
+            )
+            .child(div().min_w_0().truncate().child(label))
             .into_any_element()
     }
 
@@ -5218,6 +7377,49 @@ impl AppShell {
                 ),
         );
 
+        if !self.scan_issues.is_empty() {
+            let issues = self.scan_issues.clone();
+            body = body.child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .p_2()
+                    .rounded_md()
+                    .bg(cx.theme().list_hover)
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_xs()
+                                    .text_color(cx.theme().danger)
+                                    .child(
+                                        t!("sidebar.scan_issues", count = issues.len()).to_string(),
+                                    ),
+                            )
+                            .child(
+                                Button::new("btn-dismiss-scan-issues")
+                                    .ghost()
+                                    .compact()
+                                    .label("×")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.scan_issues.clear();
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .children(issues.into_iter().take(4).map(|issue| {
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(issue)
+                    })),
+            );
+        }
+
         if self.notebooks.is_empty() {
             body = body.child(
                 div()
@@ -5260,21 +7462,19 @@ impl AppShell {
                         cx.theme().transparent
                     })
                     .hover(move |style| style.bg(hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.activate_notebook(notebook_id, cx)
-                    }))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.activate_notebook(notebook_id, cx)),
+                    )
                     .context_menu(move |menu, _, _| {
                         let export_shell = export_shell.clone();
                         let import_shell = import_shell.clone();
-                        menu.item(
-                            PopupMenuItem::new(export_label.clone()).on_click(
-                                move |_, window, cx| {
-                                    export_shell.update(cx, |this, cx| {
-                                        this.open_zip_export(notebook_id, window, cx)
-                                    });
-                                },
-                            ),
-                        )
+                        menu.item(PopupMenuItem::new(export_label.clone()).on_click(
+                            move |_, window, cx| {
+                                export_shell.update(cx, |this, cx| {
+                                    this.open_zip_export(notebook_id, window, cx)
+                                });
+                            },
+                        ))
                         .item(
                             PopupMenuItem::new(import_label.clone()).on_click(
                                 move |_, window, cx| {
@@ -5300,9 +7500,11 @@ impl AppShell {
             );
         }
 
-        let active_entry = self
-            .active_notebook
-            .and_then(|id| self.notebooks.iter().find(|entry| entry.notebook.marker.id == id));
+        let active_entry = self.active_notebook.and_then(|id| {
+            self.notebooks
+                .iter()
+                .find(|entry| entry.notebook.marker.id == id)
+        });
         if let Some(entry) = active_entry {
             body = body
                 .child(
@@ -5313,14 +7515,34 @@ impl AppShell {
                         .mt_1()
                         .child(div().flex_1())
                         .child(
+                            Button::new("btn-sidebar-new-folder")
+                                .ghost()
+                                .compact()
+                                .label("🗀")
+                                .tooltip(t!("sidebar.new_folder").to_string())
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.new_folder(window, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new("btn-sidebar-open-notebook")
+                                .ghost()
+                                .compact()
+                                .label("…")
+                                .tooltip(t!("sidebar.open_notebook").to_string())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_external_notebook_prompt(window, cx)
+                                })),
+                        )
+                        .child(
                             Button::new("btn-sidebar-new-note")
                                 .ghost()
                                 .compact()
                                 .label("＋")
                                 .tooltip(t!("sidebar.new_note").to_string())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.new_note(window, cx)
-                                })),
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.new_note(window, cx)),
+                                ),
                         ),
                 )
                 .child(self.render_tree(entry.notebook.marker.id, entry, cx));
@@ -5503,6 +7725,29 @@ impl AppShell {
             .on_click(cx.listener(|this, _, _, cx| this.set_search_scope(true, cx)))
             .child(t!("search.all").to_string());
 
+        let toggle = |id: &'static str,
+                      key: &'static str,
+                      active: bool,
+                      option: SearchOption,
+                      cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if active { foreground } else { muted })
+                .bg(if active {
+                    cx.theme().list_active
+                } else {
+                    cx.theme().transparent
+                })
+                .hover(move |style| style.bg(hover))
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_search_option(option, cx)))
+                .child(t!(key).to_string())
+        };
+
         let mut toolbar = div()
             .px_2()
             .py_2()
@@ -5516,6 +7761,27 @@ impl AppShell {
                     .gap_1()
                     .child(current_button)
                     .child(all_button)
+                    .child(toggle(
+                        "search-opt-case",
+                        "search.opt.case",
+                        self.search_case,
+                        SearchOption::Case,
+                        cx,
+                    ))
+                    .child(toggle(
+                        "search-opt-regex",
+                        "search.opt.regex",
+                        self.search_regex,
+                        SearchOption::Regex,
+                        cx,
+                    ))
+                    .child(toggle(
+                        "search-opt-filename",
+                        "search.opt.filename",
+                        self.search_filename,
+                        SearchOption::Filename,
+                        cx,
+                    ))
                     .child(div().flex_1())
                     .children(running.then(|| {
                         Button::new("btn-search-cancel")
@@ -5570,13 +7836,7 @@ impl AppShell {
                             .hover(move |style| style.bg(hover))
                             .on_click(move |_, window, cx| {
                                 shell.update(cx, |this, cx| {
-                                    this.jump_to(
-                                        notebook_id,
-                                        &rel_path,
-                                        line,
-                                        window,
-                                        cx,
-                                    )
+                                    this.jump_to(notebook_id, &rel_path, line, window, cx)
                                 });
                             })
                             .child(
@@ -5788,9 +8048,8 @@ impl AppShell {
                                     .label("↩")
                                     .tooltip(t!("trash.restore").to_string())
                                     .on_click(move |_, _, cx| {
-                                        restore_shell.update(cx, |this, cx| {
-                                            this.restore_trash(id, cx)
-                                        });
+                                        restore_shell
+                                            .update(cx, |this, cx| this.restore_trash(id, cx));
                                     }),
                             )
                     })
@@ -5821,14 +8080,8 @@ impl AppShell {
             DiskConflict::Removed => t!("conflict.removed", title = title).to_string(),
         };
         let primary = match conflict {
-            DiskConflict::Modified => (
-                t!("conflict.reload").to_string(),
-                "btn-conflict-reload",
-            ),
-            DiskConflict::Removed => (
-                t!("conflict.recreate").to_string(),
-                "btn-conflict-recreate",
-            ),
+            DiskConflict::Modified => (t!("conflict.reload").to_string(), "btn-conflict-reload"),
+            DiskConflict::Removed => (t!("conflict.recreate").to_string(), "btn-conflict-recreate"),
         };
         let secondary = match conflict {
             DiskConflict::Modified => (t!("conflict.keep").to_string(), "btn-conflict-keep"),
@@ -5846,22 +8099,15 @@ impl AppShell {
                 .border_color(cx.theme().border)
                 .bg(cx.theme().list_active)
                 .text_sm()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(message),
-                )
+                .child(div().flex_1().min_w_0().child(message))
                 .child(
                     Button::new(primary.1)
                         .primary()
                         .compact()
                         .label(primary.0)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            match conflict {
-                                DiskConflict::Modified => this.reload_doc(index, window, cx),
-                                DiskConflict::Removed => this.recreate_doc(index, cx),
-                            }
+                        .on_click(cx.listener(move |this, _, window, cx| match conflict {
+                            DiskConflict::Modified => this.reload_doc(index, window, cx),
+                            DiskConflict::Removed => this.recreate_doc(index, cx),
                         })),
                 )
                 .child(
@@ -5946,8 +8192,7 @@ impl AppShell {
                         let depth = row.depth as f32;
 
                         if let Some(renaming) = renaming.as_ref().filter(|renaming| {
-                            renaming.notebook_id == notebook_id
-                                && renaming.rel_path == rel_path
+                            renaming.notebook_id == notebook_id && renaming.rel_path == rel_path
                         }) {
                             let input = renaming.input.clone();
                             let cancel_shell = shell.clone();
@@ -5969,9 +8214,8 @@ impl AppShell {
                                         .compact()
                                         .label("×")
                                         .on_click(move |_, _, cx| {
-                                            cancel_shell.update(cx, |this, cx| {
-                                                this.cancel_rename(cx)
-                                            });
+                                            cancel_shell
+                                                .update(cx, |this, cx| this.cancel_rename(cx));
                                         }),
                                 )
                                 .into_any_element();
@@ -5979,10 +8223,13 @@ impl AppShell {
 
                         let rename_shell = shell.clone();
                         let delete_shell = shell.clone();
+                        let move_shell = shell.clone();
                         let rename_rel = rel_path.clone();
                         let delete_rel = rel_path.clone();
+                        let move_rel = rel_path.clone();
                         let rename_label = t!("tree.rename").to_string();
                         let delete_label = t!("tree.delete").to_string();
+                        let move_label = t!("tree.move").to_string();
 
                         div()
                             .id(format!("tree-row-{index}"))
@@ -6026,22 +8273,24 @@ impl AppShell {
                             .context_menu(move |menu, _, _| {
                                 let rename_shell = rename_shell.clone();
                                 let delete_shell = delete_shell.clone();
+                                let move_shell = move_shell.clone();
                                 let rename_rel = rename_rel.clone();
                                 let delete_rel = delete_rel.clone();
-                                menu.item(
-                                    PopupMenuItem::new(rename_label.clone()).on_click(
-                                        move |_, window, cx| {
-                                            rename_shell.update(cx, |this, cx| {
-                                                this.begin_rename(
-                                                    notebook_id,
-                                                    &rename_rel,
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ),
-                                )
+                                let move_rel = move_rel.clone();
+                                menu.item(PopupMenuItem::new(rename_label.clone()).on_click(
+                                    move |_, window, cx| {
+                                        rename_shell.update(cx, |this, cx| {
+                                            this.begin_rename(notebook_id, &rename_rel, window, cx)
+                                        });
+                                    },
+                                ))
+                                .item(PopupMenuItem::new(move_label.clone()).on_click(
+                                    move |_, window, cx| {
+                                        move_shell.update(cx, |this, cx| {
+                                            this.begin_move(notebook_id, &move_rel, window, cx)
+                                        });
+                                    },
+                                ))
                                 .separator()
                                 .item(
                                     PopupMenuItem::new(delete_label.clone()).on_click(
@@ -6085,7 +8334,11 @@ impl AppShell {
                 continue;
             }
             let active = self.active_doc == Some(index);
-            let title = doc.title();
+            let title = if doc.notebook_id.is_none() {
+                format!("外部 · {}", doc.rel_path)
+            } else {
+                doc.title()
+            };
             let dirty = doc.dirty;
             let doc_label = if doc.conflict.is_some() {
                 format!("⚠ {title}")
@@ -6131,9 +8384,7 @@ impl AppShell {
                             .ghost()
                             .compact()
                             .label("×")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.close_doc(index, cx)
-                            })),
+                            .on_click(cx.listener(move |this, _, _, cx| this.close_doc(index, cx))),
                     ),
             );
         }
@@ -6144,11 +8395,26 @@ impl AppShell {
             } else {
                 t!("preview.show").to_string()
             };
-            let bookmark_target = {
+            let (bookmark_target, is_external) = {
                 let doc = self.docs[index].read(cx);
-                doc.notebook_id.map(|id| (id, doc.rel_path.clone()))
+                (
+                    doc.notebook_id.map(|id| (id, doc.rel_path.clone())),
+                    doc.notebook_id.is_none(),
+                )
             };
             bar = bar.child(div().flex_1());
+            if is_external {
+                bar = bar.child(
+                    Button::new("btn-adopt-external")
+                        .ghost()
+                        .compact()
+                        .label(t!("external.save_into").to_string())
+                        .tooltip(t!("external.save_into_hint").to_string())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.save_external_into_notebook(window, cx)
+                        })),
+                );
+            }
             if let Some((_, rel_path)) = &bookmark_target {
                 let starred = self.bookmarks.note(rel_path).is_some();
                 bar = bar.child(
@@ -6157,9 +8423,7 @@ impl AppShell {
                         .compact()
                         .label(if starred { "★" } else { "☆" })
                         .tooltip(t!("bookmark.toggle_note").to_string())
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.toggle_note_bookmark(cx)),
-                        ),
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_note_bookmark(cx))),
                 );
             }
             bar = bar.child(
@@ -6168,9 +8432,7 @@ impl AppShell {
                     .compact()
                     .label(toggle_label)
                     .tooltip("Ctrl+T".to_string())
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.toggle_preview(window, cx)),
-                    ),
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_preview(window, cx))),
             );
             if self.preview_mode {
                 let copy_label = if self.copied {
@@ -6224,16 +8486,14 @@ impl AppShell {
         if self.preview_mode {
             self.ensure_preview(cx);
             if let Some(cache) = &self.preview_cache {
-                let base = doc
-                    .read(cx)
-                    .path
-                    .parent()
-                    .map(|path| path.to_path_buf());
+                let base = doc.read(cx).path.parent().map(|path| path.to_path_buf());
                 return preview::render(
                     &cache.ir,
                     base.as_deref(),
                     &self.math,
                     self.config.code_wrap,
+                    &self.config.note_font,
+                    self.config.note_font_size,
                     cx,
                 );
             }
@@ -6349,21 +8609,35 @@ impl AppShell {
                 doc.notebook_name.clone()
             };
             let (line, column) = doc.cursor(cx);
-            let cursor_label = t!(
-                "status.cursor",
-                line = line + 1,
-                column = column + 1
-            )
-            .to_string();
+            let cursor_label =
+                t!("status.cursor", line = line + 1, column = column + 1).to_string();
             status = status
                 .child(notebook_label)
                 .child(cursor_label)
                 .child(t!("status.lines", count = stats.lines).to_string())
                 .child(t!("status.words", count = stats.words).to_string())
-                .child(t!("status.chars", count = stats.chars).to_string())
+                .child(t!("status.chars", count = stats.chars).to_string());
+            let selection = doc.editor.read(cx).selected_value();
+            if !selection.trim().is_empty() {
+                let selected = text_stats(&selection);
+                status = status.child(
+                    t!(
+                        "status.selection",
+                        chars = selected.chars,
+                        words = selected.words
+                    )
+                    .to_string(),
+                );
+            }
+            status = status
                 .child(doc.encoding.label())
                 .child(doc.eol.label())
-                .child(saved_label);
+                .child(saved_label)
+                .child(if self.preview_mode {
+                    t!("status.mode.preview").to_string()
+                } else {
+                    t!("status.mode.edit").to_string()
+                });
             if let Some(err) = &doc.error {
                 status = status.child(
                     div()
@@ -6377,6 +8651,22 @@ impl AppShell {
         } else {
             status = status.child(t!("status.no_doc").to_string());
         }
+
+        let mcp_status: AnyElement = if self.mcp_live {
+            div()
+                .child(t!("status.mcp.on", port = self.mcp.port).to_string())
+                .into_any_element()
+        } else if self.config.mcp_http && self.mcp.error.is_some() {
+            div()
+                .text_color(cx.theme().danger)
+                .child(t!("status.mcp.error").to_string())
+                .into_any_element()
+        } else {
+            div()
+                .child(t!("status.mcp.off").to_string())
+                .into_any_element()
+        };
+        status = status.child(div().flex_1()).child(mcp_status);
 
         status.into_any_element()
     }
@@ -6401,40 +8691,107 @@ impl Render for AppShell {
             None
         };
 
+        let sidebar = self.render_sidebar(cx);
+        let panel_handle = self.render_panel_handle(cx);
+        let editor = div()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .v_flex()
+            .child(self.render_tabs(cx))
+            .children(self.render_conflict(cx))
+            .child(div().flex_1().min_h_0().child(self.render_editor(cx)))
+            .into_any_element();
+        let mut main = div().flex_1().min_h_0().flex();
+        main = if self.config.panel_dock == PanelDock::Right {
+            main.child(editor).child(panel_handle).child(sidebar)
+        } else {
+            main.child(sidebar).child(panel_handle).child(editor)
+        };
+
+        if self.panel_resize.is_some() {
+            let shell = cx.entity().downgrade();
+            window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
+                let x = f32::from(event.position.x);
+                if let Some(shell) = shell.upgrade() {
+                    let _ = shell.update(cx, |this, cx| this.update_panel_resize(x, cx));
+                }
+            });
+            let shell = cx.entity().downgrade();
+            window.on_mouse_event(move |_event: &MouseUpEvent, _phase, _window, cx| {
+                if let Some(shell) = shell.upgrade() {
+                    let _ = shell.update(cx, |this, cx| this.end_panel_resize(cx));
+                }
+            });
+        }
+
         let mut root = div()
             .v_flex()
             .relative()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .on_action(
-                cx.listener(|this, _: &crate::SaveDoc, _window, cx| this.save_active(cx)),
-            )
-            .on_action(cx.listener(
-                |this, _: &crate::TogglePreview, window, cx| this.toggle_preview(window, cx),
-            ))
-            .child(
-                gpui_kit::component::TitleBar::new().child(self.render_title(cx)),
-            )
-            .child(self.render_toolbar(cx))
+            .on_action(cx.listener(|this, _: &crate::SaveDoc, _window, cx| {
+                if this.palette.is_some() || this.prompt.is_some() {
+                    return;
+                }
+                this.save_active(cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::TogglePreview, window, cx| {
+                if this.palette.is_some() || this.prompt.is_some() {
+                    return;
+                }
+                this.toggle_preview(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::OpenPalette, window, cx| {
+                if this.palette.is_some() {
+                    this.close_palette(cx);
+                    return;
+                }
+                this.open_palette(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::NewNote, window, cx| {
+                if this.palette.is_some() || this.prompt.is_some() {
+                    return;
+                }
+                this.new_note(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::ToggleBold, window, cx| {
+                if this.palette.is_some() || this.prompt.is_some() {
+                    return;
+                }
+                this.wrap_selection("**", "**", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::ToggleItalic, window, cx| {
+                if this.palette.is_some() || this.prompt.is_some() {
+                    return;
+                }
+                this.wrap_selection("*", "*", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::InsertLink, window, cx| {
+                if this.palette.is_some() || this.prompt.is_some() {
+                    return;
+                }
+                this.wrap_selection("[", "]()", window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::PastePlain, window, cx| {
+                if this.palette.is_some() || this.prompt.is_some() || this.preview_mode {
+                    return;
+                }
+                let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+                    return;
+                };
+                if text.is_empty() {
+                    return;
+                }
+                if let Some(doc) = this.active_doc_entity().cloned() {
+                    doc.update(cx, |doc, cx| doc.insert_text(&text, window, cx));
+                    cx.notify();
+                }
+            }))
+            .child(gpui_kit::component::TitleBar::new().child(self.render_title(cx)))
             .children(notice)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_sidebar(cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .v_flex()
-                            .child(self.render_tabs(cx))
-                            .children(self.render_conflict(cx))
-                            .child(div().flex_1().min_h_0().child(self.render_editor(cx))),
-                    ),
-            )
+            .child(main)
             .child(self.render_status(cx));
 
         if self.export.is_some() {
@@ -6443,13 +8800,74 @@ impl Render for AppShell {
         if self.zip.is_some() {
             root = root.child(self.render_zip_dialog(cx));
         }
-        if self.image_settings.is_some() {
-            root = root.child(self.render_image_settings(cx));
+        if self.settings.is_some() {
+            root = root.child(self.render_settings(cx));
         }
-        if self.mcp_settings.is_some() {
-            root = root.child(self.render_mcp_settings(cx));
+        if self.recovery.is_some() {
+            root = root.child(self.render_recovery(cx));
+        }
+        if self.prompt.is_some() {
+            root = root.child(self.render_prompt(cx));
+        }
+        if self.palette.is_some() {
+            root = root.child(self.render_palette(cx));
         }
         root
+    }
+}
+
+/// Subsequence match with a bonus for word starts and consecutive runs.
+fn fuzzy_score(label: &str, query: &str) -> Option<i64> {
+    if query.trim().is_empty() {
+        return Some(0);
+    }
+    let mut score = 0i64;
+    let mut pos = 0usize;
+    let mut previous: Option<usize> = None;
+    for ch in query.chars().filter(|ch| !ch.is_whitespace()) {
+        let found = label[pos..].find(ch)?;
+        let index = pos + found;
+        let boundary = index == 0
+            || matches!(
+                label.as_bytes().get(index.wrapping_sub(1)),
+                Some(b' ' | b'.' | b'-' | b'/' | b':' | b'_')
+            );
+        score += if boundary { 8 } else { 1 };
+        if previous.is_some_and(|last| index == last + 1) {
+            score += 4;
+        }
+        previous = Some(index);
+        pos = index + ch.len_utf8();
+    }
+    Some(score)
+}
+
+fn parse_font_size(raw: &str, fallback: f32) -> f32 {
+    raw.trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|size| size.is_finite())
+        .map(|size| size.clamp(10.0, 32.0))
+        .unwrap_or(fallback.clamp(10.0, 32.0))
+}
+
+fn format_pt(value: f32) -> String {
+    if (value - value.round()).abs() < f32::EPSILON {
+        format!("{}", value.round() as i32)
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+fn format_age(seconds: u64) -> String {
+    if seconds < 60 {
+        t!("recovery.age_now").to_string()
+    } else if seconds < 3600 {
+        t!("recovery.age_minutes", count = seconds / 60).to_string()
+    } else if seconds < 86_400 {
+        t!("recovery.age_hours", count = seconds / 3600).to_string()
+    } else {
+        t!("recovery.age_days", count = seconds / 86_400).to_string()
     }
 }
 
@@ -6470,6 +8888,14 @@ fn empty_hint(text: String, color: gpui_kit::Hsla) -> AnyElement {
         .text_color(color)
         .child(text)
         .into_any_element()
+}
+
+fn title_icon(id: &'static str, icon: IconName, tooltip: String) -> Button {
+    Button::new(id)
+        .ghost()
+        .compact()
+        .icon(icon)
+        .tooltip(tooltip)
 }
 
 fn write_math_cache(key: u64, svg: &str) -> Option<PathBuf> {
@@ -6609,11 +9035,7 @@ fn clipboard_images(item: &ClipboardItem) -> Vec<PastedImage> {
             ClipboardEntry::String(_) => {}
         }
     }
-    if bitmaps.is_empty() {
-        files
-    } else {
-        bitmaps
-    }
+    if bitmaps.is_empty() { files } else { bitmaps }
 }
 
 fn store_images(
@@ -6724,7 +9146,8 @@ fn is_atomic_temp(path: &Path) -> bool {
 fn paths_equal(a: &Path, b: &Path) -> bool {
     #[cfg(windows)]
     {
-        a.as_os_str().to_string_lossy().to_lowercase() == b.as_os_str().to_string_lossy().to_lowercase()
+        a.as_os_str().to_string_lossy().to_lowercase()
+            == b.as_os_str().to_string_lossy().to_lowercase()
     }
     #[cfg(not(windows))]
     {

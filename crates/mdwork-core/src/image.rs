@@ -554,7 +554,10 @@ mod tests {
             ImageKind::sniff(b"RIFF\0\0\0\0WEBPVP8 "),
             Some(ImageKind::Webp)
         );
-        assert_eq!(ImageKind::sniff(b"BM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"), Some(ImageKind::Bmp));
+        assert_eq!(
+            ImageKind::sniff(b"BM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"),
+            Some(ImageKind::Bmp)
+        );
         assert_eq!(
             ImageKind::sniff(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"),
             Some(ImageKind::Svg)
@@ -593,7 +596,10 @@ mod tests {
     #[test]
     fn parses_picgo_responses() {
         let ok = r#"{"success":true,"result":["https://img.example/p.png"]}"#;
-        assert_eq!(parse_picgo_response(ok).unwrap(), "https://img.example/p.png");
+        assert_eq!(
+            parse_picgo_response(ok).unwrap(),
+            "https://img.example/p.png"
+        );
         let failed = r#"{"success":false,"message":"图床未配置"}"#;
         let err = parse_picgo_response(failed).unwrap_err();
         assert!(err.to_string().contains("图床未配置"));
@@ -611,7 +617,8 @@ mod tests {
 
     #[test]
     fn header_lines_are_filtered() {
-        let headers = parse_headers("Authorization: Bearer x\nContent-Type: text/plain\nbad\n\nX-Env: dev");
+        let headers =
+            parse_headers("Authorization: Bearer x\nContent-Type: text/plain\nbad\n\nX-Env: dev");
         assert_eq!(
             headers,
             vec![
@@ -627,7 +634,10 @@ mod tests {
             endpoint: default_picgo_endpoint(),
         };
         let json = serde_json::to_string(&host).unwrap();
-        assert_eq!(json, r#"{"kind":"picgo","endpoint":"http://127.0.0.1:36677/upload"}"#);
+        assert_eq!(
+            json,
+            r#"{"kind":"picgo","endpoint":"http://127.0.0.1:36677/upload"}"#
+        );
         let parsed: ImageHost = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, host);
 

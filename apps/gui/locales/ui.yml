@@ -62,6 +62,24 @@ status.external:
 status.cursor:
   en: "Ln %{line}, Col %{column}"
   zh-CN: "第 %{line} 行，第 %{column} 列"
+status.selection:
+  en: "Sel %{chars} chars / %{words} words"
+  zh-CN: "选中 %{chars} 字符 / %{words} 词"
+status.mode.edit:
+  en: "Edit"
+  zh-CN: "编辑"
+status.mode.preview:
+  en: "Preview"
+  zh-CN: "预览"
+status.mcp.on:
+  en: "MCP :%{port}"
+  zh-CN: "MCP :%{port}"
+status.mcp.off:
+  en: "MCP off"
+  zh-CN: "MCP 已关闭"
+status.mcp.error:
+  en: "MCP error"
+  zh-CN: "MCP 异常"
 conflict.modified:
   en: "\"%{title}\" changed on disk. Reloading discards your edits; keeping yours overwrites the file on save."
   zh-CN: "「%{title}」已在磁盘上被修改。重新加载会丢弃当前编辑，保留我的会在保存时覆盖磁盘文件。"
@@ -95,12 +113,165 @@ theme.system:
 language.label:
   en: "Language"
   zh-CN: "语言"
+settings.title:
+  en: "Settings"
+  zh-CN: "设置"
+settings.tab.appearance:
+  en: "Appearance"
+  zh-CN: "外观"
+settings.tab.panels:
+  en: "Panels"
+  zh-CN: "面板"
+settings.tab.images:
+  en: "Images"
+  zh-CN: "图像"
+settings.tab.mcp:
+  en: "MCP"
+  zh-CN: "MCP"
+settings.tab.windows:
+  en: "Windows"
+  zh-CN: "Windows"
+settings.version:
+  en: "md-work {version} · MIT"
+  zh-CN: "墨笺 {version} · MIT"
+settings.typography:
+  en: "Fonts"
+  zh-CN: "字体"
+settings.typography_hint:
+  en: "The interface font applies to menus and panels; the note font applies to the editor and preview. Leave a field empty to use the default."
+  zh-CN: "界面字体用于菜单与面板，笔记字体用于编辑器与预览。留空则使用默认字体。"
+settings.ui_font:
+  en: "Interface font"
+  zh-CN: "界面字体"
+settings.note_font:
+  en: "Note font"
+  zh-CN: "笔记字体"
+settings.size:
+  en: "Size"
+  zh-CN: "字号"
+settings.apply_fonts:
+  en: "Apply fonts"
+  zh-CN: "应用字体"
+settings.fonts_empty_hint:
+  en: "Takes effect immediately; closing settings also applies."
+  zh-CN: "立即生效；关闭设置时也会自动应用。"
+settings.autosave:
+  en: "Autosave after 800 ms of inactivity"
+  zh-CN: "停止输入 800 毫秒后自动保存"
+settings.autosave_hint:
+  en: "Turning this off keeps every change in memory until you press Ctrl+S."
+  zh-CN: "关闭后所有修改只保存在内存中，需要按 Ctrl+S 保存。"
+settings.windows_assoc:
+  en: "“Open with MoJian” context menu"
+  zh-CN: "「用墨笺打开」右键菜单"
+settings.windows_assoc_on:
+  en: "Registered for the current user. Right-click a .md file in Explorer to use it."
+  zh-CN: "已为当前用户注册。在资源管理器中右键 .md 文件即可看到该菜单。"
+settings.windows_assoc_off:
+  en: "Not registered for this executable."
+  zh-CN: "当前程序尚未注册。"
+settings.windows_register:
+  en: "Register now"
+  zh-CN: "立即注册"
+settings.windows_register_ok:
+  en: "Registered “Open with MoJian”."
+  zh-CN: "已注册「用墨笺打开」。"
+settings.windows_register_failed:
+  en: "Could not register the context menu"
+  zh-CN: "注册右键菜单失败"
+settings.windows_default_apps:
+  en: "Windows default apps…"
+  zh-CN: "Windows 默认应用…"
+settings.windows_default_apps_failed:
+  en: "Could not open Windows default apps"
+  zh-CN: "无法打开 Windows 默认应用设置"
+settings.windows_workspace:
+  en: "Workspace"
+  zh-CN: "工作区"
+settings.windows_open_workspace:
+  en: "Open workspace folder"
+  zh-CN: "打开工作区文件夹"
+settings.windows_open_logs:
+  en: "Open log folder"
+  zh-CN: "打开日志文件夹"
+settings.windows_open_crashes:
+  en: "Open crash records"
+  zh-CN: "打开崩溃记录"
+settings.windows_open_folder_failed:
+  en: "Could not open the folder"
+  zh-CN: "无法打开文件夹"
+settings.theme:
+  en: "Theme"
+  zh-CN: "主题"
+settings.theme_hint:
+  en: "Choose a light, dark or system-following theme."
+  zh-CN: "选择亮色、暗色或跟随系统。"
+settings.language:
+  en: "Interface language"
+  zh-CN: "界面语言"
+settings.panel_dock:
+  en: "Dock position"
+  zh-CN: "停靠位置"
+settings.panel_dock_hint:
+  en: "Which side of the window holds the Notes / Outline / Search / Bookmarks / Trash panel."
+  zh-CN: "笔记、大纲、搜索、书签、回收站面板放在窗口的哪一侧。"
+settings.dock.left:
+  en: "Left sidebar"
+  zh-CN: "左边栏"
+settings.dock.right:
+  en: "Right sidebar"
+  zh-CN: "右边栏"
+settings.panel_arrangement:
+  en: "Arrangement"
+  zh-CN: "排列方式"
+settings.panel_arrangement_hint:
+  en: "Horizontal keeps the switcher above the panel; vertical turns it into an edge rail."
+  zh-CN: "横向排列把切换项放在面板上方；纵向排列把切换项放在侧边栏外侧，从上往下排。"
+settings.arrangement.horizontal:
+  en: "Horizontal"
+  zh-CN: "横向排列"
+settings.arrangement.vertical:
+  en: "Vertical"
+  zh-CN: "纵向排列"
+settings.panel_width:
+  en: "Sidebar width"
+  zh-CN: "侧栏宽度"
+settings.panel_width_hint:
+  en: "Drag the divider between the sidebar and the page to resize, or double-click it to reset. Presets are applied immediately."
+  zh-CN: "拖动侧栏与正文之间的分隔条可以调整宽度，双击分隔条恢复默认。下面的预设会立即生效。"
+settings.width.narrow:
+  en: "Narrow"
+  zh-CN: "窄"
+settings.width.standard:
+  en: "Standard"
+  zh-CN: "标准"
+settings.width.wide:
+  en: "Wide"
+  zh-CN: "宽"
+image.loading:
+  en: "Loading image settings…"
+  zh-CN: "正在加载图床设置…"
+mcp.loading:
+  en: "Loading MCP settings…"
+  zh-CN: "正在加载 MCP 设置…"
 workspace.label:
   en: "Workspace"
   zh-CN: "工作区"
 error.open:
   en: "Cannot open %{path}: %{reason}"
   zh-CN: "无法打开 %{path}：%{reason}"
+external.save_into:
+  en: "Save to notebook"
+  zh-CN: "存入笔记本"
+external.save_into_hint:
+  en: "Copy this file into the active notebook as a new note"
+  zh-CN: "把当前外部文件复制为当前笔记本中的新笔记"
+external.saved:
+  en: "Saved to %{path}"
+  zh-CN: "已存入 %{path}"
+external.no_notebook:
+  en: "No notebook available. Create or open a notebook first."
+  zh-CN: "没有可用的笔记本，请先新建或打开笔记本。"
 preview.show:
   en: "Preview"
   zh-CN: "预览"
@@ -119,6 +290,9 @@ preview.wrap:
 preview.nowrap:
   en: "Wrap: off"
   zh-CN: "换行：关"
+preview.copy_code:
+  en: "Copy"
+  zh-CN: "复制"
 panel.notes:
   en: "Notes"
   zh-CN: "笔记"
@@ -161,6 +335,15 @@ search.all:
 search.empty:
   en: "No matches."
   zh-CN: "没有匹配内容。"
+search.opt.case:
+  en: "Aa"
+  zh-CN: "Aa"
+search.opt.regex:
+  en: ".*"
+  zh-CN: ".*"
+search.opt.filename:
+  en: "Name"
+  zh-CN: "文件名"
 bookmark.empty:
   en: "No bookmarks yet."
   zh-CN: "还没有书签。"
@@ -257,6 +440,27 @@ export.page_files:
 export.dpi:
   en: "%{dpi} DPI"
   zh-CN: "%{dpi} DPI"
+export.margin:
+  en: "Margin %{mm} mm"
+  zh-CN: "页边距 %{mm} mm"
+export.font_size:
+  en: "Font %{pt} pt"
+  zh-CN: "字号 %{pt} pt"
+export.line_height:
+  en: "Line height %{value}"
+  zh-CN: "行距 %{value}"
+export.toc_depth:
+  en: "TOC depth %{depth}"
+  zh-CN: "目录深度 %{depth}"
+export.image_width:
+  en: "Image %{pct}%"
+  zh-CN: "图片宽度 %{pct}%"
+export.page_format:
+  en: "Page label"
+  zh-CN: "页码格式"
+export.justify:
+  en: "Justify"
+  zh-CN: "两端对齐"
 export.header:
   en: "Header"
   zh-CN: "页眉"
@@ -707,3 +911,207 @@ mcp.scope.export:
 mcp.scope.admin:
   en: "Admin"
   zh-CN: "管理员"
+common.ok:
+  en: "OK"
+  zh-CN: "确定"
+common.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+common.close:
+  en: "Close"
+  zh-CN: "关闭"
+recovery.title:
+  en: "Recover unsaved edits"
+  zh-CN: "恢复未保存的编辑"
+recovery.desc:
+  en: "These buffers were dirty when md-work last stopped. Restoring reopens the note with the recovered text; nothing is written until you save."
+  zh-CN: "上次退出时这些笔记还有未保存的修改。恢复会重新打开笔记并载入快照内容，只有你手动保存后才会写回磁盘。"
+recovery.restore:
+  en: "Restore"
+  zh-CN: "恢复"
+recovery.discard:
+  en: "Discard"
+  zh-CN: "丢弃"
+recovery.discard_all:
+  en: "Discard all"
+  zh-CN: "全部丢弃"
+recovery.more:
+  en: "%{count} more snapshots"
+  zh-CN: "另有 %{count} 个快照"
+recovery.external:
+  en: "External file"
+  zh-CN: "外部文件"
+recovery.missing:
+  en: "The original file no longer exists; the snapshot was kept."
+  zh-CN: "原文件已不存在，快照已保留。"
+recovery.restored:
+  en: "Snapshot restored into the editor. Save to keep it."
+  zh-CN: "已把快照恢复到编辑器，请保存以写入磁盘。"
+recovery.disk_changed:
+  en: "Snapshot restored, but the file changed on disk since then. Review before saving."
+  zh-CN: "快照已恢复，但磁盘上的文件在此期间被修改过，请核对后再保存。"
+recovery.age_now:
+  en: "just now"
+  zh-CN: "刚刚"
+recovery.age_minutes:
+  en: "%{count} min ago"
+  zh-CN: "%{count} 分钟前"
+recovery.age_hours:
+  en: "%{count} h ago"
+  zh-CN: "%{count} 小时前"
+recovery.age_days:
+  en: "%{count} d ago"
+  zh-CN: "%{count} 天前"
+sidebar.new_folder:
+  en: "New folder"
+  zh-CN: "新建文件夹"
+sidebar.open_notebook:
+  en: "Open notebook from another location…"
+  zh-CN: "打开其他位置的笔记本…"
+sidebar.scan_issues:
+  en: "%{count} folders could not be loaded"
+  zh-CN: "%{count} 个文件夹无法加载"
+tree.move:
+  en: "Move to…"
+  zh-CN: "移动到…"
+tree.move_external:
+  en: "External files have no notebook; save them into a notebook first."
+  zh-CN: "外部文件不属于任何笔记本，请先另存到笔记本。"
+prompt.new_folder:
+  en: "New folder"
+  zh-CN: "新建文件夹"
+prompt.new_folder_hint:
+  en: "Relative to the notebook root; nested paths with / are allowed."
+  zh-CN: "相对于笔记本根目录，可用 / 表示多级目录。"
+prompt.move:
+  en: "Move or rename"
+  zh-CN: "移动或重命名"
+prompt.move_hint:
+  en: "Enter the new path relative to the notebook root. Missing folders are created."
+  zh-CN: "输入相对于笔记本根目录的新路径，缺失的文件夹会自动创建。"
+prompt.open_notebook:
+  en: "Open notebook"
+  zh-CN: "打开笔记本"
+prompt.open_notebook_hint:
+  en: "Full path of a folder that contains .mdwork/notebook.json."
+  zh-CN: "包含 .mdwork/notebook.json 的文件夹完整路径。"
+prompt.open_notebook_placeholder:
+  en: "D:\\Notes\\My notebook"
+  zh-CN: "D:\\笔记\\我的笔记本"
+prompt.empty:
+  en: "Please enter a value."
+  zh-CN: "请输入内容。"
+encoding.no_doc:
+  en: "No note is open."
+  zh-CN: "未打开笔记。"
+encoding.saved_as:
+  en: "Saved as %{encoding} / %{eol}."
+  zh-CN: "已另存为 %{encoding} / %{eol}。"
+encoding.failed:
+  en: "Could not change the encoding"
+  zh-CN: "切换编码失败"
+palette.placeholder:
+  en: "Type a command…"
+  zh-CN: "输入命令…"
+palette.empty:
+  en: "No matching command"
+  zh-CN: "没有匹配的命令"
+palette.new_note:
+  en: "New note"
+  zh-CN: "新建笔记"
+palette.new_folder:
+  en: "New folder"
+  zh-CN: "新建文件夹"
+palette.new_notebook:
+  en: "New notebook"
+  zh-CN: "新建笔记本"
+palette.open_notebook:
+  en: "Open notebook from another location…"
+  zh-CN: "打开其他位置的笔记本…"
+palette.save:
+  en: "Save note"
+  zh-CN: "保存笔记"
+palette.toggle_preview:
+  en: "Toggle edit / preview"
+  zh-CN: "切换编辑 / 预览"
+palette.close_tab:
+  en: "Close current tab"
+  zh-CN: "关闭当前标签"
+palette.settings:
+  en: "Open settings"
+  zh-CN: "打开设置"
+palette.search:
+  en: "Search notes"
+  zh-CN: "搜索笔记"
+palette.outline:
+  en: "Show outline"
+  zh-CN: "显示大纲"
+palette.bookmarks:
+  en: "Show bookmarks"
+  zh-CN: "显示书签"
+palette.trash:
+  en: "Show trash"
+  zh-CN: "显示回收站"
+palette.notes_panel:
+  en: "Show notes panel"
+  zh-CN: "显示笔记面板"
+palette.export_pdf:
+  en: "Export note as PDF…"
+  zh-CN: "导出笔记为 PDF…"
+palette.export_png:
+  en: "Export note as PNG…"
+  zh-CN: "导出笔记为 PNG…"
+palette.export_zip:
+  en: "Export notebook as zip…"
+  zh-CN: "导出整本笔记本为 zip…"
+palette.import_zip:
+  en: "Import notebook from zip…"
+  zh-CN: "从 zip 导入笔记本…"
+palette.move_note:
+  en: "Move or rename current note…"
+  zh-CN: "移动或重命名当前笔记…"
+palette.theme_system:
+  en: "Theme: follow system"
+  zh-CN: "主题：跟随系统"
+palette.theme_light:
+  en: "Theme: light"
+  zh-CN: "主题：亮色"
+palette.theme_dark:
+  en: "Theme: dark"
+  zh-CN: "主题：暗色"
+palette.code_wrap:
+  en: "Toggle preview code wrapping"
+  zh-CN: "切换预览代码块换行"
+palette.autosave:
+  en: "Toggle autosave"
+  zh-CN: "切换自动保存"
+palette.save_utf8:
+  en: "Save as UTF-8"
+  zh-CN: "另存为 UTF-8"
+palette.save_gb18030:
+  en: "Save as GB18030"
+  zh-CN: "另存为 GB18030"
+palette.save_windows1252:
+  en: "Save as Windows-1252"
+  zh-CN: "另存为 Windows-1252"
+palette.save_utf16:
+  en: "Save as UTF-16 LE (BOM)"
+  zh-CN: "另存为 UTF-16 LE（BOM）"
+palette.eol_lf:
+  en: "Line endings: LF"
+  zh-CN: "行尾：LF"
+palette.eol_crlf:
+  en: "Line endings: CRLF"
+  zh-CN: "行尾：CRLF"
+palette.open_workspace:
+  en: "Open workspace folder"
+  zh-CN: "打开工作区文件夹"
+palette.open_logs:
+  en: "Open log folder"
+  zh-CN: "打开日志文件夹"
+palette.register_assoc:
+  en: "Register “Open with MoJian” menu"
+  zh-CN: "注册「用墨笺打开」右键菜单"
+palette.rescan:
+  en: "Rescan workspace"
+  zh-CN: "重新扫描工作区"

@@ -84,7 +84,12 @@ pub struct TokenRecord {
 }
 
 impl TokenRecord {
-    pub fn new(name: impl Into<String>, hash: String, scopes: Vec<Scope>, notebooks: Vec<Uuid>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        hash: String,
+        scopes: Vec<Scope>,
+        notebooks: Vec<Uuid>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             name: name.into(),

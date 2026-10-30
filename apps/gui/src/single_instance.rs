@@ -5,8 +5,8 @@ use std::sync::mpsc::{self, Receiver};
 use windows::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows::Win32::Storage::FileSystem::{PIPE_ACCESS_DUPLEX, ReadFile};
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE, PIPE_TYPE_MESSAGE,
-    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE,
+    PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows::core::HSTRING;
 
@@ -28,9 +28,7 @@ pub fn try_forward(payload: &str) -> bool {
 /// Starts the primary listener. The channel yields one payload per connection.
 pub fn spawn_server() -> Receiver<String> {
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        while serve_one(&tx) {}
-    });
+    std::thread::spawn(move || while serve_one(&tx) {});
     rx
 }
 
@@ -56,8 +54,7 @@ fn serve_one(tx: &mpsc::Sender<String>) -> bool {
 
     let mut buf = vec![0u8; MAX_PAYLOAD];
     let mut read = 0u32;
-    let connected =
-        unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) }.is_ok();
+    let connected = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) }.is_ok();
 
     if connected && read > 0 {
         let text = String::from_utf8_lossy(&buf[..read as usize]);

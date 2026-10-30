@@ -1,5 +1,5 @@
 use chardetng::EncodingDetector;
-use encoding_rs::{Encoding, GB18030, GBK, UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
+use encoding_rs::{Encoding, GB18030, GBK, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -84,17 +84,98 @@ impl DecodedDoc {
     pub fn encode(&self, text: &str) -> Result<Vec<u8>> {
         encode_text(text, self.encoding, self.bom, self.eol)
     }
+
+    pub fn hint(&self) -> EncodingHint {
+        EncodingHint {
+            encoding: self.encoding,
+            bom: self.bom,
+            eol: self.eol,
+        }
+    }
+}
+
+/// Per-file encoding/EOL memory stored in `.mdwork/encoding.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EncodingHint {
+    pub encoding: TextEncoding,
+    pub bom: bool,
+    pub eol: Eol,
+}
+
+impl Default for EncodingHint {
+    fn default() -> Self {
+        Self {
+            encoding: TextEncoding::Utf8,
+            bom: false,
+            eol: Eol::Lf,
+        }
+    }
+}
+
+impl EncodingHint {
+    /// UTF-8 with LF and no BOM needs no sidecar entry.
+    pub fn is_default(self) -> bool {
+        self.encoding == TextEncoding::Utf8 && !self.bom && self.eol == Eol::Lf
+    }
+}
+
+impl Default for TextEncoding {
+    fn default() -> Self {
+        Self::Utf8
+    }
+}
+
+impl Default for Eol {
+    fn default() -> Self {
+        Self::Lf
+    }
 }
 
 pub fn decode(bytes: &[u8]) -> DecodedDoc {
+    decode_with_hint(bytes, None)
+}
+
+/// Decodes with the remembered encoding/EOL first. A byte-order mark always
+/// wins over the hint; the hint only supplies the EOL style when the file has
+/// no line break to detect one from.
+pub fn decode_with_hint(bytes: &[u8], hint: Option<EncodingHint>) -> DecodedDoc {
     let (text, encoding, bom) = decode_text(bytes);
     let eol = detect_eol(&text);
-    DecodedDoc {
+    let mut decoded = DecodedDoc {
         text: normalize_eol(&text),
         encoding,
         bom,
         eol,
+    };
+    let Some(hint) = hint else {
+        return decoded;
+    };
+    if bom || Encoding::for_bom(bytes).is_some() {
+        return decoded;
     }
+    if hint.encoding != decoded.encoding {
+        let (text, _, had_errors) = hint.encoding.encoding().decode(bytes);
+        if !had_errors {
+            let eol = if text.contains('\n') || text.contains('\r') {
+                detect_eol(&text)
+            } else {
+                hint.eol
+            };
+            decoded = DecodedDoc {
+                text: normalize_eol(&text),
+                encoding: hint.encoding,
+                bom: false,
+                eol,
+            };
+        }
+    } else {
+        decoded.bom = hint.bom;
+        if !decoded.text.contains('\n') {
+            decoded.eol = hint.eol;
+        }
+    }
+    decoded
 }
 
 fn decode_text(bytes: &[u8]) -> (String, TextEncoding, bool) {
@@ -126,19 +207,18 @@ fn decode_text(bytes: &[u8]) -> (String, TextEncoding, bool) {
 
     let (text, _, had_errors) = candidate.decode(bytes);
     if !had_errors {
-        (text.into_owned(), TextEncoding::from_encoding(candidate), false)
+        (
+            text.into_owned(),
+            TextEncoding::from_encoding(candidate),
+            false,
+        )
     } else {
         let (text, _, _) = WINDOWS_1252.decode(bytes);
         (text.into_owned(), TextEncoding::Windows1252, false)
     }
 }
 
-pub fn encode_text(
-    text: &str,
-    encoding: TextEncoding,
-    bom: bool,
-    eol: Eol,
-) -> Result<Vec<u8>> {
+pub fn encode_text(text: &str, encoding: TextEncoding, bom: bool, eol: Eol) -> Result<Vec<u8>> {
     let canonical = normalize_eol(text);
     let with_eol = match eol {
         Eol::Lf => canonical,

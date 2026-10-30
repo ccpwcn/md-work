@@ -6,15 +6,15 @@ use mdwork_core::bookmarks::Bookmarks;
 use mdwork_core::doc;
 use mdwork_core::notebook::EntryKind;
 use mdwork_core::permissions::Scope;
-use mdwork_core::search::{search_notebook_filtered, SearchQuery};
+use mdwork_core::search::{SearchQuery, search_notebook_filtered};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorData;
 use rmcp::service::RequestContext;
-use rmcp::{tool, tool_router, Json, RoleServer};
+use rmcp::{Json, RoleServer, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{core_error, invalid_params, invalid_path, require_scope, MdworkServer};
+use crate::server::{MdworkServer, core_error, invalid_params, invalid_path, require_scope};
 
 const DEFAULT_READ_LIMIT: u64 = 400;
 const MAX_READ_LIMIT: u64 = 5_000;
@@ -309,7 +309,9 @@ impl MdworkServer {
 
             let allowed_notes: Vec<&mdwork_core::Entry> = tree
                 .iter()
-                .filter(|item| item.kind == EntryKind::Note && token.allows_note(&id, &item.rel_path))
+                .filter(|item| {
+                    item.kind == EntryKind::Note && token.allows_note(&id, &item.rel_path)
+                })
                 .collect();
             let entries: Vec<NoteEntryOut> = tree
                 .iter()
@@ -359,9 +361,8 @@ impl MdworkServer {
             let notebook = self.notebook(token, &args.notebook_id)?;
             let rel = self.note_rel(&notebook, token, &args.path)?;
             let path = notebook.note_path(&rel).map_err(core_error)?;
-            let bytes = std::fs::read(&path)
-                .map_err(|err| crate::server::io_error(&rel, err))?;
-            let decoded = doc::decode(&bytes);
+            let bytes = std::fs::read(&path).map_err(|err| crate::server::io_error(&rel, err))?;
+            let decoded = doc::decode_with_hint(&bytes, notebook.encoding_hint(&rel));
             entry.notebook = Some(notebook.marker.id);
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
@@ -410,14 +411,13 @@ impl MdworkServer {
             let notebook = self.notebook(token, &args.notebook_id)?;
             let rel = self.note_rel(&notebook, token, &args.path)?;
             let path = notebook.note_path(&rel).map_err(core_error)?;
-            let bytes = std::fs::read(&path)
-                .map_err(|err| crate::server::io_error(&rel, err))?;
+            let bytes = std::fs::read(&path).map_err(|err| crate::server::io_error(&rel, err))?;
             entry.notebook = Some(notebook.marker.id);
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
             entry.bytes = Some(bytes.len() as u64);
 
-            let text = doc::decode(&bytes).text;
+            let text = doc::decode_with_hint(&bytes, notebook.encoding_hint(&rel)).text;
             let headings = mdwork_render::preview::PreviewIr::from_markdown(&text)
                 .outline()
                 .into_iter()

@@ -344,7 +344,11 @@ impl<'a> Emitter<'a> {
         setup.push_str("#set raw(tab-size: 4)\n");
         setup.push_str(&format!(
             "#set raw(theme: {})\n",
-            if options.code_highlight { "auto" } else { "none" }
+            if options.code_highlight {
+                "auto"
+            } else {
+                "none"
+            }
         ));
         setup.push_str(&format!(
             "#show raw: set text(font: {})\n",
@@ -442,9 +446,7 @@ impl<'a> Emitter<'a> {
                 format!("{} {}", "=".repeat(level), self.inlines(content))
             }
             Block::Paragraph { content, .. } => self.inlines(content),
-            Block::CodeBlock {
-                language, text, ..
-            } => self.code_block(language.as_deref(), text),
+            Block::CodeBlock { language, text, .. } => self.code_block(language.as_deref(), text),
             Block::List {
                 ordered,
                 start,
@@ -456,15 +458,12 @@ impl<'a> Emitter<'a> {
                 format!("#quote(block: true)[\n{body}\n]")
             }
             Block::Table {
-                head,
-                rows,
-                aligns,
-                ..
+                head, rows, aligns, ..
             } => self.table(head, rows, aligns),
-            Block::Image { src, title, alt, .. } => self.block_image(src, title.as_deref(), alt),
-            Block::Rule { .. } => {
-                "#line(length: 100%, stroke: 0.5pt + luma(185))".to_string()
-            }
+            Block::Image {
+                src, title, alt, ..
+            } => self.block_image(src, title.as_deref(), alt),
+            Block::Rule { .. } => "#line(length: 100%, stroke: 0.5pt + luma(185))".to_string(),
             Block::Math { tex, .. } => self.math(tex, true),
             Block::FootnoteDefinition { .. } => String::new(),
             Block::Html { raw, .. } => {
@@ -504,10 +503,7 @@ impl<'a> Emitter<'a> {
         }
         let joined = bodies.join(", ");
         if ordered {
-            format!(
-                "#enum(start: {}, {joined})",
-                start.max(1)
-            )
+            format!("#enum(start: {}, {joined})", start.max(1))
         } else if all_tasks {
             format!("#list(marker: none, indent: 0em, body-indent: 1.2em, {joined})")
         } else {
@@ -526,12 +522,14 @@ impl<'a> Emitter<'a> {
             .max(rows.iter().map(Vec::len).max().unwrap_or(0))
             .max(1);
         let align_items: Vec<&str> = (0..columns)
-            .map(|index| match aligns.get(index).copied().unwrap_or(Align::None) {
-                Align::Left => "left",
-                Align::Center => "center",
-                Align::Right => "right",
-                Align::None => "auto",
-            })
+            .map(
+                |index| match aligns.get(index).copied().unwrap_or(Align::None) {
+                    Align::Left => "left",
+                    Align::Center => "center",
+                    Align::Right => "right",
+                    Align::None => "auto",
+                },
+            )
             .collect();
         let align = format!("({})", align_items.join(", "));
 
@@ -539,7 +537,10 @@ impl<'a> Emitter<'a> {
         if !head.is_empty() {
             let mut header_cells = Vec::new();
             for index in 0..columns {
-                let cell = head.get(index).map(|cell| self.inlines(cell)).unwrap_or_default();
+                let cell = head
+                    .get(index)
+                    .map(|cell| self.inlines(cell))
+                    .unwrap_or_default();
                 header_cells.push(format!("[#strong[{cell}]]"));
             }
             cells.push(format!("table.header({})", header_cells.join(", ")));
@@ -650,9 +651,12 @@ impl<'a> Emitter<'a> {
             let columns = code_columns(self.options);
             code = wrap_code(&code, columns);
         }
-        let lang = language
-            .map(str::trim)
-            .filter(|lang| !lang.is_empty() && lang.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '_' | '#')));
+        let lang = language.map(str::trim).filter(|lang| {
+            !lang.is_empty()
+                && lang
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '_' | '#'))
+        });
         match lang {
             Some(lang) => format!(
                 "#raw({}, block: true, lang: {})",
@@ -677,8 +681,7 @@ impl<'a> Emitter<'a> {
                 }
             }
             Err(err) => {
-                self.warnings
-                    .push(format!("公式转换失败：{err}\n{tex}"));
+                self.warnings.push(format!("公式转换失败：{err}\n{tex}"));
                 format!(
                     "#block(stroke: 0.5pt + luma(200), inset: 6pt, width: 100%, raw({}, block: true))",
                     quote_str(&format!("$$ {tex} $$"))
@@ -702,9 +705,7 @@ impl<'a> Emitter<'a> {
             Inline::Emphasis(children) => format!("#emph[{}]", self.inlines(children)),
             Inline::Strong(children) => format!("#strong[{}]", self.inlines(children)),
             Inline::Strike(children) => format!("#strike[{}]", self.inlines(children)),
-            Inline::Link {
-                url, children, ..
-            } => {
+            Inline::Link { url, children, .. } => {
                 let text = if children.is_empty() {
                     escape_text(url)
                 } else {
@@ -868,12 +869,19 @@ fn font_list(raw: &str, fallbacks: &[&str]) -> String {
     let mut names: Vec<String> = Vec::new();
     for part in raw.split(',') {
         let name = part.trim();
-        if !name.is_empty() && !names.iter().any(|existing| existing.eq_ignore_ascii_case(name)) {
+        if !name.is_empty()
+            && !names
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(name))
+        {
             names.push(name.to_string());
         }
     }
     for fallback in fallbacks {
-        if !names.iter().any(|existing| existing.eq_ignore_ascii_case(fallback)) {
+        if !names
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(fallback))
+        {
             names.push((*fallback).to_string());
         }
     }
@@ -886,9 +894,9 @@ fn plain_inlines(inlines: &[Inline]) -> String {
     for inline in inlines {
         match inline {
             Inline::Text(text) | Inline::Code(text) => out.push_str(text),
-            Inline::Emphasis(children)
-            | Inline::Strong(children)
-            | Inline::Strike(children) => out.push_str(&plain_inlines(children)),
+            Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strike(children) => {
+                out.push_str(&plain_inlines(children))
+            }
             Inline::Link { url, children, .. } => {
                 if children.is_empty() {
                     out.push_str(url);
@@ -917,8 +925,8 @@ pub fn escape_text(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         match ch {
-            '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '>' | '@' | '~' | '[' | ']' | '-'
-            | '+' | '=' | '/' => {
+            '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '>' | '@' | '~' | '[' | ']' | '-' | '+'
+            | '=' | '/' => {
                 out.push('\\');
                 out.push(ch);
             }
@@ -953,8 +961,14 @@ fn path_under(root: &Path, path: &Path) -> bool {
     let Ok(root) = fs::canonicalize(root) else {
         return false;
     };
-    let root = root.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
-    let path = path.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    let root = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let path = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
     path == root || path.starts_with(&format!("{root}\\"))
 }
 
@@ -1102,7 +1116,10 @@ mod tests {
 
     #[test]
     fn escapes_markup_characters() {
-        assert_eq!(escape_text("#标题 $x$ *a* [b]"), "\\#标题 \\$x\\$ \\*a\\* \\[b\\]");
+        assert_eq!(
+            escape_text("#标题 $x$ *a* [b]"),
+            "\\#标题 \\$x\\$ \\*a\\* \\[b\\]"
+        );
     }
 
     #[test]
@@ -1111,7 +1128,10 @@ mod tests {
             "| 名称 | 数值 |\n|:--|--:|\n| a | 1 |\n\n- [x] 完成\n- [ ] 未完成\n",
         );
         let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
-        assert!(doc.source.contains("#table(columns: 2, align: (left, right)"));
+        assert!(
+            doc.source
+                .contains("#table(columns: 2, align: (left, right)")
+        );
         assert!(doc.source.contains("table.header("));
         assert!(doc.source.contains("☑"));
         assert!(doc.source.contains("☐"));
@@ -1135,7 +1155,11 @@ mod tests {
         let ir = PreviewIr::from_markdown("$$\na^2 + b^2\n$$\n");
         let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
         assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
-        assert!(doc.source.contains("$ a ^(2 ) +  b ^(2 ) $"), "{}", doc.source);
+        assert!(
+            doc.source.contains("$ a ^(2 ) +  b ^(2 ) $"),
+            "{}",
+            doc.source
+        );
     }
 
     #[test]

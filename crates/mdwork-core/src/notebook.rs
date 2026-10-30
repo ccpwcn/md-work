@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7,13 +8,95 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::atomic::write_atomic;
-use crate::doc::{self, DecodedDoc, Eol, TextEncoding};
+use crate::doc::{self, DecodedDoc, EncodingHint, Eol, TextEncoding};
 use crate::paths::{ASSETS_DIR, META_DIR, NOTEBOOK_FILE};
 use crate::{Error, NOTEBOOK_FORMAT, Result};
 
 pub const TRASH_DIR: &str = "trash";
 pub const BOOKMARKS_FILE: &str = "bookmarks.json";
 pub const ENCODING_FILE: &str = "encoding.json";
+pub const ENCODING_FORMAT: &str = "md-work/encoding@1";
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct EncodingFile {
+    format: String,
+    files: BTreeMap<String, EncodingHint>,
+}
+
+impl EncodingFile {
+    fn load(path: &Path) -> Self {
+        let Ok(bytes) = fs::read(path) else {
+            return Self {
+                format: ENCODING_FORMAT.to_string(),
+                files: BTreeMap::new(),
+            };
+        };
+        let mut file: Self = serde_json::from_slice(&bytes).unwrap_or_else(|err| {
+            tracing::warn!(path = %path.display(), error = %err, "编码记录损坏，重新建立");
+            Self::default()
+        });
+        if file.format.is_empty() {
+            file.format = ENCODING_FORMAT.to_string();
+        }
+        file
+    }
+
+    fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let bytes = serde_json::to_vec_pretty(self).map_err(|source| crate::Error::Json {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        write_atomic(path, &bytes)?;
+        Ok(())
+    }
+}
+
+fn encoding_key(rel_path: &str) -> String {
+    rel_path.replace('\\', "/").to_lowercase()
+}
+
+fn encoding_file_path(root: &Path) -> PathBuf {
+    root.join(META_DIR).join(ENCODING_FILE)
+}
+
+pub fn load_encoding_map(root: &Path) -> BTreeMap<String, EncodingHint> {
+    EncodingFile::load(&encoding_file_path(root)).files
+}
+
+pub fn load_encoding_hint(root: &Path, rel_path: &str) -> Option<EncodingHint> {
+    load_encoding_map(root)
+        .get(&encoding_key(rel_path))
+        .copied()
+}
+
+/// Stores the encoding/EOL used to save a note. UTF-8 + LF + no BOM removes
+/// the entry, keeping the sidecar limited to notes that need remembering.
+pub fn store_encoding_hint(root: &Path, rel_path: &str, hint: EncodingHint) -> Result<()> {
+    let path = encoding_file_path(root);
+    let mut file = EncodingFile::load(&path);
+    let key = encoding_key(rel_path);
+    if hint.is_default() {
+        if file.files.remove(&key).is_none() {
+            return Ok(());
+        }
+    } else {
+        file.files.insert(key, hint);
+    }
+    file.save(&path)
+}
+
+pub fn remove_encoding_hint(root: &Path, rel_path: &str) -> Result<()> {
+    let path = encoding_file_path(root);
+    let mut file = EncodingFile::load(&path);
+    if file.files.remove(&encoding_key(rel_path)).is_none() {
+        return Ok(());
+    }
+    file.save(&path)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Marker {
@@ -79,6 +162,12 @@ impl Notebook {
         write_marker(&marker_path, &marker)?;
         write_atomic(&root.join(META_DIR).join(BOOKMARKS_FILE), b"{}\n")?;
         write_atomic(&root.join(META_DIR).join(ENCODING_FILE), b"{}\n")?;
+        tracing::info!(
+            notebook = %marker.name,
+            id = %marker.id,
+            root = %root.display(),
+            "创建笔记本"
+        );
 
         Ok(Self {
             root: root.to_path_buf(),
@@ -99,6 +188,12 @@ impl Notebook {
                 found: marker.format,
             });
         }
+        tracing::debug!(
+            notebook = %marker.name,
+            id = %marker.id,
+            root = %root.display(),
+            "打开笔记本"
+        );
         Ok(Self {
             root: root.to_path_buf(),
             marker,
@@ -125,6 +220,18 @@ impl Notebook {
         self.meta_dir().join(ENCODING_FILE)
     }
 
+    pub fn encoding_hint(&self, rel_path: &str) -> Option<EncodingHint> {
+        load_encoding_hint(&self.root, rel_path)
+    }
+
+    pub fn remember_encoding(&self, rel_path: &str, hint: EncodingHint) -> Result<()> {
+        store_encoding_hint(&self.root, rel_path, hint)
+    }
+
+    pub fn forget_encoding(&self, rel_path: &str) -> Result<()> {
+        remove_encoding_hint(&self.root, rel_path)
+    }
+
     pub fn display_name(&self) -> &str {
         &self.marker.name
     }
@@ -139,7 +246,11 @@ impl Notebook {
     }
 
     pub fn contains_path(&self, path: &Path) -> bool {
-        let root = self.root.to_string_lossy().replace('\\', "/").to_lowercase();
+        let root = self
+            .root
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_lowercase();
         let candidate = path.to_string_lossy().replace('\\', "/").to_lowercase();
         candidate == root || candidate.starts_with(&format!("{root}/"))
     }
@@ -210,11 +321,7 @@ impl Notebook {
             });
         }
 
-        entries.sort_by(|a, b| {
-            a.rel_path
-                .to_lowercase()
-                .cmp(&b.rel_path.to_lowercase())
-        });
+        entries.sort_by(|a, b| a.rel_path.to_lowercase().cmp(&b.rel_path.to_lowercase()));
         Ok(entries)
     }
 
@@ -235,6 +342,13 @@ impl Notebook {
         let path = self.note_path(rel_path)?;
         let bytes = doc::encode_text(text, encoding, bom, eol)?;
         write_atomic(&path, &bytes)?;
+        tracing::info!(
+            notebook = %self.display_name(),
+            path = %rel_path,
+            bytes = bytes.len(),
+            encoding = encoding.label(),
+            "保存笔记"
+        );
         Ok(())
     }
 
@@ -248,6 +362,12 @@ impl Notebook {
             fs::create_dir_all(parent)?;
         }
         write_atomic(&path, text.as_bytes())?;
+        tracing::info!(
+            notebook = %self.display_name(),
+            path = %rel,
+            bytes = text.len(),
+            "新建笔记"
+        );
         Ok(rel)
     }
 
@@ -287,6 +407,12 @@ impl Notebook {
             fs::create_dir_all(parent)?;
         }
         fs::rename(&source, &target)?;
+        tracing::info!(
+            notebook = %self.display_name(),
+            from = %from,
+            to = %target_rel,
+            "重命名条目"
+        );
         Ok(target_rel)
     }
 
@@ -316,6 +442,13 @@ impl Notebook {
             source,
         })?;
         write_atomic(&item_dir.join("meta.json"), &meta)?;
+        tracing::info!(
+            notebook = %self.display_name(),
+            path = %item.rel_path,
+            kind = ?kind,
+            trash_id = %item.id,
+            "删除条目到回收站"
+        );
         Ok(item)
     }
 
@@ -347,7 +480,8 @@ impl Notebook {
     pub fn restore_trash_item(&self, id: &Uuid) -> Result<String> {
         let item_dir = self.trash_dir().join(id.to_string());
         let meta_path = item_dir.join("meta.json");
-        let bytes = fs::read(&meta_path).map_err(|_| Error::NotFound(meta_path.display().to_string()))?;
+        let bytes =
+            fs::read(&meta_path).map_err(|_| Error::NotFound(meta_path.display().to_string()))?;
         let item: TrashItem = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
             path: meta_path,
             source,
@@ -360,6 +494,13 @@ impl Notebook {
         }
         fs::rename(item_dir.join("payload"), &target)?;
         fs::remove_dir_all(&item_dir)?;
+        tracing::info!(
+            notebook = %self.display_name(),
+            path = %target_rel,
+            original = %item.rel_path,
+            trash_id = %item.id,
+            "从回收站恢复条目"
+        );
         Ok(target_rel)
     }
 
@@ -492,12 +633,35 @@ fn is_reserved_name(segment: &str) -> bool {
 }
 
 fn is_windows_device_name(segment: &str) -> bool {
-    let stem = segment.split('.').next().unwrap_or(segment).to_ascii_uppercase();
+    let stem = segment
+        .split('.')
+        .next()
+        .unwrap_or(segment)
+        .to_ascii_uppercase();
     matches!(
         stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     )
 }
 
@@ -624,7 +788,13 @@ mod tests {
     #[test]
     fn rejects_paths_outside_notebook() {
         let (root, notebook) = temp_notebook();
-        for bad in ["../escape.md", "/abs.md", r"C:\abs.md", ".mdwork/x.md", "assets/x.md"] {
+        for bad in [
+            "../escape.md",
+            "/abs.md",
+            r"C:\abs.md",
+            ".mdwork/x.md",
+            "assets/x.md",
+        ] {
             assert!(notebook.normalize_note_rel(bad).is_err(), "{bad}");
         }
         fs::remove_dir_all(root).unwrap();
@@ -644,5 +814,39 @@ mod tests {
         assert!(notebook.note_path("note.md").unwrap().exists());
         assert!(notebook.list_trash().unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn encoding_sidecar_round_trip_and_default_cleanup() {
+        let (root, notebook) = temp_notebook();
+        let hint = EncodingHint {
+            encoding: TextEncoding::Gb18030,
+            bom: false,
+            eol: Eol::Crlf,
+        };
+        notebook.remember_encoding("工作/笔记.md", hint).unwrap();
+        assert_eq!(notebook.encoding_hint("工作\\笔记.md"), Some(hint));
+        assert!(notebook.encoding_path().exists());
+
+        notebook
+            .remember_encoding("工作/笔记.md", EncodingHint::default())
+            .unwrap();
+        assert_eq!(notebook.encoding_hint("工作/笔记.md"), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn decode_uses_remembered_encoding_and_eol() {
+        let (bytes, _, errors) = encoding_rs::GB18030.encode("第一行\r\n第二行");
+        assert!(!errors);
+        let hint = EncodingHint {
+            encoding: TextEncoding::Gb18030,
+            bom: false,
+            eol: Eol::Crlf,
+        };
+        let decoded = doc::decode_with_hint(&bytes, Some(hint));
+        assert_eq!(decoded.encoding, TextEncoding::Gb18030);
+        assert_eq!(decoded.eol, Eol::Crlf);
+        assert_eq!(decoded.text, "第一行\n第二行");
     }
 }

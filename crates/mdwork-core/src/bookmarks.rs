@@ -42,10 +42,9 @@ impl Bookmarks {
     pub fn load(notebook: &Notebook) -> Result<Self> {
         let path = notebook.bookmarks_path();
         match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-                path,
-                source,
-            }),
+            Ok(bytes) => {
+                serde_json::from_slice(&bytes).map_err(|source| Error::Json { path, source })
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(err) => Err(Error::Io(err)),
         }
@@ -121,9 +120,8 @@ impl Bookmarks {
     }
 
     pub fn remove(&mut self, rel_path: &str, heading: Option<&str>) {
-        self.entries.retain(|entry| {
-            !(entry.rel_path == rel_path && entry.heading.as_deref() == heading)
-        });
+        self.entries
+            .retain(|entry| !(entry.rel_path == rel_path && entry.heading.as_deref() == heading));
     }
 
     /// Keeps bookmarks attached when a note or folder is renamed.
@@ -141,8 +139,11 @@ impl Bookmarks {
     /// Drops entries whose notes no longer exist; returns the removed count.
     pub fn prune(&mut self, notebook: &Notebook) -> usize {
         let before = self.entries.len();
-        self.entries
-            .retain(|entry| notebook.note_path(&entry.rel_path).is_ok_and(|path| path.is_file()));
+        self.entries.retain(|entry| {
+            notebook
+                .note_path(&entry.rel_path)
+                .is_ok_and(|path| path.is_file())
+        });
         before - self.entries.len()
     }
 }

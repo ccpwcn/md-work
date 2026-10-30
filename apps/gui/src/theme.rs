@@ -15,18 +15,16 @@ pub fn apply(config: &AppConfig, window: &mut Window, cx: &mut App) {
 
     let ui_font = config.ui_font.trim().to_string();
     let ui_size = config.ui_font_size.clamp(10.0, 32.0);
+    let note_font = config.note_font.trim().to_string();
+    let note_size = config.note_font_size.clamp(10.0, 32.0);
     Theme::update(cx, move |theme| {
         if !ui_font.is_empty() {
             theme.font_family = SharedString::from(ui_font);
         }
         theme.font_size = px(ui_size);
+        if !note_font.is_empty() {
+            theme.mono_font_family = SharedString::from(note_font);
+        }
+        theme.mono_font_size = px(note_size);
     });
-}
-
-pub fn next(preference: ThemePreference) -> ThemePreference {
-    match preference {
-        ThemePreference::System => ThemePreference::Light,
-        ThemePreference::Light => ThemePreference::Dark,
-        ThemePreference::Dark => ThemePreference::System,
-    }
 }

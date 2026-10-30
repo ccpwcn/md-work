@@ -1,14 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use mdwork_export::exporter::{ExportFormat, ExportEvent, ExportRequest, run};
 use mdwork_export::ExportOptions;
+use mdwork_export::exporter::{ExportEvent, ExportFormat, ExportRequest, run};
 
 fn workspace(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "mdwork-export-test-{name}-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("mdwork-export-test-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("assets")).unwrap();
     dir
@@ -82,7 +80,11 @@ fn exports_pdf_and_png() {
     assert_eq!(outcome.paths, vec![dir.join("out.pdf")]);
     let bytes = fs::read(&outcome.paths[0]).unwrap();
     assert!(bytes.starts_with(b"%PDF"));
-    assert!(events.iter().any(|event| matches!(event, ExportEvent::Done { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ExportEvent::Done { .. }))
+    );
     assert!(!dir.join("tmp-pdf").exists());
 
     let request = ExportRequest {
@@ -117,7 +119,10 @@ fn exports_page_files_and_split_names() {
             png_page_files: true,
             ..Default::default()
         },
-        markdown: Some(format!("{}\n{}", "# 第一页\n\n正文。\n", "# 第二页\n\n正文。\n")),
+        markdown: Some(format!(
+            "{}\n{}",
+            "# 第一页\n\n正文。\n", "# 第二页\n\n正文。\n"
+        )),
         temp_dir: None,
     };
     let outcome = run(&request, &mut |_| {}).expect("png export");

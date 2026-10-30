@@ -34,8 +34,8 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 
 #[cfg(windows)]
 fn replace(tmp: &Path, target: &Path) -> io::Result<()> {
+    use windows::Win32::Storage::FileSystem::{REPLACE_FILE_FLAGS, ReplaceFileW};
     use windows::core::{HSTRING, PCWSTR};
-    use windows::Win32::Storage::FileSystem::{ReplaceFileW, REPLACE_FILE_FLAGS};
 
     if !target.exists() {
         return fs::rename(tmp, target);

@@ -1,7 +1,7 @@
 //! LaTeX math → Typst → SVG, for the live preview.
 
-use anyhow::{anyhow, Result};
-use typst_svg::{svg, SvgOptions};
+use anyhow::{Result, anyhow};
+use typst_svg::{SvgOptions, svg};
 
 use crate::pdf::compile_document;
 

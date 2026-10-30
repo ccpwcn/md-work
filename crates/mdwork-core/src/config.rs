@@ -22,6 +22,22 @@ pub enum ThemePreference {
     System,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PanelDock {
+    #[default]
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PanelArrangement {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -29,6 +45,10 @@ pub struct AppConfig {
     pub workspace_root: String,
     pub language: String,
     pub theme: ThemePreference,
+    pub panel_dock: PanelDock,
+    pub panel_arrangement: PanelArrangement,
+    /// Sidebar width in logical pixels.
+    pub panel_width: f32,
     pub ui_font: String,
     pub note_font: String,
     pub ui_font_size: f32,
@@ -49,6 +69,9 @@ impl Default for AppConfig {
             workspace_root: String::new(),
             language: "zh-CN".to_string(),
             theme: ThemePreference::System,
+            panel_dock: PanelDock::Left,
+            panel_arrangement: PanelArrangement::Horizontal,
+            panel_width: 300.0,
             ui_font: String::new(),
             note_font: String::new(),
             ui_font_size: 15.0,
@@ -68,7 +91,11 @@ impl AppConfig {
         match Self::load_from(&path) {
             Ok(config) => config,
             Err(err) => {
-                eprintln!("md-work: config ignored ({}): {err}", path.display());
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "配置读取失败，使用默认值"
+                );
                 Self::default()
             }
         }
@@ -77,10 +104,11 @@ impl AppConfig {
     pub fn load_from(path: &Path) -> Result<Self> {
         match fs::read(path) {
             Ok(bytes) => {
-                let config: Self = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
+                let config: Self =
+                    serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
                 Ok(config)
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -93,6 +121,36 @@ impl AppConfig {
     }
 
     pub fn save_to(&self, path: &Path) -> Result<()> {
+        let result = self.write_to(path);
+        match &result {
+            Ok(()) => tracing::info!(
+                path = %path.display(),
+                theme = ?self.theme,
+                language = %self.language,
+                ui_font = %self.ui_font,
+                note_font = %self.note_font,
+                ui_font_size = self.ui_font_size,
+                note_font_size = self.note_font_size,
+                autosave = self.autosave,
+                code_wrap = self.code_wrap,
+                panel_dock = ?self.panel_dock,
+                panel_arrangement = ?self.panel_arrangement,
+                image_host = ?self.image_host,
+                mcp_http = self.mcp_http,
+                mcp_port = self.mcp_port,
+                workspace_root = %self.workspace_root,
+                "保存设置"
+            ),
+            Err(err) => tracing::error!(
+                path = %path.display(),
+                error = %err,
+                "保存设置失败"
+            ),
+        }
+        result
+    }
+
+    fn write_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }

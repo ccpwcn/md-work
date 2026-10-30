@@ -6,21 +6,21 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use mdwork_core::bookmarks::Bookmarks;
-use mdwork_core::doc::{self, Eol};
-use mdwork_core::permissions::Scope;
 use mdwork_core::TextEncoding;
+use mdwork_core::bookmarks::Bookmarks;
+use mdwork_core::doc::{self, EncodingHint, Eol};
+use mdwork_core::permissions::Scope;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorData;
 use rmcp::service::RequestContext;
-use rmcp::{tool, tool_router, Json, RoleServer};
+use rmcp::{Json, RoleServer, tool, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::server::{
-    conflict, core_error, doc_dirty, export_failed, hash_conflict, invalid_params, io_error,
-    not_found, require_scope, MdworkServer,
+    MdworkServer, conflict, core_error, doc_dirty, export_failed, hash_conflict, invalid_params,
+    io_error, not_found, require_scope,
 };
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -161,7 +161,11 @@ struct ExportNoteOut {
 impl MdworkServer {
     #[tool(
         description = "Create or replace a note (atomic); pass expected_sha256 to avoid overwriting concurrent edits",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
     )]
     fn write_note(
         &self,
@@ -184,7 +188,7 @@ impl MdworkServer {
             let existing = read_existing(&path, &rel)?;
             let (encoding, bom, eol, bytes_before, sha_before) = match &existing {
                 Some(bytes) => {
-                    let decoded = doc::decode(bytes);
+                    let decoded = doc::decode_with_hint(bytes, notebook.encoding_hint(&rel));
                     (
                         decoded.encoding,
                         decoded.bom,
@@ -213,6 +217,11 @@ impl MdworkServer {
                 }
                 mdwork_core::atomic::write_atomic(&path, &encoded)
                     .map_err(|err| io_error(&rel, err))?;
+                if let Err(err) =
+                    notebook.remember_encoding(&rel, EncodingHint { encoding, bom, eol })
+                {
+                    tracing::warn!(path = %rel, error = %err, "写入编码记录失败");
+                }
             }
             entry.bytes = Some(encoded.len() as u64);
 
@@ -230,7 +239,11 @@ impl MdworkServer {
 
     #[tool(
         description = "Append text to a note, preserving its encoding and EOL style",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
     )]
     fn append_note(
         &self,
@@ -253,7 +266,7 @@ impl MdworkServer {
             let existing = read_existing(&path, &rel)?;
             let (mut text, encoding, bom, eol, bytes_before, sha_before) = match &existing {
                 Some(bytes) => {
-                    let decoded = doc::decode(bytes);
+                    let decoded = doc::decode_with_hint(bytes, notebook.encoding_hint(&rel));
                     (
                         decoded.text,
                         decoded.encoding,
@@ -270,7 +283,14 @@ impl MdworkServer {
                     if args.create == Some(false) {
                         return Err(not_found(format!("note not found: {rel}")));
                     }
-                    (String::new(), TextEncoding::Utf8, false, Eol::Lf, 0, String::new())
+                    (
+                        String::new(),
+                        TextEncoding::Utf8,
+                        false,
+                        Eol::Lf,
+                        0,
+                        String::new(),
+                    )
                 }
             };
             check_expected(&rel, args.expected_sha256.as_deref(), &sha_before)?;
@@ -286,6 +306,10 @@ impl MdworkServer {
             }
             mdwork_core::atomic::write_atomic(&path, &encoded)
                 .map_err(|err| io_error(&rel, err))?;
+            if let Err(err) = notebook.remember_encoding(&rel, EncodingHint { encoding, bom, eol })
+            {
+                tracing::warn!(path = %rel, error = %err, "写入编码记录失败");
+            }
             entry.bytes = Some(encoded.len() as u64);
 
             Ok(Json(AppendNoteOut {
@@ -301,7 +325,11 @@ impl MdworkServer {
 
     #[tool(
         description = "Move or rename a note, keeping its bookmarks attached",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
     )]
     fn move_note(
         &self,
@@ -324,7 +352,12 @@ impl MdworkServer {
             if self.note_is_dirty(&id, &to) {
                 return Err(doc_dirty(&to));
             }
+            let hint = notebook.encoding_hint(&from);
             let moved = notebook.rename_entry(&from, &to).map_err(core_error)?;
+            if let Some(hint) = hint {
+                let _ = notebook.remember_encoding(&moved, hint);
+            }
+            let _ = notebook.forget_encoding(&from);
 
             let mut marks = Bookmarks::load(&notebook).map_err(core_error)?;
             marks.rekey(&from, &moved);
@@ -340,7 +373,11 @@ impl MdworkServer {
 
     #[tool(
         description = "Delete a note: to the notebook trash by default, permanently with the delete:permanent scope",
-        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     fn delete_note(
         &self,
@@ -381,6 +418,9 @@ impl MdworkServer {
             let mut marks = Bookmarks::load(&notebook).map_err(core_error)?;
             marks.prune(&notebook);
             marks.save(&notebook).map_err(core_error)?;
+            if permanent {
+                let _ = notebook.forget_encoding(&rel);
+            }
 
             Ok(Json(DeleteNoteOut {
                 notebook_id: id.to_string(),
@@ -393,7 +433,11 @@ impl MdworkServer {
 
     #[tool(
         description = "Bookmark a note or one of its headings (idempotent)",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     fn add_bookmark(
         &self,
@@ -413,7 +457,7 @@ impl MdworkServer {
             let Some(bytes) = read_existing(&path, &rel)? else {
                 return Err(not_found(format!("note not found: {rel}")));
             };
-            let text = doc::decode(&bytes).text;
+            let text = doc::decode_with_hint(&bytes, notebook.encoding_hint(&rel)).text;
             let note_title = path
                 .file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
@@ -478,7 +522,11 @@ impl MdworkServer {
 
     #[tool(
         description = "Export a note to PDF/PNG under the app exports folder and return the file paths",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
     )]
     fn export_note(
         &self,
@@ -508,7 +556,7 @@ impl MdworkServer {
                 Some(raw) => {
                     return Err(invalid_params(format!(
                         "unsupported export format: {raw} (use pdf or png)"
-                    )))
+                    )));
                 }
             };
             let dir = self

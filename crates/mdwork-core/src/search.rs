@@ -3,14 +3,14 @@
 //! The scan is deliberately on demand: notebooks stay plain folders and no
 //! index has to be maintained or invalidated.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use regex::{Regex, RegexBuilder};
 
+use crate::Result;
 use crate::doc::decode;
 use crate::notebook::{Entry, EntryKind, Notebook};
-use crate::Result;
 
 pub const DEFAULT_MAX_HITS: usize = 500;
 const MAX_LINE_CHARS: usize = 240;
@@ -20,6 +20,8 @@ pub struct SearchQuery {
     pub text: String,
     pub case_sensitive: bool,
     pub regex: bool,
+    /// Match the note's relative path instead of its contents.
+    pub filename: bool,
 }
 
 impl SearchQuery {
@@ -28,6 +30,7 @@ impl SearchQuery {
             text: text.into(),
             case_sensitive: false,
             regex: false,
+            filename: false,
         }
     }
 
@@ -89,6 +92,32 @@ where
         .collect();
 
     let matcher = Matcher::new(query)?;
+    if query.filename {
+        outcome.files = entries.len();
+        for entry in &entries {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let rel = entry.rel_path.replace('\\', "/");
+            if let Some(column) = matcher.position(&rel) {
+                outcome.hits.push(SearchHit {
+                    notebook_id: notebook.marker.id,
+                    notebook_name: notebook.display_name().to_string(),
+                    rel_path: entry.rel_path.clone(),
+                    line: 1,
+                    column,
+                    text: truncate_line(&rel),
+                });
+                if outcome.hits.len() >= max_hits {
+                    outcome.truncated = true;
+                    break;
+                }
+            }
+        }
+        outcome.cancelled = cancel.load(Ordering::Relaxed) && !outcome.truncated;
+        return Ok(outcome);
+    }
+
     let hits = Mutex::new(Vec::new());
     let files = Mutex::new(0usize);
     let stop = AtomicBool::new(false);
@@ -159,7 +188,10 @@ where
 }
 
 enum Matcher {
-    Plain { needle: String, case_sensitive: bool },
+    Plain {
+        needle: String,
+        case_sensitive: bool,
+    },
     Regex(Regex),
 }
 
@@ -186,7 +218,9 @@ impl Matcher {
     /// Returns the one-based column of the first match in `line`.
     fn position(&self, line: &str) -> Option<usize> {
         match self {
-            Self::Regex(regex) => regex.find(line).map(|found| char_column(line, found.start())),
+            Self::Regex(regex) => regex
+                .find(line)
+                .map(|found| char_column(line, found.start())),
             Self::Plain {
                 needle,
                 case_sensitive,
@@ -205,7 +239,9 @@ impl Matcher {
 }
 
 fn char_column(line: &str, byte: usize) -> usize {
-    line.get(..byte).map(|head| head.chars().count() + 1).unwrap_or(1)
+    line.get(..byte)
+        .map(|head| head.chars().count() + 1)
+        .unwrap_or(1)
 }
 
 fn truncate_line(line: &str) -> String {
@@ -235,9 +271,13 @@ mod tests {
         notebook.create_note("二.md", "没有关键词\n").unwrap();
 
         let cancel = AtomicBool::new(false);
-        let outcome =
-            search_notebook(&notebook, &SearchQuery::new("todo"), &cancel, DEFAULT_MAX_HITS)
-                .unwrap();
+        let outcome = search_notebook(
+            &notebook,
+            &SearchQuery::new("todo"),
+            &cancel,
+            DEFAULT_MAX_HITS,
+        )
+        .unwrap();
         assert_eq!(outcome.files, 2);
         assert_eq!(outcome.hits.len(), 1);
         let hit = &outcome.hits[0];
@@ -262,6 +302,23 @@ mod tests {
         query.case_sensitive = true;
         let outcome = search_notebook(&notebook, &query, &cancel, DEFAULT_MAX_HITS).unwrap();
         assert!(outcome.hits.is_empty());
+        std::fs::remove_dir_all(&notebook.root).unwrap();
+    }
+
+    #[test]
+    fn filename_mode_matches_paths_only() {
+        let notebook = temp_notebook();
+        notebook
+            .create_note("计划/设计.md", "没有关键词\n")
+            .unwrap();
+        notebook.create_note("随笔.md", "计划\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut query = SearchQuery::new("设计");
+        query.filename = true;
+        let outcome = search_notebook(&notebook, &query, &cancel, DEFAULT_MAX_HITS).unwrap();
+        assert_eq!(outcome.hits.len(), 1);
+        assert_eq!(outcome.hits[0].rel_path, "计划/设计.md");
+        assert_eq!(outcome.files, 2);
         std::fs::remove_dir_all(&notebook.root).unwrap();
     }
 

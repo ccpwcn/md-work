@@ -12,9 +12,9 @@ use mdwork_core::permissions::{Scope, TokenRecord};
 use mdwork_core::workspace::Workspace;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{
-    ErrorCode, ErrorData, ListResourceTemplatesResult, ListResourcesResult,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-    Resource, ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig,
+    ErrorCode, ErrorData, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::{MaybeSendFuture, RequestContext};
 use rmcp::{RoleServer, ServerHandler};
@@ -89,10 +89,7 @@ impl MdworkServer {
 
     /// Resolves the caller: fixed for stdio, per-request for HTTP where the
     /// auth middleware stores the verified record in the request extensions.
-    pub(crate) fn token(
-        &self,
-        ctx: &RequestContext<RoleServer>,
-    ) -> Result<TokenRecord, ErrorData> {
+    pub(crate) fn token(&self, ctx: &RequestContext<RoleServer>) -> Result<TokenRecord, ErrorData> {
         if let Some(record) = &self.ctx.stdio_token {
             return Ok(record.clone());
         }
@@ -219,13 +216,11 @@ impl MdworkServer {
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
         self.exec(ctx, "resources/templates", |token, _entry| {
             require_scope(token, Scope::Read)?;
-            let template = ResourceTemplate::new(
-                "mdwork://notebook/{notebook_id}/note/{note_path}",
-                "note",
-            )
-            .with_title("md-work note")
-            .with_description("A Markdown note; note_path is percent-encoded.")
-            .with_mime_type("text/markdown");
+            let template =
+                ResourceTemplate::new("mdwork://notebook/{notebook_id}/note/{note_path}", "note")
+                    .with_title("md-work note")
+                    .with_description("A Markdown note; note_path is percent-encoded.")
+                    .with_mime_type("text/markdown");
             Ok(ListResourceTemplatesResult::with_all_items(vec![template]))
         })
     }
@@ -243,8 +238,7 @@ impl MdworkServer {
             let notebook = self.notebook(token, &notebook_id.to_string())?;
             let rel = self.note_rel(&notebook, token, &raw_path)?;
             let path = notebook.note_path(&rel).map_err(core_error)?;
-            let bytes = std::fs::read(&path)
-                .map_err(|err| io_error(&rel, err))?;
+            let bytes = std::fs::read(&path).map_err(|err| io_error(&rel, err))?;
             let decoded = mdwork_core::doc::decode(&bytes);
             entry.notebook = Some(notebook_id);
             entry.notebook_name = Some(notebook.display_name().to_string());
@@ -285,9 +279,8 @@ impl ServerHandler for MdworkServer {
         &self,
         _request: Option<PaginatedRequestParams>,
         ctx: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListResourceTemplatesResult, ErrorData>>
-           + MaybeSendFuture
-           + '_ {
+    ) -> impl Future<Output = Result<ListResourceTemplatesResult, ErrorData>> + MaybeSendFuture + '_
+    {
         std::future::ready(self.list_resource_templates_sync(&ctx))
     }
 
@@ -479,7 +472,10 @@ mod tests {
     fn note_uri_rejects_other_shapes() {
         assert!(parse_note_uri("mdwork://notebook/x/note/a.md").is_none());
         assert!(parse_note_uri("file:///C:/a.md").is_none());
-        assert!(parse_note_uri("mdwork://notebook/00000000-0000-0000-0000-000000000000/note/").is_none());
+        assert!(
+            parse_note_uri("mdwork://notebook/00000000-0000-0000-0000-000000000000/note/")
+                .is_none()
+        );
     }
 
     #[test]

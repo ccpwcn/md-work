@@ -9,11 +9,11 @@ mod tools_write;
 
 pub use audit::{AuditEntry, AuditLog};
 pub use auth::TokenStore;
-pub use server::{
-    MdworkServer, ServerContext, CODE_CONFLICT, CODE_DOC_DIRTY, CODE_EXPORT_FAILED, CODE_FORBIDDEN,
-    CODE_INVALID_PATH, CODE_NOT_FOUND, CODE_UNAUTHORIZED,
-};
 pub use server::resolve_workspace_root;
+pub use server::{
+    CODE_CONFLICT, CODE_DOC_DIRTY, CODE_EXPORT_FAILED, CODE_FORBIDDEN, CODE_INVALID_PATH,
+    CODE_NOT_FOUND, CODE_UNAUTHORIZED, MdworkServer, ServerContext,
+};
 
 use std::sync::Arc;
 
@@ -60,9 +60,13 @@ pub async fn serve_http_with_ctx(ctx: Arc<ServerContext>, port: u16) -> Result<(
         Default::default(),
         StreamableHttpServerConfig::default(),
     );
-    let router = axum::Router::new().nest_service("/mcp", service).layer(
-        middleware::from_fn_with_state(ctx.clone(), require_bearer_token),
-    );
+    let router =
+        axum::Router::new()
+            .nest_service("/mcp", service)
+            .layer(middleware::from_fn_with_state(
+                ctx.clone(),
+                require_bearer_token,
+            ));
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
@@ -114,7 +118,8 @@ async fn require_bearer_token(
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
-    let verified: Option<TokenRecord> = presented.and_then(|raw| ctx.tokens.verify(raw.trim()).ok());
+    let verified: Option<TokenRecord> =
+        presented.and_then(|raw| ctx.tokens.verify(raw.trim()).ok());
     match verified {
         Some(record) => {
             request.extensions_mut().insert(record);

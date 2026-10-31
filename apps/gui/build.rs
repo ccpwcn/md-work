@@ -1,13 +1,30 @@
 use std::path::Path;
 
-const VERSION_MAJOR: u64 = 1;
-const VERSION_MINOR: u64 = 0;
-const VERSION_PATCH: u64 = 0;
-
 // gpui-pre already embeds a Win32 manifest (dpiAware true/pm, PerMonitorV2,
 // Common-Controls v6, SegmentHeap). Embedding a second one here makes link.exe
 // fail with CVT1100 (duplicate MANIFEST resource), so this script only adds
 // icon and version-info resources.
+//
+// VERSIONINFO 与 Cargo.toml `[workspace.package].version`（经 version.workspace）
+// 保持同一来源，当前首个可用版本为 1.0.0。
+
+fn pkg_version_parts() -> (u64, u64, u64) {
+    let text = env!("CARGO_PKG_VERSION");
+    let mut parts = text.split('.');
+    let major = parts
+        .next()
+        .and_then(|s| s.parse().ok())
+        .expect("CARGO_PKG_VERSION major");
+    let minor = parts
+        .next()
+        .and_then(|s| s.parse().ok())
+        .expect("CARGO_PKG_VERSION minor");
+    let patch = parts
+        .next()
+        .and_then(|s| s.parse().ok())
+        .expect("CARGO_PKG_VERSION patch");
+    (major, minor, patch)
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -17,9 +34,11 @@ fn main() {
         return;
     }
 
-    let version = VERSION_MAJOR << 48 | VERSION_MINOR << 32 | VERSION_PATCH << 16;
-    let version_text = format!("{VERSION_MAJOR}.{VERSION_MINOR}.{VERSION_PATCH}");
+    let (major, minor, patch) = pkg_version_parts();
+    let version = major << 48 | minor << 32 | patch << 16;
+    let version_text = format!("{major}.{minor}.{patch}");
     let version_quad = format!("{version_text}.0");
+
 
     let mut res = winresource::WindowsResource::new();
     res.set_language(0x0409)

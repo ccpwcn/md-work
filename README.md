@@ -1,5 +1,9 @@
 # 墨笺 · MoJiān
 
+**当前版本：1.0.0**（首个可用版本）。版本号以根目录 `Cargo.toml` 的
+`[workspace.package].version` 为唯一来源；各 crate、CLI `--version`、设置页、
+Windows 资源 VERSIONINFO、NSIS 安装包与标签 `v*` 均与之对齐。
+
 Windows 优先的纯 Rust Markdown 笔记本。界面由 GPUI + gpui-component 驱动，渲染与导出基于 comrak 与 Typst，
 MCP 服务基于 rmcp。笔记以普通文件夹保存，不锁定数据格式。
 
@@ -107,15 +111,28 @@ cargo test --workspace
 
 ### 图标与打包
 
+本机功能测得差不多、准备验证「安装包 → 安装 → 使用」时，一键打安装包：
+
+```powershell
+.\scripts\build-installer.ps1            # 含 cargo test + release + NSIS
+.\scripts\build-installer.ps1 -SkipTests # 开发态已测过可跳过测试
+```
+
+本机 NSIS 默认找 `E:\apps\nsis`（也可用 `-NsisHome` / 环境变量 `NSIS_HOME`）。产物在
+`dist\md-work-<version>-setup.exe`。
+
+也可分步调用 xtask：
+
 ```powershell
 cargo run -p xtask -- icon        # 由 assets/icon.svg 生成 assets/icon.ico
 cargo run -p xtask -- package     # release 构建 → dist/md-work-1.0.0-win64/ 与 .zip
 cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.0.0-setup.exe
 ```
 
-`installer` 需要安装 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH 或默认安装目录）。
-安装脚本位于 `packaging/nsis/md-work.nsi`，按用户安装、HKCU 卸载信息、卸载时保留笔记与设置。
-安装程序包含「选择工作区」页面（默认 `我的文档\md-work`），首次安装时把所选文件夹写入
+`installer` 需要 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH、`NSIS_HOME`、
+`E:\apps\nsis` 或默认 Program Files 目录）。安装脚本位于 `packaging/nsis/md-work.nsi`，
+按用户安装、HKCU 卸载信息、卸载时保留笔记与设置。安装程序包含「选择工作区」页面
+（默认 `我的文档\md-work`），首次安装时把所选文件夹写入
 `HKCU\Software\md-work\WorkspaceRoot`；应用只在 `config\runtime.toml`（以及旧版 `config.json`）
 尚无工作区时采用该值，随后写回完整配置，升级不会覆盖现有设置。支持 `/S` 静默安装（不弹页面，
 直接使用默认工作区）。

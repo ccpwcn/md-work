@@ -155,8 +155,9 @@ Section "主程序" SEC_MAIN
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\卸载 ${APP_NAME}.lnk" "$INSTDIR\uninstall.exe"
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
 
-  WriteRegStr HKCU "${APP_KEY}" "DisplayName" "${APP_NAME} (${APP_SLUG})"
+  WriteRegStr HKCU "${APP_KEY}" "DisplayName" "${APP_NAME} ${APP_SLUG} ${VERSION}"
   WriteRegStr HKCU "${APP_KEY}" "DisplayVersion" "${VERSION}"
+
   WriteRegStr HKCU "${APP_KEY}" "Publisher" "${APP_PUBLISHER}"
   WriteRegStr HKCU "${APP_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE}"
   WriteRegStr HKCU "${APP_KEY}" "InstallLocation" "$INSTDIR"

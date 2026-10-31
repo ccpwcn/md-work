@@ -163,13 +163,20 @@ fn find_makensis() -> Option<PathBuf> {
     {
         return Some(PathBuf::from("makensis"));
     }
-    [
-        r"C:\Program Files (x86)\NSIS\makensis.exe",
-        r"C:\Program Files\NSIS\makensis.exe",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|path| path.is_file())
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("NSIS_HOME") {
+        candidates.push(PathBuf::from(home).join("makensis.exe"));
+    }
+    candidates.extend(
+        [
+            r"E:\apps\nsis\makensis.exe",
+            r"C:\Program Files (x86)\NSIS\makensis.exe",
+            r"C:\Program Files\NSIS\makensis.exe",
+        ]
+        .into_iter()
+        .map(PathBuf::from),
+    );
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 fn installer() -> Result<()> {

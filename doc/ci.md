@@ -57,11 +57,11 @@ cargo test --workspace
 
 # 2. 更新版本号（Cargo.toml 的 workspace.package.version）并提交
 # 3. 打标签并同时推送两个远端
-git tag v1.0.1
+git tag v1.0.0
 git push origin main
 git push gitee main
-git push origin v1.0.1
-git push gitee v1.0.1
+git push origin v1.0.0
+git push gitee v1.0.0
 ```
 
 标签推送后，GitHub Actions 与 Gitee Go 各自构建安装包并创建 Release。安装包保
@@ -70,6 +70,10 @@ git push gitee v1.0.1
 ## 本地打包（只有明确要求时才执行）
 
 ```powershell
+# 推荐：一键（默认 NSIS = E:\apps\nsis）
+.\scripts\build-installer.ps1 -SkipTests
+
+# 或分步
 cargo run -p xtask -- package     # 便携 zip
 cargo run -p xtask -- installer   # NSIS 安装包（需要 makensis）
 ```

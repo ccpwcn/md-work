@@ -4714,7 +4714,7 @@ dependencies = [
 
 [[package]]
 name = "md-work-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4730,7 +4730,7 @@ dependencies = [
 
 [[package]]
 name = "md-work-gui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "futures",
  "gpui-kit",
@@ -4751,7 +4751,7 @@ dependencies = [
 
 [[package]]
 name = "mdwork-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "chardetng",
@@ -4775,7 +4775,7 @@ dependencies = [
 
 [[package]]
 name = "mdwork-export"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "image",
@@ -4797,7 +4797,7 @@ dependencies = [
 
 [[package]]
 name = "mdwork-log"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "tracing",
  "tracing-appender",
@@ -4806,7 +4806,7 @@ dependencies = [
 
 [[package]]
 name = "mdwork-mcp"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4825,7 +4825,7 @@ dependencies = [
 
 [[package]]
 name = "mdwork-render"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "comrak",
  "mdwork-core",
@@ -10742,7 +10742,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "ico",

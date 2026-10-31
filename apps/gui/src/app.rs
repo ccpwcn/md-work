@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{ElementExt as _, InteractiveElementExt as _, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{
@@ -57,6 +57,7 @@ mod prompt;
 mod render;
 mod searcher;
 mod settings;
+mod toolbar;
 mod util;
 mod workspace;
 mod zip;
@@ -306,6 +307,31 @@ struct WorkspaceConfirm {
     kind: FolderKind,
 }
 
+enum DeleteConfirmKind {
+    Trash {
+        notebook_id: Uuid,
+        rel_path: String,
+    },
+    CloseExternal {
+        index: usize,
+    },
+}
+
+struct DeleteConfirm {
+    kind: DeleteConfirmKind,
+    title: String,
+}
+
+/// In-progress tab drag reorder (custom drag; no OS copy cursor).
+struct TabDrag {
+    /// Index into `docs`.
+    from: usize,
+    pointer_x: f32,
+    /// Visible-slot insert position (0..=visible.len()).
+    insert_at: usize,
+    started: bool,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PaletteCommand {
     NewNote,
@@ -409,6 +435,11 @@ pub struct AppShell {
     changed: Option<Arc<Mutex<Receiver<Vec<PathBuf>>>>>,
     window_handle: gpui_kit::AnyWindowHandle,
     tree_scroll: UniformListScrollHandle,
+    tab_scroll: ScrollHandle,
+    tab_drag: Option<TabDrag>,
+    /// Doc indices and their latest painted bounds for tab hit-testing.
+    tab_bounds: Arc<Mutex<Vec<(usize, Bounds<Pixels>)>>>,
+    delete_confirm: Option<DeleteConfirm>,
     /// Briefly highlight this notebook entry after reveal/scroll.
     flash_rel: Option<(Uuid, String)>,
     preview_mode: bool,
@@ -659,6 +690,10 @@ impl AppShell {
             changed: None,
             window_handle: window.window_handle(),
             tree_scroll: UniformListScrollHandle::new(),
+            tab_scroll: ScrollHandle::new(),
+            tab_drag: None,
+            tab_bounds: Arc::new(Mutex::new(Vec::new())),
+            delete_confirm: None,
             flash_rel: None,
             preview_mode: false,
             preview_cache: None,
@@ -800,6 +835,7 @@ impl Render for AppShell {
             .min_h_0()
             .v_flex()
             .child(self.render_tabs(cx))
+            .children(self.render_doc_toolbar(cx))
             .children(self.render_conflict(cx))
             .child(div().flex_1().min_h_0().child(self.render_editor(cx)))
             .into_any_element();
@@ -896,6 +932,9 @@ impl Render for AppShell {
         if self.panel_resize.is_some() {
             root = root.child(self.render_panel_resize_listeners(cx));
         }
+        if self.tab_drag.is_some() {
+            root = root.child(self.render_tab_drag_listeners(cx));
+        }
 
         if self.export.is_some() {
             root = root.child(self.render_export_dialog(cx));
@@ -914,6 +953,9 @@ impl Render for AppShell {
         }
         if self.workspace_confirm.is_some() {
             root = root.child(self.render_workspace_confirm(cx));
+        }
+        if self.delete_confirm.is_some() {
+            root = root.child(self.render_delete_confirm(cx));
         }
         if self.palette.is_some() {
             root = root.child(self.render_palette(cx));

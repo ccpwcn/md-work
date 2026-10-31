@@ -7,6 +7,7 @@ mod highlight;
 mod install_hint;
 mod mcp_server;
 mod preview;
+mod print;
 mod single_instance;
 mod theme;
 

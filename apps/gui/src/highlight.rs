@@ -89,19 +89,53 @@ fn highlight(language: &str, code: &str, dark: bool) -> Vec<(Range<usize>, Highl
             if len == 0 {
                 continue;
             }
+            let end = offset + len;
+            // Syntect slices must reassemble the source; if they diverge, fall
+            // back to unstyled text rather than feed GPUI invalid runs.
+            if end > code.len() || !code.is_char_boundary(offset) || !code.is_char_boundary(end) {
+                return Vec::new();
+            }
             spans.push((
-                offset..offset + len,
+                offset..end,
                 HighlightStyle {
                     color: Some(color_to_hsla(style.foreground)),
                     ..Default::default()
                 },
             ));
-            offset += len;
+            offset = end;
         }
+    }
+    if offset != code.len() {
+        return Vec::new();
     }
     spans
 }
 
 fn color_to_hsla(color: Color) -> gpui_kit::Hsla {
     rgba(u32::from_be_bytes([color.r, color.g, color.b, color.a])).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::highlight;
+
+    #[::core::prelude::v1::test]
+    fn rust_highlights_cover_source_exactly() {
+        let code = "fn main() {\n    println!(\"你好\");\n}\n";
+        let spans = highlight("rust", code, true);
+        assert!(!spans.is_empty());
+        let mut offset = 0usize;
+        for (range, _) in &spans {
+            assert_eq!(range.start, offset);
+            assert!(code.is_char_boundary(range.start));
+            assert!(code.is_char_boundary(range.end));
+            offset = range.end;
+        }
+        assert_eq!(offset, code.len());
+    }
+
+    #[::core::prelude::v1::test]
+    fn unknown_language_yields_no_spans() {
+        assert!(highlight("not-a-real-lang-xyz", "x = 1", false).is_empty());
+    }
 }

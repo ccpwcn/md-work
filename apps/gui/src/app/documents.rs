@@ -506,6 +506,62 @@ impl AppShell {
             .collect()
     }
 
+    /// Reorders a tab among the currently visible tabs.
+    ///
+    /// `from` is a `docs` index; `insert_at` is a slot in the visible list
+    /// before the move (`0..=visible.len()`). Entities are cloned handles only
+    /// — never recreated — so editors keep their undo history and view state.
+    pub(super) fn reorder_visible_tab(
+        &mut self,
+        from: usize,
+        insert_at: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let visible = self.visible_tabs(cx);
+        let Some(from_pos) = visible.iter().position(|&idx| idx == from) else {
+            return;
+        };
+        let mut order = visible.clone();
+        let moved = order.remove(from_pos);
+        // `insert_at` is relative to the pre-remove list.
+        let dest = if insert_at > from_pos {
+            insert_at - 1
+        } else {
+            insert_at
+        };
+        let dest = dest.min(order.len());
+        if dest == from_pos {
+            return;
+        }
+        order.insert(dest, moved);
+
+        let active_id = self
+            .active_doc
+            .and_then(|i| self.docs.get(i).map(|doc| doc.entity_id()));
+        let visible_set: HashSet<usize> = visible.into_iter().collect();
+        let mut order_iter = order.into_iter();
+        let mut new_docs = Vec::with_capacity(self.docs.len());
+        let mut new_active = None;
+        for (old_idx, doc) in self.docs.iter().enumerate() {
+            let next = if visible_set.contains(&old_idx) {
+                let src = order_iter
+                    .next()
+                    .expect("visible order must cover every visible slot");
+                self.docs[src].clone()
+            } else {
+                doc.clone()
+            };
+            if active_id == Some(next.entity_id()) {
+                new_active = Some(new_docs.len());
+            }
+            new_docs.push(next);
+        }
+        self.docs = new_docs;
+        self.active_doc = new_active;
+        self.persist_session(cx);
+        cx.notify();
+    }
+
     /// Closes several tabs at once; indices must be ascending.
     pub(super) fn close_docs(&mut self, indices: &[usize], cx: &mut Context<Self>) {
         for &index in indices.iter().rev() {

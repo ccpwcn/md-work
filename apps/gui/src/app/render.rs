@@ -441,16 +441,6 @@ impl AppShell {
     }
 
     pub(super) fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut bar = div()
-            .h(px(36.))
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background);
-
         let shell = cx.entity();
         let visible = self.visible_tabs(cx);
         let rename_label = t!("tree.rename").to_string();
@@ -459,14 +449,31 @@ impl AppShell {
         let close_left_label = t!("tabs.close_left").to_string();
         let close_right_label = t!("tabs.close_right").to_string();
         let close_all_label = t!("tabs.close_all").to_string();
+        let adopt_label = t!("external.save_into").to_string();
+        let drag_from = self.tab_drag.as_ref().map(|d| d.from);
+        let insert_at = self.tab_drag.as_ref().filter(|d| d.started).map(|d| d.insert_at);
+        let primary = cx.theme().primary;
+        let tab_bounds = self.tab_bounds.clone();
 
-        for (index, doc) in self.docs.iter().enumerate() {
-            let doc = doc.read(cx);
-            if doc.notebook_id.is_some() && doc.notebook_id != self.active_notebook {
-                continue;
-            }
+        // Clear stale bounds; each tab re-registers on paint.
+        if let Ok(mut bounds) = tab_bounds.lock() {
+            bounds.clear();
+        }
+
+        let mut tabs_row = div()
+            .id("tabs-inner")
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .overflow_x_scroll()
+            .lock_scroll_axis()
+            .track_scroll(&self.tab_scroll);
+
+        for (position, &index) in visible.iter().enumerate() {
+            let doc = self.docs[index].read(cx);
             let active = self.active_doc == Some(index);
-            let title = if doc.notebook_id.is_none() {
+            let is_external = doc.notebook_id.is_none();
+            let title = if is_external {
                 format!("外部 · {}", doc.rel_path)
             } else {
                 doc.title()
@@ -485,7 +492,6 @@ impl AppShell {
                 cx.theme().muted_foreground
             };
             let hover = cx.theme().list_hover;
-            let position = visible.iter().position(|&seen| seen == index).unwrap_or(0);
             let left_tabs = visible[..position].to_vec();
             let right_tabs = visible[position + 1..].to_vec();
             let other_tabs: Vec<usize> = visible
@@ -496,15 +502,30 @@ impl AppShell {
             let rename_target = doc.notebook_id.map(|id| (id, doc.rel_path.clone()));
             let can_rename = rename_target.is_some();
             let shell = shell.clone();
-            let visible = visible.clone();
+            let visible_tabs = visible.clone();
             let rename_label = rename_label.clone();
             let close_label = close_label.clone();
             let close_others_label = close_others_label.clone();
             let close_left_label = close_left_label.clone();
             let close_right_label = close_right_label.clone();
             let close_all_label = close_all_label.clone();
+            let adopt_label = adopt_label.clone();
+            let dragging = drag_from == Some(index);
+            let show_insert_before = insert_at == Some(position);
 
-            bar = bar.child(
+            if show_insert_before {
+                tabs_row = tabs_row.child(
+                    div()
+                        .w(px(2.))
+                        .h(px(22.))
+                        .rounded_sm()
+                        .bg(primary)
+                        .flex_none(),
+                );
+            }
+
+            let bounds_store = tab_bounds.clone();
+            tabs_row = tabs_row.child(
                 div()
                     .id(format!("tab-{index}"))
                     .flex()
@@ -513,14 +534,61 @@ impl AppShell {
                     .px_2()
                     .py_1()
                     .rounded_md()
-                    .cursor_pointer()
+                    .cursor(if dragging {
+                        CursorStyle::ClosedHand
+                    } else {
+                        CursorStyle::PointingHand
+                    })
+                    .opacity(if dragging { 0.55 } else { 1.0 })
                     .bg(if active {
                         cx.theme().list_active
                     } else {
                         cx.theme().transparent
                     })
                     .hover(move |style| style.bg(hover))
-                    .on_click(cx.listener(move |this, _, _, cx| this.activate_doc(index, cx)))
+                    .on_prepaint({
+                        let bounds_store = bounds_store.clone();
+                        move |bounds, _, _| {
+                            if let Ok(mut list) = bounds_store.lock() {
+                                list.push((index, bounds));
+                            }
+                        }
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            this.begin_tab_drag(index, f32::from(event.position.x), cx);
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, _, cx| {
+                            this.close_doc(index, cx);
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            // Fast click may finish before global drag listeners mount.
+                            if this.tab_drag.as_ref().is_some_and(|d| !d.started) {
+                                this.tab_drag = None;
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.tab_drag.as_ref().is_some_and(|d| d.started) {
+                            return;
+                        }
+                        this.tab_drag = None;
+                        this.activate_doc(index, cx);
+                        let pos = this
+                            .visible_tabs(cx)
+                            .iter()
+                            .position(|&seen| seen == index)
+                            .unwrap_or(0);
+                        this.tab_scroll.scroll_to_item(pos);
+                    }))
                     .context_menu(move |menu, _, _| {
                         let rename_shell = shell.clone();
                         let close_shell = shell.clone();
@@ -528,12 +596,13 @@ impl AppShell {
                         let left_shell = shell.clone();
                         let right_shell = shell.clone();
                         let all_shell = shell.clone();
+                        let adopt_shell = shell.clone();
                         let rename_target = rename_target.clone();
                         let other_tabs = other_tabs.clone();
                         let left_tabs = left_tabs.clone();
                         let right_tabs = right_tabs.clone();
-                        let all_tabs = visible.clone();
-                        menu.item(
+                        let all_tabs = visible_tabs.clone();
+                        let mut menu = menu.item(
                             PopupMenuItem::new(rename_label.clone())
                                 .disabled(!can_rename)
                                 .on_click(move |_, window, cx| {
@@ -546,45 +615,58 @@ impl AppShell {
                                         this.begin_rename(notebook_id, &rel_path, window, cx);
                                     });
                                 }),
-                        )
-                        .separator()
-                        .item(
-                            PopupMenuItem::new(close_label.clone()).on_click(move |_, _, cx| {
-                                close_shell.update(cx, |this, cx| this.close_doc(index, cx));
-                            }),
-                        )
-                        .item(
-                            PopupMenuItem::new(close_others_label.clone())
-                                .disabled(other_tabs.is_empty())
-                                .on_click(move |_, _, cx| {
-                                    others_shell
-                                        .update(cx, |this, cx| this.close_docs(&other_tabs, cx));
+                        );
+                        if is_external {
+                            menu = menu.item(
+                                PopupMenuItem::new(adopt_label.clone()).on_click(
+                                    move |_, window, cx| {
+                                        adopt_shell.update(cx, |this, cx| {
+                                            this.activate_doc(index, cx);
+                                            this.save_external_into_notebook(window, cx);
+                                        });
+                                    },
+                                ),
+                            );
+                        }
+                        menu.separator()
+                            .item(
+                                PopupMenuItem::new(close_label.clone()).on_click(move |_, _, cx| {
+                                    close_shell.update(cx, |this, cx| this.close_doc(index, cx));
                                 }),
-                        )
-                        .item(
-                            PopupMenuItem::new(close_left_label.clone())
-                                .disabled(left_tabs.is_empty())
-                                .on_click(move |_, _, cx| {
-                                    left_shell
-                                        .update(cx, |this, cx| this.close_docs(&left_tabs, cx));
-                                }),
-                        )
-                        .item(
-                            PopupMenuItem::new(close_right_label.clone())
-                                .disabled(right_tabs.is_empty())
-                                .on_click(move |_, _, cx| {
-                                    right_shell
-                                        .update(cx, |this, cx| this.close_docs(&right_tabs, cx));
-                                }),
-                        )
-                        .separator()
-                        .item(
-                            PopupMenuItem::new(close_all_label.clone()).on_click(
+                            )
+                            .item(
+                                PopupMenuItem::new(close_others_label.clone())
+                                    .disabled(other_tabs.is_empty())
+                                    .on_click(move |_, _, cx| {
+                                        others_shell.update(cx, |this, cx| {
+                                            this.close_docs(&other_tabs, cx)
+                                        });
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new(close_left_label.clone())
+                                    .disabled(left_tabs.is_empty())
+                                    .on_click(move |_, _, cx| {
+                                        left_shell
+                                            .update(cx, |this, cx| this.close_docs(&left_tabs, cx));
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new(close_right_label.clone())
+                                    .disabled(right_tabs.is_empty())
+                                    .on_click(move |_, _, cx| {
+                                        right_shell.update(cx, |this, cx| {
+                                            this.close_docs(&right_tabs, cx)
+                                        });
+                                    }),
+                            )
+                            .separator()
+                            .item(PopupMenuItem::new(close_all_label.clone()).on_click(
                                 move |_, _, cx| {
-                                    all_shell.update(cx, |this, cx| this.close_docs(&all_tabs, cx));
+                                    all_shell
+                                        .update(cx, |this, cx| this.close_docs(&all_tabs, cx));
                                 },
-                            ),
-                        )
+                            ))
                     })
                     .child(
                         div()
@@ -604,34 +686,42 @@ impl AppShell {
             );
         }
 
+        if insert_at == Some(visible.len()) {
+            tabs_row = tabs_row.child(
+                div()
+                    .w(px(2.))
+                    .h(px(22.))
+                    .rounded_sm()
+                    .bg(primary)
+                    .flex_none(),
+            );
+        }
+
+        let mut bar = div()
+            .h(px(36.))
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .child(
+                div()
+                    .id("tabs-scroll")
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_x_hidden()
+                    .child(tabs_row),
+            );
+
         if let Some(index) = self.active_doc {
-            let toggle_label = if self.preview_mode {
-                t!("preview.edit").to_string()
-            } else {
-                t!("preview.show").to_string()
-            };
-            let (bookmark_target, is_external) = {
+            let bookmark_target = {
                 let doc = self.docs[index].read(cx);
-                (
-                    doc.notebook_id.map(|id| (id, doc.rel_path.clone())),
-                    doc.notebook_id.is_none(),
-                )
+                doc.notebook_id.map(|_| doc.rel_path.clone())
             };
-            bar = bar.child(div().flex_1());
-            if is_external {
-                bar = bar.child(
-                    Button::new("btn-adopt-external")
-                        .ghost()
-                        .compact()
-                        .label(t!("external.save_into").to_string())
-                        .tooltip(t!("external.save_into_hint").to_string())
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.save_external_into_notebook(window, cx)
-                        })),
-                );
-            }
-            if let Some((_, rel_path)) = &bookmark_target {
-                let starred = self.bookmarks.note(rel_path).is_some();
+            if let Some(rel_path) = bookmark_target {
+                let starred = self.bookmarks.note(&rel_path).is_some();
                 bar = bar.child(
                     Button::new("btn-bookmark-note")
                         .ghost()
@@ -641,44 +731,95 @@ impl AppShell {
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_note_bookmark(cx))),
                 );
             }
-            bar = bar.child(
-                Button::new("btn-toggle-preview")
-                    .ghost()
-                    .compact()
-                    .label(toggle_label)
-                    .tooltip("Ctrl+T".to_string())
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_preview(window, cx))),
-            );
-            if self.preview_mode {
-                let copy_label = if self.copied {
-                    t!("preview.copied").to_string()
-                } else {
-                    t!("preview.copy").to_string()
-                };
-                let wrap_label = if self.config.code_wrap {
-                    t!("preview.wrap").to_string()
-                } else {
-                    t!("preview.nowrap").to_string()
-                };
-                bar = bar
-                    .child(
-                        Button::new("btn-toggle-wrap")
-                            .ghost()
-                            .compact()
-                            .label(wrap_label)
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_code_wrap(cx))),
-                    )
-                    .child(
-                        Button::new("btn-copy-preview")
-                            .ghost()
-                            .compact()
-                            .label(copy_label)
-                            .on_click(cx.listener(|this, _, _, cx| this.copy_preview(cx))),
-                    );
-            }
         }
 
         bar.into_any_element()
+    }
+
+    pub(super) fn begin_tab_drag(&mut self, index: usize, x: f32, cx: &mut Context<Self>) {
+        let visible = self.visible_tabs(cx);
+        let Some(pos) = visible.iter().position(|&seen| seen == index) else {
+            return;
+        };
+        self.tab_drag = Some(TabDrag {
+            from: index,
+            pointer_x: x,
+            insert_at: pos,
+            started: false,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn update_tab_drag(&mut self, x: f32, cx: &mut Context<Self>) {
+        let Some(drag) = self.tab_drag.as_ref() else {
+            return;
+        };
+        let started = drag.started || (x - drag.pointer_x).abs() > 6.0;
+        if !started {
+            return;
+        }
+        let insert_at = self.insert_slot_for_x(x);
+        let drag = self.tab_drag.as_mut().expect("tab drag checked above");
+        let changed = !drag.started || drag.insert_at != insert_at;
+        drag.started = true;
+        drag.pointer_x = x;
+        drag.insert_at = insert_at;
+        if changed {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn end_tab_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.tab_drag.take() else {
+            return;
+        };
+        if drag.started {
+            self.reorder_visible_tab(drag.from, drag.insert_at, cx);
+        }
+        cx.notify();
+    }
+
+    fn insert_slot_for_x(&self, x: f32) -> usize {
+        let Ok(bounds) = self.tab_bounds.lock() else {
+            return 0;
+        };
+        if bounds.is_empty() {
+            return 0;
+        }
+        for (slot, (_index, bound)) in bounds.iter().enumerate() {
+            let mid = f32::from(bound.origin.x) + f32::from(bound.size.width) * 0.5;
+            if x < mid {
+                return slot;
+            }
+        }
+        bounds.len()
+    }
+
+    pub(super) fn render_tab_drag_listeners(&self, cx: &mut Context<Self>) -> AnyElement {
+        let shell = cx.entity().downgrade();
+        canvas(
+            |_bounds, _window, _cx| {},
+            move |_bounds, _state, window, _cx| {
+                let mover = shell.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
+                    let x = f32::from(event.position.x);
+                    if let Some(shell) = mover.upgrade() {
+                        let _ = shell.update(cx, |this, cx| this.update_tab_drag(x, cx));
+                    }
+                });
+                window.on_mouse_event(move |_event: &MouseUpEvent, _phase, _window, cx| {
+                    if let Some(shell) = shell.upgrade() {
+                        let _ = shell.update(cx, |this, cx| this.end_tab_drag(cx));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(0.))
+        .h(px(0.))
+        .into_any_element()
     }
 
     pub(super) fn render_editor(&mut self, cx: &mut Context<Self>) -> AnyElement {

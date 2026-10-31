@@ -62,6 +62,9 @@ impl AppShell {
         self.sidebar_rows.clear();
         self.active_notebook = None;
         self.tree_scroll = UniformListScrollHandle::new();
+        self.tab_scroll = ScrollHandle::new();
+        self.tab_drag = None;
+        self.delete_confirm = None;
         self.flash_rel = None;
         self.preview_cache = None;
         self.outline.clear();

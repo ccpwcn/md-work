@@ -173,8 +173,9 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
             text_style.font_size = px((context.body_size - 2.0).max(10.0)).into();
             let spans =
                 crate::highlight::code_spans(language.as_deref(), &code_text, theme.is_dark());
-            let styled = StyledText::new(code_text.clone())
-                .with_default_highlights(&text_style, spans.as_ref().clone());
+            let spans = flatten_highlights(&code_text, spans.as_ref().clone());
+            let styled =
+                StyledText::new(code_text.clone()).with_default_highlights(&text_style, spans);
             let body: AnyElement = if context.wrap_code {
                 div()
                     .id(code_block_id(&code_text, true))
@@ -515,11 +516,68 @@ fn styled_inlines(inlines: &[Inline], style: &InlineStyle, weight: FontWeight) -
     text_style.font_family = style.family.clone();
     text_style.font_size = px(style.size).into();
     text_style.font_weight = weight;
+    // Nested inlines (bold+code, link+emphasis, …) emit overlapping ranges;
+    // GPUI's StyledText::with_default_highlights requires a non-overlapping
+    // partition of the text or it panics with "invalid text run".
+    let highlights = flatten_highlights(&text, highlights);
     StyledContent {
         text,
         style: text_style,
         highlights,
     }
+}
+
+/// Merge overlapping / unsorted highlight ranges into a sorted, non-overlapping
+/// list. Later styles win on conflicts via [`HighlightStyle::highlight`].
+/// Ranges that are empty, past `text`, or not on UTF-8 char boundaries are dropped.
+fn flatten_highlights(
+    text: &str,
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    if highlights.is_empty() || text.is_empty() {
+        return Vec::new();
+    }
+
+    let text_len = text.len();
+    let mut bounds = Vec::with_capacity(highlights.len() * 2);
+    let mut layers = Vec::with_capacity(highlights.len());
+    for (range, style) in highlights {
+        let start = range.start.min(text_len);
+        let end = range.end.min(text_len);
+        if start >= end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            continue;
+        }
+        bounds.push(start);
+        bounds.push(end);
+        layers.push((start..end, style));
+    }
+    if layers.is_empty() {
+        return Vec::new();
+    }
+    bounds.sort_unstable();
+    bounds.dedup();
+
+    let mut out = Vec::new();
+    for window in bounds.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start >= end {
+            continue;
+        }
+        let mut merged: Option<HighlightStyle> = None;
+        for (range, style) in &layers {
+            if range.start <= start && range.end >= end {
+                merged = Some(match merged {
+                    Some(prev) => prev.highlight(*style),
+                    None => *style,
+                });
+            }
+        }
+        if let Some(style) = merged {
+            out.push((start..end, style));
+        }
+    }
+    out
 }
 
 fn append_inlines(
@@ -834,5 +892,112 @@ pub fn collect_images(ir: &PreviewIr, visit: &mut impl FnMut(&str)) {
 
     for block in &ir.blocks {
         walk_block(block, visit);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Avoid `use super::*`: `gpui_kit::*` re-exports `gpui::test`, which would
+    // shadow the std `#[test]` attribute and recurse during expansion.
+    use super::{
+        FontStyle, FontWeight, HighlightStyle, Inline, InlineStyle, SharedString,
+        flatten_highlights, styled_inlines,
+    };
+    use std::ops::Range;
+
+    fn sample_style() -> InlineStyle {
+        InlineStyle {
+            foreground: gpui_kit::rgb(0x111111).into(),
+            muted: gpui_kit::rgb(0x666666).into(),
+            link: gpui_kit::rgb(0x0066cc).into(),
+            code_background: gpui_kit::rgb(0xeeeeee).into(),
+            code_foreground: gpui_kit::rgb(0x111111).into(),
+            family: SharedString::from("sans"),
+            size: 16.0,
+        }
+    }
+
+    /// Mirrors GPUI's `StyledText::with_runs` invariant: run lengths must be
+    /// char-boundary slices that never overlap.
+    fn assert_valid_highlight_partition(text: &str, highlights: &[(Range<usize>, HighlightStyle)]) {
+        let mut ix = 0usize;
+        for (range, _) in highlights {
+            assert!(
+                range.start >= ix,
+                "highlights must be sorted and non-overlapping: {range:?} after {ix}"
+            );
+            assert!(text.is_char_boundary(range.start));
+            assert!(text.is_char_boundary(range.end));
+            assert!(range.end <= text.len());
+            assert!(range.start < range.end);
+            ix = range.end;
+        }
+        let mut cursor = 0usize;
+        for (range, _) in highlights {
+            let _ = &text[cursor..range.start];
+            let _ = &text[range.start..range.end];
+            cursor = range.end;
+        }
+        let _ = &text[cursor..];
+    }
+
+    #[::core::prelude::v1::test]
+    fn nested_strong_and_code_highlights_are_partitioned() {
+        let inlines = [Inline::Strong(vec![
+            Inline::Text("bold ".into()),
+            Inline::Code("code".into()),
+            Inline::Text(" more".into()),
+        ])];
+        let styled = styled_inlines(&inlines, &sample_style(), FontWeight::NORMAL);
+        assert!(styled.text.contains("code"));
+        assert_valid_highlight_partition(&styled.text, &styled.highlights);
+        for (i, (a, _)) in styled.highlights.iter().enumerate() {
+            for (b, _) in styled.highlights.iter().skip(i + 1) {
+                assert!(a.end <= b.start || b.end <= a.start);
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn nested_link_emphasis_highlights_are_partitioned() {
+        let inlines = [Inline::Link {
+            url: "https://example.com".into(),
+            title: None,
+            children: vec![Inline::Emphasis(vec![Inline::Text("click".into())])],
+        }];
+        let styled = styled_inlines(&inlines, &sample_style(), FontWeight::NORMAL);
+        assert_eq!(styled.text, "click");
+        assert_valid_highlight_partition(&styled.text, &styled.highlights);
+    }
+
+    #[::core::prelude::v1::test]
+    fn flatten_merges_overlap_and_drops_bad_ranges() {
+        let text = "你好世界";
+        let bad = vec![
+            (
+                0..text.len(),
+                HighlightStyle {
+                    font_weight: Some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+            ),
+            (
+                0..text.chars().next().unwrap().len_utf8(),
+                HighlightStyle {
+                    color: Some(gpui_kit::rgb(0xff0000).into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                1..text.len(),
+                HighlightStyle {
+                    font_style: Some(FontStyle::Italic),
+                    ..Default::default()
+                },
+            ),
+        ];
+        let flat = flatten_highlights(text, bad);
+        assert_valid_highlight_partition(text, &flat);
+        assert!(!flat.is_empty());
     }
 }

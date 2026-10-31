@@ -6,7 +6,7 @@ use std::path::Path;
 // icon and version-info resources.
 //
 // VERSIONINFO 与 Cargo.toml `[workspace.package].version`（经 version.workspace）
-// 保持同一来源，当前首个可用版本为 1.0.0。
+// 保持同一来源，当前版本见 Cargo.toml `[workspace.package].version`。
 
 fn pkg_version_parts() -> (u64, u64, u64) {
     let text = env!("CARGO_PKG_VERSION");

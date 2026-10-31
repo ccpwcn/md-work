@@ -1130,6 +1130,102 @@ tabs.close_right:
 tabs.close_all:
   en: "Close all"
   zh-CN: "关闭全部"
+toolbar.image:
+  en: "Insert image"
+  zh-CN: "插入图片"
+toolbar.image_pick:
+  en: "Choose image files"
+  zh-CN: "选择图片文件"
+toolbar.image_none:
+  en: "No supported image selected"
+  zh-CN: "未选中支持的图片"
+toolbar.image_needs_notebook:
+  en: "Images can only be inserted into notebook notes"
+  zh-CN: "仅笔记本内的笔记可插入图片"
+toolbar.undo:
+  en: "Undo (Ctrl+Z)"
+  zh-CN: "撤销 (Ctrl+Z)"
+toolbar.redo:
+  en: "Redo (Ctrl+Y)"
+  zh-CN: "重做 (Ctrl+Y)"
+toolbar.heading:
+  en: "Heading"
+  zh-CN: "标题"
+toolbar.heading_n:
+  en: "Heading %{n}"
+  zh-CN: "%{n} 级标题"
+toolbar.heading_clear:
+  en: "Clear heading"
+  zh-CN: "清除标题"
+toolbar.bold:
+  en: "Bold"
+  zh-CN: "加粗"
+toolbar.italic:
+  en: "Italic"
+  zh-CN: "斜体"
+toolbar.strike:
+  en: "Strikethrough"
+  zh-CN: "删除线"
+toolbar.ul:
+  en: "Bullet list"
+  zh-CN: "无序列表"
+toolbar.ol:
+  en: "Numbered list"
+  zh-CN: "有序列表"
+toolbar.todo:
+  en: "Task list"
+  zh-CN: "待办列表"
+toolbar.code:
+  en: "Inline code"
+  zh-CN: "行内代码"
+toolbar.code_block:
+  en: "Code block"
+  zh-CN: "代码块"
+toolbar.math:
+  en: "Inline math"
+  zh-CN: "行内公式"
+toolbar.math_block:
+  en: "Math block"
+  zh-CN: "公式块"
+toolbar.quote:
+  en: "Quote"
+  zh-CN: "引用"
+toolbar.link:
+  en: "Link"
+  zh-CN: "超链接"
+toolbar.table:
+  en: "Table"
+  zh-CN: "表格"
+toolbar.find:
+  en: "Find in note"
+  zh-CN: "页内搜索"
+toolbar.more:
+  en: "More"
+  zh-CN: "更多"
+toolbar.export:
+  en: "Export"
+  zh-CN: "导出"
+toolbar.print:
+  en: "Print"
+  zh-CN: "打印"
+toolbar.print_done:
+  en: "Sent to printer"
+  zh-CN: "已发送到打印机"
+toolbar.delete:
+  en: "Delete"
+  zh-CN: "删除"
+toolbar.delete_confirm:
+  en: "Move this note to the trash?"
+  zh-CN: "将这篇笔记移到回收站？"
+toolbar.delete_external_confirm:
+  en: "Close this external file tab?"
+  zh-CN: "关闭这个外部文件页签？"
+toolbar.delete_yes:
+  en: "Delete"
+  zh-CN: "删除"
+toolbar.delete_cancel:
+  en: "Cancel"
+  zh-CN: "取消"
 tree.move_external:
   en: "External files have no notebook; save them into a notebook first."
   zh-CN: "外部文件不属于任何笔记本，请先另存到笔记本。"

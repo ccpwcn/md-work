@@ -237,11 +237,27 @@ impl AppShell {
                 ));
         }
 
-        let right = div()
+        let starred = (!is_external).then(|| {
+            let rel_path = doc.read(cx).rel_path.clone();
+            self.bookmarks.note(&rel_path).is_some()
+        });
+
+        let mut right = div()
             .h_flex()
             .items_center()
             .gap_0p5()
-            .flex_none()
+            .flex_none();
+        if let Some(starred) = starred {
+            right = right.child(
+                Button::new("tb-bookmark")
+                    .ghost()
+                    .compact()
+                    .label(if starred { "★" } else { "☆" })
+                    .tooltip(t!("bookmark.toggle_note").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_note_bookmark(cx))),
+            );
+        }
+        right = right
             .child(
                 Button::new("tb-search")
                     .ghost()
@@ -425,12 +441,7 @@ impl AppShell {
         cx.notify();
     }
 
-    pub(super) fn apply_heading(
-        &mut self,
-        level: u8,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn apply_heading(&mut self, level: u8, window: &mut Window, cx: &mut Context<Self>) {
         let hashes = "#".repeat(level.clamp(1, 6) as usize);
         self.transform_current_line(
             |line| {
@@ -443,11 +454,7 @@ impl AppShell {
     }
 
     pub(super) fn clear_heading(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.transform_current_line(
-            |line| strip_heading_prefix(line).to_string(),
-            window,
-            cx,
-        );
+        self.transform_current_line(|line| strip_heading_prefix(line).to_string(), window, cx);
     }
 
     pub(super) fn toggle_line_prefix(
@@ -516,11 +523,7 @@ impl AppShell {
             (d.title(), d.text(cx).to_string(), selection)
         };
         let allow_selection = !selection.is_empty();
-        let body = if allow_selection {
-            selection
-        } else {
-            full
-        };
+        let body = if allow_selection { selection } else { full };
         let result = print::print_text(&title, &body, allow_selection);
         match result {
             PrintResult::Cancelled => {}
@@ -650,9 +653,11 @@ impl AppShell {
                                     .ghost()
                                     .compact()
                                     .label(t!("toolbar.delete_cancel").to_string())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cancel_delete_confirm(cx)
-                                    })),
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.cancel_delete_confirm(cx)
+                                        }),
+                                    ),
                             )
                             .child(
                                 Button::new("delete-confirm-yes")

@@ -4,9 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::Result;
 use crate::notebook::Notebook;
 use crate::toml_io;
-use crate::Result;
 
 pub const BOOKMARKS_FORMAT: &str = "md-work/bookmarks@1";
 pub const BOOKMARKS_HEADER: &str = "# 墨笺 md-work · 笔记书签（可安全删除，重新添加即可）\n";

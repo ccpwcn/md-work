@@ -107,7 +107,10 @@ pub fn save_text(path: &Path, text: &str) -> Result<()> {
 
 /// Renames a migrated JSON file to `<name>.migrated` so it is not re-read.
 pub fn archive_legacy(path: &Path) {
-    let Some(name) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+    let Some(name) = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+    else {
         return;
     };
     let archived = path.with_file_name(format!("{name}.migrated"));

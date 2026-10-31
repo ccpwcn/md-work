@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
-use gpui_kit::base::{ElementExt as _, InteractiveElementExt as _, StyledExt as _};
+use gpui_kit::base::{ElementExt as _, InteractiveElementExt as _, ScrollableMask, StyledExt as _};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{
@@ -128,6 +128,58 @@ enum SidebarRow {
         notebook_id: Uuid,
         row: TreeRow,
     },
+}
+
+/// Sidebar focus used as the create target for title-bar / shortcut「新建笔记」.
+#[derive(Clone, PartialEq, Eq)]
+enum TreeSelection {
+    /// Notebook root (create notes at the top level).
+    NotebookRoot(Uuid),
+    /// A folder or note entry inside a notebook.
+    Entry {
+        notebook_id: Uuid,
+        rel_path: String,
+        kind: EntryKind,
+    },
+}
+
+impl TreeSelection {
+    fn notebook_id(&self) -> Uuid {
+        match self {
+            TreeSelection::NotebookRoot(id) => *id,
+            TreeSelection::Entry { notebook_id, .. } => *notebook_id,
+        }
+    }
+
+    /// Parent folder for a newly created note, or `None` for the notebook root.
+    fn create_parent(&self) -> Option<String> {
+        match self {
+            TreeSelection::NotebookRoot(_) => None,
+            TreeSelection::Entry {
+                rel_path,
+                kind: EntryKind::Folder,
+                ..
+            } => Some(rel_path.clone()),
+            TreeSelection::Entry {
+                rel_path,
+                kind: EntryKind::Note,
+                ..
+            } => rel_path
+                .rfind('/')
+                .map(|index| rel_path[..index].to_string()),
+        }
+    }
+
+    fn matches_entry(&self, notebook_id: Uuid, rel_path: &str) -> bool {
+        matches!(
+            self,
+            TreeSelection::Entry {
+                notebook_id: id,
+                rel_path: path,
+                ..
+            } if *id == notebook_id && path == rel_path
+        )
+    }
 }
 
 struct PreviewCache {
@@ -308,13 +360,8 @@ struct WorkspaceConfirm {
 }
 
 enum DeleteConfirmKind {
-    Trash {
-        notebook_id: Uuid,
-        rel_path: String,
-    },
-    CloseExternal {
-        index: usize,
-    },
+    Trash { notebook_id: Uuid, rel_path: String },
+    CloseExternal { index: usize },
 }
 
 struct DeleteConfirm {
@@ -421,6 +468,8 @@ pub struct AppShell {
     sidebar_rows: Vec<SidebarRow>,
     /// Row index whose trailing `…` dropdown is open (keeps hover actions visible).
     sidebar_row_menu: Option<usize>,
+    /// Selected sidebar entry; title-bar「新建笔记」creates under this folder.
+    tree_selection: Option<TreeSelection>,
     active_notebook: Option<Uuid>,
     docs: Vec<Entity<Doc>>,
     active_doc: Option<usize>,
@@ -670,6 +719,7 @@ impl AppShell {
             notebooks: Vec::new(),
             sidebar_rows: Vec::new(),
             sidebar_row_menu: None,
+            tree_selection: None,
             active_notebook: None,
             docs: Vec::new(),
             active_doc: None,

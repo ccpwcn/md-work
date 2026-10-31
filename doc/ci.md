@@ -55,9 +55,10 @@ Gitee Go 的云端执行器是 Linux，无法编译 GPUI/DirectX 部分，因此
 # 1. 确认功能已冻结、测试全部通过
 cargo test --workspace
 
-# 2. 更新版本号（Cargo.toml 的 workspace.package.version）并提交
-# 3. 打标签并同时推送两个远端
-git tag v1.0.0
+# 2. 升版本号（同步 Cargo.toml / NSIS / README / 验收清单 / Cargo.lock）并提交
+.\scripts\bump-version.ps1 1.1.2   # 或 -Patch / -Minor / -Major
+# 3. 打标签并同时推送两个远端（标签须与 Cargo 版本一致）
+git tag v1.1.2
 git push origin main
 git push gitee main
 git push origin v1.0.0

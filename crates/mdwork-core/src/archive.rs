@@ -14,7 +14,7 @@ use zip::read::ZipArchive;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::bookmarks::{Bookmarks, BOOKMARKS_HEADER};
+use crate::bookmarks::{BOOKMARKS_HEADER, Bookmarks};
 use crate::notebook::{
     BOOKMARKS_FILE, BOOKMARKS_FILE_LEGACY, ENCODING_FILE, ENCODING_FILE_LEGACY, EntryKind,
     MARKER_HEADER, Notebook, TRASH_META_FILE, TrashItem, sanitize_notebook_folder_name,
@@ -467,10 +467,7 @@ fn read_marker(archive: &mut ZipArchive<BufReader<File>>) -> Result<crate::noteb
     Ok(marker)
 }
 
-fn read_zip_text(
-    archive: &mut ZipArchive<BufReader<File>>,
-    path: &str,
-) -> Result<Option<String>> {
+fn read_zip_text(archive: &mut ZipArchive<BufReader<File>>, path: &str) -> Result<Option<String>> {
     let mut entry = match archive.by_name(path) {
         Ok(entry) => entry,
         Err(zip::result::ZipError::FileNotFound) => return Ok(None),
@@ -551,10 +548,11 @@ fn normalize_staged_meta(staged: &Path) -> Result<()> {
     let bookmarks_legacy = meta.join(BOOKMARKS_FILE_LEGACY);
     if !bookmarks_path.exists() && bookmarks_legacy.is_file() {
         let bytes = fs::read(&bookmarks_legacy)?;
-        let bookmarks: Bookmarks = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-            path: bookmarks_legacy.clone(),
-            source,
-        })?;
+        let bookmarks: Bookmarks =
+            serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                path: bookmarks_legacy.clone(),
+                source,
+            })?;
         toml_io::save_with_header(&bookmarks_path, BOOKMARKS_HEADER, &bookmarks)?;
         let _ = fs::remove_file(&bookmarks_legacy);
     }

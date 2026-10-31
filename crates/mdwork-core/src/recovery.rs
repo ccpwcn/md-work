@@ -56,7 +56,11 @@ fn snapshot_path(dir: &Path, note_path: &Path) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(note_path.to_string_lossy().to_lowercase().as_bytes());
     let digest = hasher.finalize();
-    let key: String = digest.iter().take(8).map(|byte| format!("{byte:02x}")).collect();
+    let key: String = digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     dir.join(format!("{key}.json"))
 }
 
@@ -120,11 +124,7 @@ pub fn clear(dir: &Path) -> Result<()> {
         return Ok(());
     };
     for entry in entries.flatten() {
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|ext| ext == "json")
-        {
+        if entry.path().extension().is_some_and(|ext| ext == "json") {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -156,14 +156,32 @@ mod tests {
     fn save_list_remove_round_trip() {
         let dir = temp_dir("roundtrip");
         let note = PathBuf::from("E:/notes/alpha.md");
-        save(&dir, &note, "alpha.md", Some(Path::new("E:/notes")), None, Some("abc"), "hello").unwrap();
+        save(
+            &dir,
+            &note,
+            "alpha.md",
+            Some(Path::new("E:/notes")),
+            None,
+            Some("abc"),
+            "hello",
+        )
+        .unwrap();
         let listed = list(&dir);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].text, "hello");
         assert_eq!(listed[0].base_sha256.as_deref(), Some("abc"));
         assert_eq!(listed[0].display_name(), "alpha.md");
 
-        save(&dir, &note, "alpha.md", Some(Path::new("E:/notes")), None, Some("abc"), "hello again").unwrap();
+        save(
+            &dir,
+            &note,
+            "alpha.md",
+            Some(Path::new("E:/notes")),
+            None,
+            Some("abc"),
+            "hello again",
+        )
+        .unwrap();
         let listed = list(&dir);
         assert_eq!(listed.len(), 1, "snapshots must replace, not duplicate");
         assert_eq!(listed[0].text, "hello again");

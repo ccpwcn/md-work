@@ -17,6 +17,9 @@ sidebar.new_notebook:
 sidebar.refresh:
   en: "Rescan"
   zh-CN: "重新扫描"
+sidebar.more:
+  en: "More"
+  zh-CN: "更多"
 sidebar.empty:
   en: "No notebooks yet"
   zh-CN: "还没有笔记本"
@@ -1130,6 +1133,12 @@ tabs.close_right:
 tabs.close_all:
   en: "Close all"
   zh-CN: "关闭全部"
+tabs.switch:
+  en: "Switch tab"
+  zh-CN: "页签切换"
+tabs.switch_empty:
+  en: "No open tabs"
+  zh-CN: "没有打开的页签"
 toolbar.image:
   en: "Insert image"
   zh-CN: "插入图片"

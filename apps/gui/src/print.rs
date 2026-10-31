@@ -4,12 +4,12 @@ use std::mem::size_of;
 
 use windows::Win32::Foundation::{GlobalFree, HWND};
 use windows::Win32::Graphics::Gdi::{
-    DeleteDC, ExtTextOutW, GetDeviceCaps, GetTextMetricsW, TEXTMETRICW, ETO_OPTIONS,
-    GET_DEVICE_CAPS_INDEX, HDC, HORZRES, VERTRES,
+    DeleteDC, ETO_OPTIONS, ExtTextOutW, GET_DEVICE_CAPS_INDEX, GetDeviceCaps, GetTextMetricsW, HDC,
+    HORZRES, TEXTMETRICW, VERTRES,
 };
 use windows::Win32::Storage::Xps::{DOCINFOW, EndDoc, EndPage, StartDocW, StartPage};
 use windows::Win32::UI::Controls::Dialogs::{
-    PrintDlgW, PD_RETURNDC, PD_SELECTION, PD_USEDEVMODECOPIESANDCOLLATE, PRINTDLGW,
+    PD_RETURNDC, PD_SELECTION, PD_USEDEVMODECOPIESANDCOLLATE, PRINTDLGW, PrintDlgW,
 };
 use windows::core::PCWSTR;
 
@@ -198,9 +198,6 @@ mod tests {
     #[test]
     fn keeps_empty_paragraphs() {
         let lines = wrap_lines("a\n\nb", 1000, |s| s.len());
-        assert_eq!(
-            lines,
-            vec!["a".to_string(), String::new(), "b".to_string()]
-        );
+        assert_eq!(lines, vec!["a".to_string(), String::new(), "b".to_string()]);
     }
 }

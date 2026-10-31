@@ -82,6 +82,29 @@ impl AppShell {
         cx.notify();
     }
 
+    /// Expand a folder without collapsing it when already open (used when selecting).
+    pub(super) fn ensure_folder_expanded(
+        &mut self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self
+            .notebooks
+            .iter_mut()
+            .find(|entry| entry.notebook.marker.id == notebook_id)
+        else {
+            return;
+        };
+        if !entry.expanded.insert(rel_path.to_string()) {
+            return;
+        }
+        let expanded = entry.expanded.clone();
+        entry.rows = build_rows(&entry.tree, &expanded);
+        self.rebuild_sidebar_rows();
+        cx.notify();
+    }
+
     pub(super) fn reveal_active(&mut self, cx: &mut Context<Self>) {
         let Some(active) = self.active_doc.and_then(|index| self.docs.get(index)) else {
             return;

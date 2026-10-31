@@ -35,9 +35,14 @@ pub fn install_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let message = panic_message(info);
-        let location = info
-            .location()
-            .map(|location| format!("{}:{}:{}", location.file(), location.line(), location.column()));
+        let location = info.location().map(|location| {
+            format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )
+        });
         let thread = std::thread::current()
             .name()
             .unwrap_or("<unnamed>")
@@ -237,10 +242,7 @@ fn upload_one(
         .and_then(|value| value.as_u64())
         .unwrap_or_default();
 
-    let title = format!(
-        "[崩溃] {} ({version}, {os}/{arch})",
-        truncate(message, 80)
-    );
+    let title = format!("[崩溃] {} ({version}, {os}/{arch})", truncate(message, 80));
     let body = format!(
         "### 自动上报的崩溃日志\n\n\
          - 版本：`{version}`\n\
@@ -252,15 +254,12 @@ fn upload_one(
          > 本 Issue 由墨笺在启动时自动创建；日志仅包含崩溃堆栈，不包含笔记内容。\n"
     );
 
-    match agent
-        .post(url)
-        .send_form(&[
-            ("access_token", token),
-            ("title", &title),
-            ("body", &body),
-            ("labels", "bug,crash"),
-        ])
-    {
+    match agent.post(url).send_form(&[
+        ("access_token", token),
+        ("title", &title),
+        ("body", &body),
+        ("labels", "bug,crash"),
+    ]) {
         Ok(response) => {
             let text = read_response(response);
             let issue = serde_json::from_str::<serde_json::Value>(&text)
@@ -350,7 +349,10 @@ fn save_disabled(dir: &Path, fingerprint: &str, reason: &str) {
 }
 
 fn mark_reported(path: &Path) {
-    let Some(name) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+    let Some(name) = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+    else {
         return;
     };
     let target = path.with_file_name(format!("{name}{REPORTED_SUFFIX}"));
@@ -394,7 +396,10 @@ fn prune(dir: &Path) {
                 .strip_suffix(".json")
                 .or_else(|| rest.strip_suffix(".json.reported"))?;
             let (millis, nanos) = stem.split_once('-')?;
-            Some((millis.parse::<u128>().ok()? * 1_000_000_000 + nanos.parse::<u128>().ok()?, path))
+            Some((
+                millis.parse::<u128>().ok()? * 1_000_000_000 + nanos.parse::<u128>().ok()?,
+                path,
+            ))
         })
         .collect();
     if files.len() <= KEEP {
@@ -438,10 +443,14 @@ mod tests {
         let first = record(&dir, "first", None, "main", "").unwrap();
         mark_reported(&first);
         assert!(!first.exists());
-        assert!(first.with_file_name(format!(
-            "{}{REPORTED_SUFFIX}",
-            first.file_name().unwrap().to_string_lossy()
-        )).is_file());
+        assert!(
+            first
+                .with_file_name(format!(
+                    "{}{REPORTED_SUFFIX}",
+                    first.file_name().unwrap().to_string_lossy()
+                ))
+                .is_file()
+        );
 
         let second = record(&dir, "second", None, "main", "").unwrap();
         assert_eq!(pending_records(&dir), vec![second]);
@@ -480,14 +489,17 @@ mod tests {
         let dir = scratch();
         let record_path = record(&dir, "boom", None, "main", "").unwrap();
         let config = config_with_token("tok-a", "ccpwcn/md-work");
-        let fingerprint = crate::doc::sha256_hex(
-            config.resolved_token().unwrap_or_default().as_bytes(),
-        );
+        let fingerprint =
+            crate::doc::sha256_hex(config.resolved_token().unwrap_or_default().as_bytes());
         save_disabled(&dir, &fingerprint, "Gitee token 无效或无权限：HTTP 401");
 
         let summary = report_pending_in(&dir, &config);
         assert_eq!((summary.reported, summary.failed), (0, 0));
-        assert!(summary.skipped.contains("已确认失效"), "{}", summary.skipped);
+        assert!(
+            summary.skipped.contains("已确认失效"),
+            "{}",
+            summary.skipped
+        );
         assert!(record_path.is_file(), "pending record must survive");
 
         std::fs::remove_dir_all(&dir).unwrap();

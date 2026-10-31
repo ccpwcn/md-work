@@ -448,7 +448,10 @@ mod tests {
 
         let empty = root.join("空目录");
         fs::create_dir_all(&empty).unwrap();
-        assert!(workspace.scan().issues.len() == 1, "quiet folders stay quiet");
+        assert!(
+            workspace.scan().issues.len() == 1,
+            "quiet folders stay quiet"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -487,7 +490,10 @@ mod tests {
         assert_eq!(Workspace::inspect(&workspace_root), FolderKind::Workspace);
         assert_eq!(Workspace::inspect(&notebook_root), FolderKind::Notebook);
 
-        assert!(fs::read_dir(&empty).unwrap().next().is_none(), "inspect must not write");
+        assert!(
+            fs::read_dir(&empty).unwrap().next().is_none(),
+            "inspect must not write"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

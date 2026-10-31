@@ -64,6 +64,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.select_tree_entry(notebook.marker.id, rel_path, EntryKind::Note, cx);
         if let Ok(path) = notebook.note_path(rel_path) {
             if let Some(index) = self.docs.iter().position(|doc| doc.read(cx).path == path) {
                 self.active_doc = Some(index);
@@ -97,7 +98,6 @@ impl AppShell {
         else {
             return;
         };
-        self.active_notebook = Some(notebook_id);
         self.open_note(&notebook, rel_path, window, cx);
     }
 
@@ -408,7 +408,7 @@ impl AppShell {
             doc.notebook_id == Some(*notebook_id) && doc.rel_path == rel_path
         }) {
             self.active_doc = Some(index);
-            self.active_notebook = Some(*notebook_id);
+            self.select_tree_entry(*notebook_id, rel_path, EntryKind::Note, cx);
             self.reveal_active(cx);
         }
     }
@@ -418,6 +418,7 @@ impl AppShell {
             return;
         }
         self.active_doc = Some(index);
+        self.sync_tree_selection_to_active_doc(cx);
         if let Some(id) = self.docs[index].read(cx).notebook_id {
             self.active_notebook = Some(id);
         }
@@ -427,7 +428,7 @@ impl AppShell {
     }
 
     pub(super) fn activate_notebook(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        self.active_notebook = Some(id);
+        self.select_tree_root(id, cx);
         if let Some(entry) = self
             .notebooks
             .iter_mut()
@@ -692,7 +693,60 @@ impl AppShell {
             self.notify_warning(t!("editor.no_notebook").to_string(), cx);
             return;
         };
-        self.new_note_in(id, None, window, cx);
+        let parent = self.new_note_parent(id, cx);
+        self.new_note_in(id, parent, window, cx);
+    }
+
+    /// Folder that title-bar / shortcut「新建笔记」should create into.
+    ///
+    /// Prefers the sidebar selection; otherwise the parent of the active note.
+    pub(super) fn new_note_parent(&self, notebook_id: Uuid, cx: &App) -> Option<String> {
+        if let Some(selection) = self
+            .tree_selection
+            .as_ref()
+            .filter(|selection| selection.notebook_id() == notebook_id)
+        {
+            return selection.create_parent();
+        }
+        self.active_rel_path(cx)
+            .and_then(|rel| rel.rfind('/').map(|index| rel[..index].to_string()))
+    }
+
+    pub(super) fn select_tree_root(&mut self, notebook_id: Uuid, cx: &mut Context<Self>) {
+        self.active_notebook = Some(notebook_id);
+        self.tree_selection = Some(TreeSelection::NotebookRoot(notebook_id));
+        cx.notify();
+    }
+
+    pub(super) fn select_tree_entry(
+        &mut self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        kind: EntryKind,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_notebook = Some(notebook_id);
+        self.tree_selection = Some(TreeSelection::Entry {
+            notebook_id,
+            rel_path: rel_path.to_string(),
+            kind,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn sync_tree_selection_to_active_doc(&mut self, cx: &App) {
+        let Some((notebook_id, rel_path)) = self.active_doc_entity().and_then(|doc| {
+            let doc = doc.read(cx);
+            doc.notebook_id
+                .map(|notebook_id| (notebook_id, doc.rel_path.clone()))
+        }) else {
+            return;
+        };
+        self.tree_selection = Some(TreeSelection::Entry {
+            notebook_id,
+            rel_path,
+            kind: EntryKind::Note,
+        });
     }
 
     pub(super) fn new_note_in(

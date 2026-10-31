@@ -7,10 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::Result;
 use crate::paths::workspaces_path;
 use crate::toml_io;
 use crate::workspace::same_path;
-use crate::Result;
 
 pub const WORKSPACES_FORMAT: &str = "md-work/workspaces@1";
 pub const REGISTRY_HEADER: &str = "# 墨笺 md-work · 工作区列表（可手动编辑，删除后重新添加即可）\n";
@@ -104,7 +104,10 @@ impl WorkspaceRegistry {
             if entry.path.trim().is_empty() {
                 return false;
             }
-            if seen.iter().any(|path| same_path(Path::new(path), Path::new(&entry.path))) {
+            if seen
+                .iter()
+                .any(|path| same_path(Path::new(path), Path::new(&entry.path)))
+            {
                 return false;
             }
             seen.push(entry.path.clone());
@@ -192,7 +195,12 @@ impl WorkspaceRegistry {
         self.workspaces
             .retain(|entry| !same_path(Path::new(&entry.path), root));
         let removed = self.workspaces.len() != before;
-        if removed && self.active.as_deref().is_some_and(|active| same_path(Path::new(active), root)) {
+        if removed
+            && self
+                .active
+                .as_deref()
+                .is_some_and(|active| same_path(Path::new(active), root))
+        {
             self.active = None;
         }
         removed
@@ -282,7 +290,10 @@ mod tests {
         let mut loaded = loaded;
         assert!(loaded.forget(Path::new(r"E:\work")));
         assert_eq!(loaded.workspaces.len(), 1);
-        assert!(loaded.active_path().is_none(), "forgetting active clears it");
+        assert!(
+            loaded.active_path().is_none(),
+            "forgetting active clears it"
+        );
         std::fs::remove_file(path).unwrap();
     }
 

@@ -725,7 +725,12 @@ impl AppConfig {
         }
         match loader.table(&root, "panels") {
             Some(panels) => {
-                loader.parsed(panels, "panels", "arrangement", &mut config.panel_arrangement);
+                loader.parsed(
+                    panels,
+                    "panels",
+                    "arrangement",
+                    &mut config.panel_arrangement,
+                );
                 loader.parsed(panels, "panels", "dock", &mut config.panel_dock);
                 loader.f32(
                     panels,
@@ -773,9 +778,19 @@ impl AppConfig {
             }
         }
         if let Some(crash) = loader.table(&root, "crash_report") {
-            loader.boolean(crash, "crash_report", "enabled", &mut config.crash_report.enabled);
+            loader.boolean(
+                crash,
+                "crash_report",
+                "enabled",
+                &mut config.crash_report.enabled,
+            );
             loader.string(crash, "crash_report", "repo", &mut config.crash_report.repo);
-            loader.string(crash, "crash_report", "token", &mut config.crash_report.token);
+            loader.string(
+                crash,
+                "crash_report",
+                "token",
+                &mut config.crash_report.token,
+            );
             loader.string(
                 crash,
                 "crash_report",
@@ -817,7 +832,10 @@ impl AppConfig {
             );
         }
         if let Some(colors) = loader.table(&root, "colors") {
-            for (name, palette) in [("light", &mut config.theme_colors.light), ("dark", &mut config.theme_colors.dark)] {
+            for (name, palette) in [
+                ("light", &mut config.theme_colors.light),
+                ("dark", &mut config.theme_colors.dark),
+            ] {
                 let section = format!("colors.{name}");
                 if let Some(table) = loader.table(colors, name) {
                     loader.palette(table, &section, palette);
@@ -870,7 +888,10 @@ impl AppConfig {
         }
         if self.right_width > 0.0 {
             out.push_str("# 右侧栏独立宽度。\n");
-            out.push_str(&format!("right_width = {}\n", f32_literal(self.right_width)));
+            out.push_str(&format!(
+                "right_width = {}\n",
+                f32_literal(self.right_width)
+            ));
         }
         out.push_str("# 侧边栏停靠：left（左）| right（右）\n");
         match self.panel_docks.uniform_value() {
@@ -945,10 +966,7 @@ impl AppConfig {
             out.push_str(&format!(
                 "# 可选颜色覆盖（#RRGGBB），留空使用内置“{name}”配色。\n"
             ));
-            out.push_str(&format!(
-                "# 可设置：{}\n",
-                COLOR_KEYS.join(", ")
-            ));
+            out.push_str(&format!("# 可设置：{}\n", COLOR_KEYS.join(", ")));
             for (key, value) in palette.entries() {
                 if let Some(value) = value {
                     out.push_str(&format!("{key} = {}\n", toml_string(value)));
@@ -966,10 +984,7 @@ fn config_dir_of(path: &Path) -> PathBuf {
     }
 }
 
-fn read_config_table(
-    path: &Path,
-    issues: &mut Vec<ConfigIssue>,
-) -> Result<Option<toml::Table>> {
+fn read_config_table(path: &Path, issues: &mut Vec<ConfigIssue>) -> Result<Option<toml::Table>> {
     match toml_io::read_table(path) {
         Ok(table) => Ok(table),
         Err(Error::Toml { source, .. }) => {
@@ -1008,7 +1023,10 @@ impl<'a> Loader<'a> {
             None => None,
             Some(toml::Value::Table(table)) => Some(table),
             Some(other) => {
-                self.issue(section, format!("应为表（table），实际为 {}", other.type_str()));
+                self.issue(
+                    section,
+                    format!("应为表（table），实际为 {}", other.type_str()),
+                );
                 None
             }
         }
@@ -1056,7 +1074,10 @@ impl<'a> Loader<'a> {
             Some(number) if (i64::from(min)..=i64::from(max)).contains(&number) => {
                 *target = number as u16;
             }
-            Some(_) => self.issue(format!("{section}.{key}"), format!("超出允许范围 {min}..={max}")),
+            Some(_) => self.issue(
+                format!("{section}.{key}"),
+                format!("超出允许范围 {min}..={max}"),
+            ),
             None => self.issue(
                 format!("{section}.{key}"),
                 format!("应为整数，实际为 {}", value.type_str()),
@@ -1195,10 +1216,7 @@ fn f32_literal(value: f32) -> String {
 
 /// TOML literal string when possible so Windows paths stay readable.
 fn toml_string(value: &str) -> String {
-    let needs_basic = value.contains('\'')
-        || value
-            .chars()
-            .any(|ch| ch.is_control() && ch != '\t');
+    let needs_basic = value.contains('\'') || value.chars().any(|ch| ch.is_control() && ch != '\t');
     if !needs_basic {
         return format!("'{value}'");
     }
@@ -1222,10 +1240,9 @@ fn toml_string(value: &str) -> String {
 fn image_host_toml(host: &ImageHost) -> String {
     match host {
         ImageHost::Local => "kind = \"local\"\n".to_string(),
-        ImageHost::PicGo { endpoint } => format!(
-            "kind = \"picgo\"\nendpoint = {}\n",
-            toml_string(endpoint)
-        ),
+        ImageHost::PicGo { endpoint } => {
+            format!("kind = \"picgo\"\nendpoint = {}\n", toml_string(endpoint))
+        }
         ImageHost::Http {
             endpoint,
             field,
@@ -1387,14 +1404,20 @@ mod tests {
         let runtime = fs::read_to_string(&path).unwrap();
         assert!(runtime.contains("dock = \"right\""));
         assert!(!runtime.contains("notes = \""));
-        assert_eq!(AppConfig::load_from(&path).unwrap().panel_docks, config.panel_docks);
+        assert_eq!(
+            AppConfig::load_from(&path).unwrap().panel_docks,
+            config.panel_docks
+        );
 
         config.set_panel_dock(PanelKind::Trash, PanelDock::Left);
         config.save_to(&path).unwrap();
         let runtime = fs::read_to_string(&path).unwrap();
         assert!(runtime.contains("trash = \"left\""));
         assert!(runtime.contains("notes = \"right\""));
-        assert_eq!(AppConfig::load_from(&path).unwrap().panel_docks, config.panel_docks);
+        assert_eq!(
+            AppConfig::load_from(&path).unwrap().panel_docks,
+            config.panel_docks
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1413,7 +1436,11 @@ mod tests {
         assert_eq!(config.panel_dock, PanelDock::Left);
         assert_eq!(config.panel_width, 300.0);
         assert!(config.image_host.is_local());
-        let keys: Vec<&str> = config.issues.iter().map(|issue| issue.key.as_str()).collect();
+        let keys: Vec<&str> = config
+            .issues
+            .iter()
+            .map(|issue| issue.key.as_str())
+            .collect();
         assert!(keys.contains(&"general.autosave"));
         assert!(keys.contains(&"panels.dock"));
         assert!(keys.contains(&"panels.width"));
@@ -1481,13 +1508,9 @@ mod tests {
         let entry = session.notebook_mut(&id);
         entry.open_notes.push("a.md".to_string());
         entry.active_note = Some("a.md".to_string());
-        entry.cursors.insert(
-            "a.md".to_string(),
-            CursorPos {
-                line: 3,
-                column: 4,
-            },
-        );
+        entry
+            .cursors
+            .insert("a.md".to_string(), CursorPos { line: 3, column: 4 });
         session.save_to(&path).unwrap();
         let loaded = Session::load_from(&path).unwrap();
         assert_eq!(loaded, session);

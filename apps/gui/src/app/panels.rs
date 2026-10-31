@@ -426,6 +426,7 @@ impl AppShell {
     }
 
     pub(super) fn render_notes_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let shell = cx.entity();
         let mut body = div().flex_1().min_h_0().v_flex().gap_1().px_2().pb_2();
 
         body = body.child(
@@ -462,14 +463,41 @@ impl AppShell {
                         })),
                 )
                 .child(
-                    Button::new("btn-sidebar-open-notebook")
+                    Button::new("btn-sidebar-more")
                         .ghost()
                         .compact()
                         .icon(IconName::Ellipsis)
-                        .tooltip(t!("sidebar.open_notebook").to_string())
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_external_notebook_prompt(window, cx)
-                        })),
+                        .tooltip(t!("sidebar.more").to_string())
+                        .dropdown_menu({
+                            let shell = shell.clone();
+                            move |menu, _, _| {
+                                let open_shell = shell.clone();
+                                let export_shell = shell.clone();
+                                menu.item(
+                                    PopupMenuItem::new(t!("sidebar.open_notebook").to_string())
+                                        .on_click(move |_, window, cx| {
+                                            open_shell.update(cx, |this, cx| {
+                                                this.open_external_notebook_prompt(window, cx);
+                                            });
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new(t!("zip.export_label").to_string())
+                                        .on_click(move |_, window, cx| {
+                                            export_shell.update(cx, |this, cx| {
+                                                let Some(id) = this.active_notebook else {
+                                                    this.notify_warning(
+                                                        t!("zip.no_notebook").to_string(),
+                                                        cx,
+                                                    );
+                                                    return;
+                                                };
+                                                this.open_zip_export(id, window, cx);
+                                            });
+                                        }),
+                                )
+                            }
+                        }),
                 ),
         );
 
@@ -1108,6 +1136,7 @@ impl AppShell {
         let rows = Arc::new(self.sidebar_rows.clone());
         let active_notebook = self.active_notebook;
         let active_rel = self.active_rel_path(cx);
+        let tree_selection = self.tree_selection.clone();
         let flash_rel = self.flash_rel.clone();
         let renaming = self.renaming.clone();
         let renaming_notebook = self.renaming_notebook.clone();
@@ -1136,6 +1165,10 @@ impl AppShell {
                         } => {
                             let notebook_id = *id;
                             let is_active = active_notebook == Some(notebook_id);
+                            let is_selected = matches!(
+                                tree_selection.as_ref(),
+                                Some(TreeSelection::NotebookRoot(id)) if *id == notebook_id
+                            );
                             let count_label = format!("{note_count} {notes_label}");
                             let chevron = if *expanded { "▾" } else { "▸" };
 
@@ -1274,7 +1307,7 @@ impl AppShell {
                                 .px_2()
                                 .rounded_md()
                                 .cursor_pointer()
-                                .bg(if is_active {
+                                .bg(if is_selected || is_active {
                                     active_bg
                                 } else {
                                     transparent_black()
@@ -1283,6 +1316,7 @@ impl AppShell {
                                 .on_click(move |_, _, cx| {
                                     activate_shell.update(cx, |this, cx| {
                                         if this.active_notebook == Some(notebook_id) {
+                                            this.select_tree_root(notebook_id, cx);
                                             this.toggle_notebook_root(notebook_id, cx);
                                         } else {
                                             this.activate_notebook(notebook_id, cx);
@@ -1349,10 +1383,13 @@ impl AppShell {
                             let notebook_id = *notebook_id;
                             let active = active_notebook == Some(notebook_id)
                                 && active_rel.as_deref() == Some(row.rel_path.as_str());
+                            let selected = tree_selection.as_ref().is_some_and(|selection| {
+                                selection.matches_entry(notebook_id, &row.rel_path)
+                            });
                             let flashing = flash_rel.as_ref().is_some_and(|(id, path)| {
                                 *id == notebook_id && path == &row.rel_path
                             });
-                            let background = if active {
+                            let background = if active || selected {
                                 active_bg
                             } else if flashing {
                                 flash_bg
@@ -1365,7 +1402,7 @@ impl AppShell {
                             } else {
                                 ""
                             };
-                            let color = if is_folder || active {
+                            let color = if is_folder || active || selected {
                                 foreground
                             } else {
                                 muted
@@ -1592,32 +1629,64 @@ impl AppShell {
                                     })
                                     .build(window, cx)
                                 })
-                                .on_click(move |_, window, cx| {
-                                    shell.update(cx, |this, cx| {
-                                        if is_folder {
-                                            this.toggle_folder(notebook_id, &rel_path, cx);
-                                        } else {
-                                            this.open_note_by_id(
-                                                notebook_id,
-                                                &rel_path,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    });
+                                .on_click({
+                                    let click_shell = shell.clone();
+                                    let click_rel = rel_path.clone();
+                                    move |_, window, cx| {
+                                        click_shell.update(cx, |this, cx| {
+                                            if is_folder {
+                                                this.select_tree_entry(
+                                                    notebook_id,
+                                                    &click_rel,
+                                                    EntryKind::Folder,
+                                                    cx,
+                                                );
+                                                this.ensure_folder_expanded(
+                                                    notebook_id,
+                                                    &click_rel,
+                                                    cx,
+                                                );
+                                            } else {
+                                                this.open_note_by_id(
+                                                    notebook_id,
+                                                    &click_rel,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        });
+                                    }
                                 })
                                 .context_menu({
                                     let build_entry_menu = build_entry_menu.clone();
                                     move |menu, _, _| (build_entry_menu)(menu)
                                 })
-                                .child(
+                                .child({
+                                    let toggle_shell = shell.clone();
+                                    let toggle_rel = rel_path.clone();
                                     div()
+                                        .id(format!("tree-chevron-{index}"))
                                         .w(px(12.))
                                         .flex_shrink_0()
                                         .text_xs()
                                         .text_color(muted)
-                                        .child(chevron),
-                                )
+                                        .when(is_folder, |el| {
+                                            el.cursor_pointer().on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    toggle_shell.update(cx, |this, cx| {
+                                                        this.toggle_folder(
+                                                            notebook_id,
+                                                            &toggle_rel,
+                                                            cx,
+                                                        );
+                                                    });
+                                                },
+                                            )
+                                        })
+                                        .child(chevron)
+                                })
                                 .child(
                                     div()
                                         .flex_shrink_0()

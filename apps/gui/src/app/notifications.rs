@@ -78,24 +78,10 @@ impl AppShell {
             .child(titlebar_guard(
                 title_icon(
                     "title-export",
-                    IconName::Download,
+                    IconName::FileOutput,
                     t!("export.title").to_string(),
                 )
                 .on_click(cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx))),
-            ))
-            .child(titlebar_guard(
-                title_icon(
-                    "title-zip-export",
-                    IconName::Package,
-                    t!("zip.export_label").to_string(),
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    let Some(id) = this.active_notebook else {
-                        this.notify_warning(t!("zip.no_notebook").to_string(), cx);
-                        return;
-                    };
-                    this.open_zip_export(id, window, cx);
-                })),
             ))
             .child(titlebar_guard(
                 title_icon(

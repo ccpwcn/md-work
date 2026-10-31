@@ -1,3 +1,6 @@
+// Debug keeps a console for logs/panics; release is a GUI-only process.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod dirty;
 mod disk;

@@ -451,7 +451,11 @@ impl AppShell {
         let close_all_label = t!("tabs.close_all").to_string();
         let adopt_label = t!("external.save_into").to_string();
         let drag_from = self.tab_drag.as_ref().map(|d| d.from);
-        let insert_at = self.tab_drag.as_ref().filter(|d| d.started).map(|d| d.insert_at);
+        let insert_at = self
+            .tab_drag
+            .as_ref()
+            .filter(|d| d.started)
+            .map(|d| d.insert_at);
         let primary = cx.theme().primary;
         let tab_bounds = self.tab_bounds.clone();
 
@@ -617,23 +621,21 @@ impl AppShell {
                                 }),
                         );
                         if is_external {
-                            menu = menu.item(
-                                PopupMenuItem::new(adopt_label.clone()).on_click(
-                                    move |_, window, cx| {
-                                        adopt_shell.update(cx, |this, cx| {
-                                            this.activate_doc(index, cx);
-                                            this.save_external_into_notebook(window, cx);
-                                        });
-                                    },
-                                ),
-                            );
+                            menu = menu.item(PopupMenuItem::new(adopt_label.clone()).on_click(
+                                move |_, window, cx| {
+                                    adopt_shell.update(cx, |this, cx| {
+                                        this.activate_doc(index, cx);
+                                        this.save_external_into_notebook(window, cx);
+                                    });
+                                },
+                            ));
                         }
                         menu.separator()
-                            .item(
-                                PopupMenuItem::new(close_label.clone()).on_click(move |_, _, cx| {
+                            .item(PopupMenuItem::new(close_label.clone()).on_click(
+                                move |_, _, cx| {
                                     close_shell.update(cx, |this, cx| this.close_doc(index, cx));
-                                }),
-                            )
+                                },
+                            ))
                             .item(
                                 PopupMenuItem::new(close_others_label.clone())
                                     .disabled(other_tabs.is_empty())
@@ -663,8 +665,7 @@ impl AppShell {
                             .separator()
                             .item(PopupMenuItem::new(close_all_label.clone()).on_click(
                                 move |_, _, cx| {
-                                    all_shell
-                                        .update(cx, |this, cx| this.close_docs(&all_tabs, cx));
+                                    all_shell.update(cx, |this, cx| this.close_docs(&all_tabs, cx));
                                 },
                             ))
                     })
@@ -697,43 +698,104 @@ impl AppShell {
             );
         }
 
-        let mut bar = div()
+        let tab_switch_items: Vec<(usize, String, bool)> = visible
+            .iter()
+            .map(|&index| {
+                let doc = self.docs[index].read(cx);
+                let is_external = doc.notebook_id.is_none();
+                let title = if is_external {
+                    format!("外部 · {}", doc.rel_path)
+                } else {
+                    doc.title()
+                };
+                let label = if doc.conflict.is_some() {
+                    format!("⚠ {title}")
+                } else if doc.dirty {
+                    format!("● {title}")
+                } else {
+                    title
+                };
+                (index, label, self.active_doc == Some(index))
+            })
+            .collect();
+        let has_tabs = !tab_switch_items.is_empty();
+        let switch_tip = if has_tabs {
+            t!("tabs.switch").to_string()
+        } else {
+            t!("tabs.switch_empty").to_string()
+        };
+        let switch_shell = shell.clone();
+
+        let actions = div()
+            .id("tabs-actions")
+            .h_full()
+            .flex()
+            .items_center()
+            .px_1()
+            .flex_none()
+            .child(
+                Button::new("btn-tab-switch")
+                    .ghost()
+                    .compact()
+                    .dropdown_caret(true)
+                    .tooltip(switch_tip)
+                    .disabled(!has_tabs)
+                    .dropdown_menu_with_anchor(Anchor::TopRight, {
+                        let items = tab_switch_items;
+                        move |menu, _, _| {
+                            let mut menu = menu.scrollable(true);
+                            if items.is_empty() {
+                                return menu.item(
+                                    PopupMenuItem::new(t!("tabs.switch_empty").to_string())
+                                        .disabled(true),
+                                );
+                            }
+                            for (index, label, active) in items.iter() {
+                                let index = *index;
+                                let shell = switch_shell.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label.clone()).checked(*active).on_click(
+                                        move |_, _, cx| {
+                                            shell.update(cx, |this, cx| {
+                                                this.activate_doc(index, cx);
+                                                let pos = this
+                                                    .visible_tabs(cx)
+                                                    .iter()
+                                                    .position(|&seen| seen == index)
+                                                    .unwrap_or(0);
+                                                this.tab_scroll.scroll_to_item(pos);
+                                            });
+                                        },
+                                    ),
+                                );
+                            }
+                            menu
+                        }
+                    }),
+            );
+
+        div()
             .h(px(36.))
             .flex()
             .items_center()
-            .gap_1()
-            .px_2()
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
             .child(
                 div()
                     .id("tabs-scroll")
+                    .relative()
                     .flex_1()
                     .min_w_0()
+                    .h_full()
+                    .px_2()
                     .overflow_x_hidden()
-                    .child(tabs_row),
-            );
-
-        if let Some(index) = self.active_doc {
-            let bookmark_target = {
-                let doc = self.docs[index].read(cx);
-                doc.notebook_id.map(|_| doc.rel_path.clone())
-            };
-            if let Some(rel_path) = bookmark_target {
-                let starred = self.bookmarks.note(&rel_path).is_some();
-                bar = bar.child(
-                    Button::new("btn-bookmark-note")
-                        .ghost()
-                        .compact()
-                        .label(if starred { "★" } else { "☆" })
-                        .tooltip(t!("bookmark.toggle_note").to_string())
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_note_bookmark(cx))),
-                );
-            }
-        }
-
-        bar.into_any_element()
+                    .child(tabs_row)
+                    // Plain mouse wheel → horizontal tab scroll (no Shift needed).
+                    .child(ScrollableMask::vertical_wheel(&self.tab_scroll)),
+            )
+            .child(actions)
+            .into_any_element()
     }
 
     pub(super) fn begin_tab_drag(&mut self, index: usize, x: f32, cx: &mut Context<Self>) {

@@ -60,6 +60,7 @@ impl AppShell {
         self.active_doc = None;
         self.notebooks.clear();
         self.sidebar_rows.clear();
+        self.tree_selection = None;
         self.active_notebook = None;
         self.tree_scroll = UniformListScrollHandle::new();
         self.tab_scroll = ScrollHandle::new();

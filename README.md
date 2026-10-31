@@ -1,8 +1,19 @@
 # 墨笺 · MoJiān
 
-**当前版本：1.1.0**。版本号以根目录 `Cargo.toml` 的
+**当前版本：1.1.1**。版本号以根目录 `Cargo.toml` 的
 `[workspace.package].version` 为唯一来源；各 crate、CLI `--version`、设置页、
 Windows 资源 VERSIONINFO、NSIS 安装包与标签 `v*` 均与之对齐。
+
+升版本号请用脚本（会同步 README / NSIS 回退值 / 验收清单，并刷新 `Cargo.lock`）：
+
+```powershell
+.\scripts\bump-version.ps1 1.2.0   # 指定目标版本（示例）
+.\scripts\bump-version.ps1 -Patch  # 修订号 +1
+.\scripts\bump-version.ps1 -Minor  # 次版本 +1
+.\scripts\bump-version.ps1 -Major  # 主版本 +1
+```
+
+脚本不负责提交或打标签；发版流程见 [doc/ci.md](doc/ci.md)。
 
 Windows 优先的纯 Rust Markdown 笔记本。界面由 GPUI + gpui-component 驱动，渲染与导出基于 comrak 与 Typst，
 MCP 服务基于 rmcp。笔记以普通文件夹保存，不锁定数据格式。
@@ -125,8 +136,8 @@ cargo test --workspace
 
 ```powershell
 cargo run -p xtask -- icon        # 由 assets/icon.svg 生成 assets/icon.ico
-cargo run -p xtask -- package     # release 构建 → dist/md-work-1.1.0-win64/ 与 .zip
-cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.1.0-setup.exe
+cargo run -p xtask -- package     # release 构建 → dist/md-work-1.1.1-win64/ 与 .zip
+cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.1.1-setup.exe
 ```
 
 `installer` 需要 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH、`NSIS_HOME`、

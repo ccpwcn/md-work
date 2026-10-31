@@ -101,7 +101,11 @@ pub fn session_key(root: &std::path::Path) -> String {
         .trim_end_matches('/')
         .to_lowercase();
     let digest = Sha256::digest(normalized.as_bytes());
-    digest.iter().take(10).map(|byte| format!("{byte:02x}")).collect()
+    digest
+        .iter()
+        .take(10)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 pub fn notebook_prefs_path(notebook_id: &uuid::Uuid) -> PathBuf {

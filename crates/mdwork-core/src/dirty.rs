@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::Result;
 use crate::paths::dirty_path;
 use crate::permissions::{normalize_acl_path, now_unix};
 use crate::toml_io;
-use crate::Result;
 
 pub const DIRTY_FORMAT: &str = "md-work/dirty@1";
 pub const DIRTY_HEADER: &str = "# 墨笺 md-work · 未保存缓冲区标记（自动生成，可安全删除）\n";

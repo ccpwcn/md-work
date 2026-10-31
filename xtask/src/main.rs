@@ -183,7 +183,10 @@ fn installer() -> Result<()> {
     let root = workspace_root()?;
     let bundle = bundle_dir(&root);
     if !bundle.join("md-work.exe").exists() {
-        bail!("run `cargo xtask package` first (missing {})", bundle.display());
+        bail!(
+            "run `cargo xtask package` first (missing {})",
+            bundle.display()
+        );
     }
     let Some(makensis) = find_makensis() else {
         bail!(

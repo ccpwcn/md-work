@@ -39,7 +39,6 @@ fn main() {
     let version_text = format!("{major}.{minor}.{patch}");
     let version_quad = format!("{version_text}.0");
 
-
     let mut res = winresource::WindowsResource::new();
     res.set_language(0x0409)
         .set("FileVersion", &version_quad)

@@ -1,4 +1,8 @@
-# 墨笺 · md-work
+# 墨笺 · MoJiān
+
+**当前版本：1.0.0**（首个可用版本）。版本号以根目录 `Cargo.toml` 的
+`[workspace.package].version` 为唯一来源；各 crate、CLI `--version`、设置页、
+Windows 资源 VERSIONINFO、NSIS 安装包与标签 `v*` 均与之对齐。
 
 Windows 优先的纯 Rust Markdown 笔记本。界面由 GPUI + gpui-component 驱动，渲染与导出基于 comrak 与 Typst，
 MCP 服务基于 rmcp。笔记以普通文件夹保存，不锁定数据格式。
@@ -8,6 +12,9 @@ MCP 服务基于 rmcp。笔记以普通文件夹保存，不锁定数据格式�
 
 ## 功能
 
+- **工作区**：工作区是磁盘上的一个普通文件夹，里面可以建多个笔记本。标题栏左上角的下拉框可随时切换
+  工作区、选择任意文件夹（也可以导入之前导出的笔记本 zip）；下次启动自动打开上次的工作区、笔记本与
+  笔记。可在「设置 → 工作区」给工作区起别名，磁盘上的文件夹名保持不变。切换工作区不会移动或删除文件。
 - **笔记本**：普通文件夹即笔记本，支持多笔记本、树形目录、新建文件夹/笔记、重命名、移动、回收站。
 - **编辑器**：Markdown 语法高亮、软换行、查找/替换（`Ctrl+F` / `Ctrl+H`）、预览（`Ctrl+T`）、大纲、字数/词数统计、选区统计。
 - **预览代码块**：按语言做语法高亮，可逐块复制；长行可切换换行/横向滚动。
@@ -15,23 +22,36 @@ MCP 服务基于 rmcp。笔记以普通文件夹保存，不锁定数据格式�
 - **搜索**：跨笔记全文搜索，可选区分大小写、正则、按文件名；结果跳转到对应行。
 - **书签**：为任意笔记或标题添加书签并快速跳转。
 - **命令面板**：`Ctrl+Shift+P` 模糊检索全部命令。
-- **面板**：笔记/大纲/搜索/书签/回收站面板可停靠左侧或右侧、横向或纵向排列；拖动分隔条调整宽度，双击恢复默认，宽度随配置保存。
+- **面板**：笔记/大纲/搜索/书签/回收站五个面板可分别停靠左侧或右侧，也可横向或纵向排列；拖动分隔条调整宽度，双击恢复默认，宽度随配置保存。
 - **导出**：Typst 渲染 PDF/PNG，支持页边距、字号、行高、目录深度、图片宽度、页码格式、两端对齐。
 - **整本打包**：导出/导入笔记本 `.zip`（含导入预览、冲突策略），导入时校验路径逃逸、绝对路径、符号链接与体积上限。
 - **编码与换行**：自动识别 UTF-8/GBK 等编码与 CRLF/LF，按原编码保存，可另存为指定编码。
 - **崩溃恢复**：编辑中途异常退出时，下次启动可从快照恢复未保存内容；保存后自动清理快照。
+- **崩溃上报**：崩溃日志默认只保存在本地；在运行配置中填入 Gitee 令牌后，启动时若网络可用且有历史崩溃记录，
+  会自动在 Gitee 仓库创建 Issue 并附上崩溃日志（不含笔记内容）。令牌也可用环境变量 `MDWORK_GITEE_TOKEN`
+  提供，上传失败不影响启动。
 - **图片**：本地 `assets/` 图床（可配置通用 HTTP / PicGo 兼容接口），图片写入限制在笔记本 `assets/` 内。
 - **MCP**：stdio 与 Streamable HTTP（仅 `127.0.0.1`），默认拒绝（无令牌返回 401），DPAPI 加密令牌，
   按笔记本/笔记的 ACL、glob 允许/拒绝，审计 JSONL 不记录笔记正文。
 - **单实例**：二次启动会把文件路径转发给已运行实例；不静默修改 Windows `.md` 默认应用。
+- **通知中心**：标题栏铃铛显示未读数，普通消息、警告与错误按主题色区分，可全部已读或清空。
 
 ## 目录
 
 | 内容 | 位置 |
 | --- | --- |
-| 配置、日志、MCP 令牌、恢复快照、崩溃记录 | `%LOCALAPPDATA%\md-work\` |
+| 核心配置（只读语义） | `%LOCALAPPDATA%\md-work\config\core.toml` |
+| 运行配置（设置项、面板停靠、上次打开） | `%LOCALAPPDATA%\md-work\config\runtime.toml` |
+| 主题配置（皮肤、字体） | `%LOCALAPPDATA%\md-work\config\theme.toml` |
+| 日志、MCP 令牌、恢复快照、崩溃记录 | `%LOCALAPPDATA%\md-work\` |
+| 工作区元数据 | `<工作区>\.mdwork\workspace.toml` |
+| 笔记本元数据 | `<笔记本>\.mdwork\notebook.toml`、`bookmarks.toml`、`encoding.toml` |
 | 默认工作区 | `%USERPROFILE%\Documents\md-work` |
 | 安装目录（按用户） | `%LOCALAPPDATA%\Programs\md-work` |
+
+三份配置都是带注释的 TOML，可以直接编辑。`core.toml` 顶部会标明「此配置不可修改，否则可能导致软件
+运行异常」；三份文件全部缺失时会以最小默认值启动并重新生成。某个键写错时，程序会提示具体文件与键名，
+非核心配置的错误不会中断启动。
 
 安装包只写 HKCU 与当前用户目录，不申请管理员权限，不修改 HKLM，也不会静默更改 `.md` 文件关联。
 
@@ -91,21 +111,47 @@ cargo test --workspace
 
 ### 图标与打包
 
+本机功能测得差不多、准备验证「安装包 → 安装 → 使用」时，一键打安装包：
+
+```powershell
+.\scripts\build-installer.ps1            # 含 cargo test + release + NSIS
+.\scripts\build-installer.ps1 -SkipTests # 开发态已测过可跳过测试
+```
+
+本机 NSIS 默认找 `E:\apps\nsis`（也可用 `-NsisHome` / 环境变量 `NSIS_HOME`）。产物在
+`dist\md-work-<version>-setup.exe`。
+
+也可分步调用 xtask：
+
 ```powershell
 cargo run -p xtask -- icon        # 由 assets/icon.svg 生成 assets/icon.ico
 cargo run -p xtask -- package     # release 构建 → dist/md-work-1.0.0-win64/ 与 .zip
 cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.0.0-setup.exe
 ```
 
-`installer` 需要安装 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH 或默认安装目录）。
-安装脚本位于 `packaging/nsis/md-work.nsi`，按用户安装、HKCU 卸载信息、卸载时保留笔记与设置。
+`installer` 需要 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH、`NSIS_HOME`、
+`E:\apps\nsis` 或默认 Program Files 目录）。安装脚本位于 `packaging/nsis/md-work.nsi`，
+按用户安装、HKCU 卸载信息、卸载时保留笔记与设置。安装程序包含「选择工作区」页面
+（默认 `我的文档\md-work`），首次安装时把所选文件夹写入
+`HKCU\Software\md-work\WorkspaceRoot`；应用只在 `config\runtime.toml`（以及旧版 `config.json`）
+尚无工作区时采用该值，随后写回完整配置，升级不会覆盖现有设置。支持 `/S` 静默安装（不弹页面，
+直接使用默认工作区）。
+
+### 持续集成
+
+GitHub Actions 与 Gitee Go 的流水线配置、Gitee 自建 Windows 主机组与发版步骤见
+[doc/ci.md](doc/ci.md)：推送分支或 PR 自动构建并运行测试，推送 `v*` 标签自动构建安装包并发布
+Release。
 
 ## 已知限制（v1 范围）
 
 - 不含 Mermaid / PlantUML / Graphviz 图表渲染。
 - 不含 AI 助手（仅保留 `AiProvider` 扩展点）。
 - 不含标签、云同步、多窗口。
-- 不包含遥测与自动更新。
+- 不含使用统计遥测与自动更新；崩溃上报默认关闭，仅在配置令牌后向 Gitee 提交崩溃栈。
+- 预览与导出中的代码块暂不带行号（Typst 0.15 的 `raw` 不支持行号）。
+- 未启用 Windows 长路径（>260 字符）支持：gpui 预编译库自带 manifest，无法再注入 `longPathAware`。
+- 笔记文件读写仍在 UI 线程，超大文件打开/保存时可能出现短暂卡顿。
 
 ## 许可
 

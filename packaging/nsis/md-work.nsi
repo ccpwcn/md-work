@@ -12,6 +12,13 @@
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
+!include "nsDialogs.nsh"
+!include "StrFunc.nsh"
+${StrRep}
+
+Var WORKSPACE_DIR
+Var WORKSPACE_DIR_FIELD
 
 !ifndef VERSION
   !define VERSION "1.0.0"
@@ -51,6 +58,7 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright © 2026 ${APP_PUBLISHER}.
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
+Page custom WorkspacePageCreate WorkspacePageLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -60,8 +68,61 @@ VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright © 2026 ${APP_PUBLISHER}.
 !insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
 
+LangString WS_TITLE ${LANG_SIMPCHINESE} "选择工作区"
+LangString WS_TITLE ${LANG_ENGLISH} "Choose a workspace"
+LangString WS_SUBTITLE ${LANG_SIMPCHINESE} "工作区是保存笔记本的文件夹，之后可以在应用里随时切换。"
+LangString WS_SUBTITLE ${LANG_ENGLISH} "A workspace is the folder that holds your notebooks. You can switch it later in the app."
+LangString WS_EXPLAIN ${LANG_SIMPCHINESE} "工作区就是磁盘上的一个普通文件夹：墨笺在它里面创建多个笔记本，每个笔记本用 Markdown 文件保存笔记。可以选择任意位置（如 D:\笔记），下次启动会自动打开上次使用的工作区。现有设置不会被覆盖。"
+LangString WS_EXPLAIN ${LANG_ENGLISH} "A workspace is an ordinary folder. MoJiān creates notebooks inside it and keeps every note as a Markdown file. Pick any location (for example D:\notes); the last workspace opens automatically next time. Existing settings are never overwritten."
+LangString WS_FOLDER ${LANG_SIMPCHINESE} "工作区文件夹："
+LangString WS_FOLDER ${LANG_ENGLISH} "Workspace folder:"
+LangString WS_BROWSE ${LANG_SIMPCHINESE} "浏览…"
+LangString WS_BROWSE ${LANG_ENGLISH} "Browse…"
+LangString WS_PICK ${LANG_SIMPCHINESE} "选择工作区文件夹"
+LangString WS_PICK ${LANG_ENGLISH} "Select the workspace folder"
+
 Function .onInit
   SetShellVarContext current
+  StrCpy $WORKSPACE_DIR "$DOCUMENTS\md-work"
+FunctionEnd
+
+Function WorkspacePageCreate
+  !insertmacro MUI_HEADER_TEXT "$(WS_TITLE)" "$(WS_SUBTITLE)"
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 44u "$(WS_EXPLAIN)"
+  Pop $0
+  ${NSD_CreateLabel} 0 52u 100% 10u "$(WS_FOLDER)"
+  Pop $0
+  ${NSD_CreateText} 0 64u 78% 14u "$WORKSPACE_DIR"
+  Pop $WORKSPACE_DIR_FIELD
+  ${NSD_CreateBrowseButton} 80% 64u 20% 14u "$(WS_BROWSE)"
+  Pop $0
+  ${NSD_OnClick} $0 WorkspacePageBrowse
+
+  nsDialogs::Show
+FunctionEnd
+
+Function WorkspacePageBrowse
+  Pop $0 ; control HWND pushed by NSD_OnClick
+  ${NSD_GetText} $WORKSPACE_DIR_FIELD $0
+  nsDialogs::SelectFolderDialog "$(WS_PICK)" "$0"
+  Pop $1
+  ${If} $1 != error
+    ${NSD_SetText} $WORKSPACE_DIR_FIELD "$1"
+  ${EndIf}
+FunctionEnd
+
+Function WorkspacePageLeave
+  ${NSD_GetText} $WORKSPACE_DIR_FIELD $WORKSPACE_DIR
+  ${StrRep} $WORKSPACE_DIR "$WORKSPACE_DIR" "$\"" ""
+  ${If} $WORKSPACE_DIR == ""
+    StrCpy $WORKSPACE_DIR "$DOCUMENTS\md-work"
+  ${EndIf}
 FunctionEnd
 
 Function un.onInit
@@ -79,6 +140,15 @@ Section "主程序" SEC_MAIN
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   WriteRegStr HKCU "Software\${APP_SLUG}" "InstallDir" "$INSTDIR"
+
+  ; First run only: hand the chosen workspace to the app as a Unicode-safe
+  ; registry hint (the app reads it while its config has no workspace root).
+  ; Upgrades keep whatever the app already stored in config/runtime.toml or the
+  ; legacy config.json.
+  ${IfNot} ${FileExists} "$LOCALAPPDATA\md-work\config\runtime.toml"
+  ${AndIfNot} ${FileExists} "$LOCALAPPDATA\md-work\config.json"
+    WriteRegStr HKCU "Software\${APP_SLUG}" "WorkspaceRoot" "$WORKSPACE_DIR"
+  ${EndIf}
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"

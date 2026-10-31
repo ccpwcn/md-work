@@ -4732,6 +4732,7 @@ dependencies = [
 name = "md-work-gui"
 version = "1.0.0"
 dependencies = [
+ "futures",
  "gpui-kit",
  "mdwork-core",
  "mdwork-export",
@@ -4763,6 +4764,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.21",
+ "toml 0.8.23",
  "tracing",
  "ureq",
  "uuid",

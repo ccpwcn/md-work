@@ -1,0 +1,46 @@
+# Gitee Go pipeline: build the Windows installer for a v* tag and publish it
+# as a Gitee Release.
+#
+# Requirements:
+#   - A self-hosted Windows host group with Rust 1.97.1 and NSIS 3
+#     (replace WINDOWS_HOST_GROUP_ID with its ID).
+#   - The release@gitee step may need to be (re)configured once in the Gitee Go
+#     UI so it has permission to create releases in this repository.
+# See doc/ci.md for setup steps.
+version: '1.0'
+name: release
+displayName: Release
+
+triggers:
+  trigger: auto
+  push:
+    tags:
+      prefix:
+        - v
+
+stages:
+  - name: release
+    displayName: 打包并发布
+    strategy:
+      cri: []
+    steps:
+      - step: shell@agent
+        name: package
+        displayName: 构建安装包
+        hostGroupID: WINDOWS_HOST_GROUP_ID
+        script: |
+          cargo test --workspace
+          cargo run -p xtask -- package
+          powershell -NoProfile -Command "if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) { choco install nsis -y --no-progress }"
+          cargo run -p xtask -- installer
+
+      - step: release@gitee
+        name: publish
+        displayName: 创建 Gitee Release
+        gitRelease:
+          releaseName: ${GITEE_REF_NAME}
+          tagName: ${GITEE_REF_NAME}
+          releaseNote: 由 Gitee Go 自动构建的 Windows 安装包
+          attachment:
+            - dist/md-work-*-setup.exe
+            - dist/md-work-*-win64.zip

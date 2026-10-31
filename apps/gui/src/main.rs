@@ -1,8 +1,10 @@
 mod app;
 mod dirty;
+mod disk;
 mod doc;
 mod file_assoc;
 mod highlight;
+mod install_hint;
 mod mcp_server;
 mod preview;
 mod single_instance;
@@ -64,6 +66,11 @@ fn main() {
         tracing::warn!(error = %err, "文件关联注册失败");
     }
 
+    // Read settings, the workspace list and the saved session before the event
+    // loop starts; the workspace itself is scanned off the UI thread.
+    let startup = app::Startup::load();
+    startup.report_crashes();
+
     let rx = single_instance::spawn_server();
     let pending: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     {
@@ -101,14 +108,18 @@ fn main() {
                 KeyBinding::new("ctrl-shift-v", PastePlain, None),
             ]);
 
+            let mut startup = Some(startup);
             gpui_kit::open_window(options, cx, move |window, cx| {
                 let pending = pending.clone();
-                let shell =
-                    cx.new(|cx| app::AppShell::new(window, cx, pending, initial_path.clone()));
+                let startup = startup.take().unwrap_or_else(app::Startup::load);
+                let shell = cx.new(|cx| {
+                    app::AppShell::new(window, cx, pending, initial_path.clone(), startup)
+                });
                 cx.new(|cx| gpui_kit::component::Root::new(shell, window, cx))
             })
             .expect("failed to open md-work window");
         });
 
+    disk::flush(std::time::Duration::from_secs(3));
     tracing::info!("程序退出");
 }

@@ -1,6 +1,6 @@
 //! Unsaved-buffer marker shared with the MCP server.
 //!
-//! The GUI lists notes with dirty editors in `%LOCALAPPDATA%/md-work/dirty.json`;
+//! The GUI lists notes with dirty editors in `%LOCALAPPDATA%/md-work/dirty.toml`;
 //! external writers refuse to clobber those notes while the owning process
 //! (recorded by pid) is still running.
 
@@ -10,12 +10,13 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::atomic::write_atomic;
-use crate::paths::app_data_dir;
+use crate::paths::dirty_path;
 use crate::permissions::{normalize_acl_path, now_unix};
-use crate::{Error, Result};
+use crate::toml_io;
+use crate::Result;
 
 pub const DIRTY_FORMAT: &str = "md-work/dirty@1";
+pub const DIRTY_HEADER: &str = "# 墨笺 md-work · 未保存缓冲区标记（自动生成，可安全删除）\n";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirtyDoc {
@@ -46,7 +47,7 @@ impl Default for DirtyState {
 
 impl DirtyState {
     pub fn path() -> PathBuf {
-        app_data_dir().join("dirty.json")
+        dirty_path()
     }
 
     pub fn load() -> Self {
@@ -54,14 +55,7 @@ impl DirtyState {
     }
 
     pub fn load_from(path: &Path) -> Result<Self> {
-        match fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-                path: path.to_path_buf(),
-                source,
-            }),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(err) => Err(err.into()),
-        }
+        Ok(toml_io::load_with_legacy::<Self>(path)?.unwrap_or_default())
     }
 
     pub fn save(&self) -> Result<()> {
@@ -69,15 +63,7 @@ impl DirtyState {
     }
 
     pub fn save_to(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let bytes = serde_json::to_vec_pretty(self).map_err(|source| Error::Json {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        write_atomic(path, &bytes)?;
-        Ok(())
+        toml_io::save_with_header(path, DIRTY_HEADER, self)
     }
 
     pub fn with_notes(pid: u32, notes: Vec<DirtyDoc>) -> Self {
@@ -108,7 +94,7 @@ mod tests {
 
     #[test]
     fn round_trip_and_matching() {
-        let path = std::env::temp_dir().join(format!("mdwork-dirty-{}.json", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("mdwork-dirty-{}.toml", Uuid::new_v4()));
         let notebook = Uuid::new_v4();
         let state = DirtyState::with_notes(
             42,

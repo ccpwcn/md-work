@@ -1,15 +1,15 @@
-//! Note and heading bookmarks stored per notebook in `.mdwork/bookmarks.json`.
+//! Note and heading bookmarks stored per notebook in `.mdwork/bookmarks.toml`.
 
-use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::atomic::write_atomic;
 use crate::notebook::Notebook;
-use crate::{Error, Result};
+use crate::toml_io;
+use crate::Result;
 
 pub const BOOKMARKS_FORMAT: &str = "md-work/bookmarks@1";
+pub const BOOKMARKS_HEADER: &str = "# 墨笺 md-work · 笔记书签（可安全删除，重新添加即可）\n";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bookmark {
@@ -41,26 +41,12 @@ impl Default for Bookmarks {
 impl Bookmarks {
     pub fn load(notebook: &Notebook) -> Result<Self> {
         let path = notebook.bookmarks_path();
-        match fs::read(&path) {
-            Ok(bytes) => {
-                serde_json::from_slice(&bytes).map_err(|source| Error::Json { path, source })
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(err) => Err(Error::Io(err)),
-        }
+        Ok(toml_io::load_with_legacy::<Self>(&path)?.unwrap_or_default())
     }
 
     pub fn save(&self, notebook: &Notebook) -> Result<()> {
         let path = notebook.bookmarks_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let bytes = serde_json::to_vec_pretty(self).map_err(|source| Error::Json {
-            path: path.clone(),
-            source,
-        })?;
-        write_atomic(&path, &bytes)?;
-        Ok(())
+        toml_io::save_with_header(&path, BOOKMARKS_HEADER, self)
     }
 
     pub fn note(&self, rel_path: &str) -> Option<&Bookmark> {
@@ -182,7 +168,7 @@ mod tests {
         let mut loaded = loaded;
         assert!(!loaded.toggle_note("笔记.md", "笔记"));
         assert_eq!(loaded.entries.len(), 1);
-        fs::remove_dir_all(&notebook.root).unwrap();
+        std::fs::remove_dir_all(&notebook.root).unwrap();
     }
 
     #[test]
@@ -198,6 +184,6 @@ mod tests {
         assert!(bookmarks.note("新.md").is_some());
         assert_eq!(bookmarks.prune(&notebook), 1);
         assert_eq!(bookmarks.entries.len(), 1);
-        fs::remove_dir_all(&notebook.root).unwrap();
+        std::fs::remove_dir_all(&notebook.root).unwrap();
     }
 }

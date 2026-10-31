@@ -94,7 +94,7 @@ impl DecodedDoc {
     }
 }
 
-/// Per-file encoding/EOL memory stored in `.mdwork/encoding.json`.
+/// Per-file encoding/EOL memory stored in `.mdwork/encoding.toml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EncodingHint {

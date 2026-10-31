@@ -10,12 +10,18 @@ use walkdir::WalkDir;
 use crate::atomic::write_atomic;
 use crate::doc::{self, DecodedDoc, EncodingHint, Eol, TextEncoding};
 use crate::paths::{ASSETS_DIR, META_DIR, NOTEBOOK_FILE};
+use crate::toml_io;
 use crate::{Error, NOTEBOOK_FORMAT, Result};
 
 pub const TRASH_DIR: &str = "trash";
-pub const BOOKMARKS_FILE: &str = "bookmarks.json";
-pub const ENCODING_FILE: &str = "encoding.json";
+pub const TRASH_META_FILE: &str = "meta.toml";
+pub const BOOKMARKS_FILE: &str = "bookmarks.toml";
+pub const BOOKMARKS_FILE_LEGACY: &str = "bookmarks.json";
+pub const ENCODING_FILE: &str = "encoding.toml";
+pub const ENCODING_FILE_LEGACY: &str = "encoding.json";
 pub const ENCODING_FORMAT: &str = "md-work/encoding@1";
+pub const MARKER_HEADER: &str =
+    "# 墨笺 md-work · 笔记本标识（请勿修改，否则可能导致笔记本无法识别）\n";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -25,33 +31,31 @@ struct EncodingFile {
 }
 
 impl EncodingFile {
-    fn load(path: &Path) -> Self {
-        let Ok(bytes) = fs::read(path) else {
-            return Self {
-                format: ENCODING_FORMAT.to_string(),
-                files: BTreeMap::new(),
-            };
-        };
-        let mut file: Self = serde_json::from_slice(&bytes).unwrap_or_else(|err| {
-            tracing::warn!(path = %path.display(), error = %err, "编码记录损坏，重新建立");
-            Self::default()
-        });
-        if file.format.is_empty() {
-            file.format = ENCODING_FORMAT.to_string();
+    fn fresh() -> Self {
+        Self {
+            format: ENCODING_FORMAT.to_string(),
+            files: BTreeMap::new(),
         }
-        file
+    }
+
+    fn load(path: &Path) -> Self {
+        match toml_io::load_with_legacy::<Self>(path) {
+            Ok(Some(mut file)) => {
+                if file.format.is_empty() {
+                    file.format = ENCODING_FORMAT.to_string();
+                }
+                file
+            }
+            Ok(None) => Self::fresh(),
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "编码记录损坏，重新建立");
+                Self::fresh()
+            }
+        }
     }
 
     fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let bytes = serde_json::to_vec_pretty(self).map_err(|source| crate::Error::Json {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        write_atomic(path, &bytes)?;
-        Ok(())
+        toml_io::save(path, self)
     }
 }
 
@@ -65,6 +69,14 @@ fn encoding_file_path(root: &Path) -> PathBuf {
 
 pub fn load_encoding_map(root: &Path) -> BTreeMap<String, EncodingHint> {
     EncodingFile::load(&encoding_file_path(root)).files
+}
+
+pub fn save_encoding_map(root: &Path, files: BTreeMap<String, EncodingHint>) -> Result<()> {
+    let file = EncodingFile {
+        format: ENCODING_FORMAT.to_string(),
+        files,
+    };
+    file.save(&encoding_file_path(root))
 }
 
 pub fn load_encoding_hint(root: &Path, rel_path: &str) -> Option<EncodingHint> {
@@ -136,6 +148,8 @@ pub struct Entry {
     pub name: String,
     pub kind: EntryKind,
     pub size: u64,
+    #[serde(default)]
+    pub created: u64,
     pub modified: u64,
 }
 
@@ -150,7 +164,7 @@ pub struct TrashItem {
 impl Notebook {
     pub fn create(root: &Path, name: &str) -> Result<Self> {
         let marker_path = root.join(META_DIR).join(NOTEBOOK_FILE);
-        if marker_path.exists() {
+        if marker_path.exists() || toml_io::legacy_path(&marker_path).exists() {
             return Err(Error::Exists(root.display().to_string()));
         }
 
@@ -160,28 +174,26 @@ impl Notebook {
 
         let marker = Marker::new(name);
         write_marker(&marker_path, &marker)?;
-        write_atomic(&root.join(META_DIR).join(BOOKMARKS_FILE), b"{}\n")?;
-        write_atomic(&root.join(META_DIR).join(ENCODING_FILE), b"{}\n")?;
+        let notebook = Self {
+            root: root.to_path_buf(),
+            marker,
+        };
+        EncodingFile::fresh().save(&notebook.encoding_path())?;
+        crate::bookmarks::Bookmarks::default().save(&notebook)?;
         tracing::info!(
-            notebook = %marker.name,
-            id = %marker.id,
+            notebook = %notebook.marker.name,
+            id = %notebook.marker.id,
             root = %root.display(),
             "创建笔记本"
         );
 
-        Ok(Self {
-            root: root.to_path_buf(),
-            marker,
-        })
+        Ok(notebook)
     }
 
     pub fn open(root: &Path) -> Result<Self> {
         let marker_path = root.join(META_DIR).join(NOTEBOOK_FILE);
-        let bytes = fs::read(&marker_path).map_err(|_| Error::NotNotebook(root.to_path_buf()))?;
-        let marker: Marker = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-            path: marker_path.clone(),
-            source,
-        })?;
+        let marker: Marker = toml_io::load_with_legacy(&marker_path)?
+            .ok_or_else(|| Error::NotNotebook(root.to_path_buf()))?;
         if marker.format != NOTEBOOK_FORMAT {
             return Err(Error::UnsupportedFormat {
                 path: marker_path,
@@ -289,12 +301,14 @@ impl Notebook {
                     continue;
                 }
                 let rel_path = self.rel_path(item.path())?;
+                let metadata = item.metadata().ok();
                 entries.push(Entry {
                     name: item.file_name().to_string_lossy().into_owned(),
                     rel_path,
                     kind: EntryKind::Folder,
                     size: 0,
-                    modified: 0,
+                    created: metadata.as_ref().map(created_unix).unwrap_or_default(),
+                    modified: metadata.as_ref().map(modified_unix).unwrap_or_default(),
                 });
                 continue;
             }
@@ -317,6 +331,7 @@ impl Notebook {
                 rel_path,
                 kind: EntryKind::Note,
                 size: metadata.len(),
+                created: created_unix(&metadata),
                 modified: modified_unix(&metadata),
             });
         }
@@ -437,11 +452,7 @@ impl Notebook {
         let item_dir = self.trash_dir().join(item.id.to_string());
         fs::create_dir_all(&item_dir)?;
         fs::rename(&source, item_dir.join("payload"))?;
-        let meta = serde_json::to_vec_pretty(&item).map_err(|source| Error::Json {
-            path: item_dir.join("meta.json"),
-            source,
-        })?;
-        write_atomic(&item_dir.join("meta.json"), &meta)?;
+        toml_io::save(&item_dir.join(TRASH_META_FILE), &item)?;
         tracing::info!(
             notebook = %self.display_name(),
             path = %item.rel_path,
@@ -462,16 +473,15 @@ impl Notebook {
         };
         let mut items = Vec::new();
         for entry in entries.flatten() {
-            let meta_path = entry.path().join("meta.json");
             if !entry.path().join("payload").exists() {
                 continue;
             }
-            let Ok(bytes) = fs::read(&meta_path) else {
+            let Ok(Some(item)) =
+                toml_io::load_with_legacy::<TrashItem>(&entry.path().join(TRASH_META_FILE))
+            else {
                 continue;
             };
-            if let Ok(item) = serde_json::from_slice::<TrashItem>(&bytes) {
-                items.push(item);
-            }
+            items.push(item);
         }
         items.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
         Ok(items)
@@ -479,13 +489,10 @@ impl Notebook {
 
     pub fn restore_trash_item(&self, id: &Uuid) -> Result<String> {
         let item_dir = self.trash_dir().join(id.to_string());
-        let meta_path = item_dir.join("meta.json");
-        let bytes =
-            fs::read(&meta_path).map_err(|_| Error::NotFound(meta_path.display().to_string()))?;
-        let item: TrashItem = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-            path: meta_path,
-            source,
-        })?;
+        let meta_path = item_dir.join(TRASH_META_FILE);
+        let item: TrashItem = toml_io::load_with_legacy(&meta_path)
+            .map_err(|_| Error::NotFound(meta_path.display().to_string()))?
+            .ok_or_else(|| Error::NotFound(meta_path.display().to_string()))?;
 
         let target_rel = self.unique_restore_rel(&item.rel_path)?;
         let target = self.to_path(&target_rel)?;
@@ -560,12 +567,7 @@ impl Notebook {
 }
 
 fn write_marker(path: &Path, marker: &Marker) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(marker).map_err(|source| Error::Json {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    write_atomic(path, &bytes)?;
-    Ok(())
+    toml_io::save_with_header(path, MARKER_HEADER, marker)
 }
 
 fn normalize_relative(raw: &str, is_note: bool) -> Result<String> {
@@ -737,6 +739,15 @@ fn modified_unix(metadata: &fs::Metadata) -> u64 {
         .unwrap_or_default()
 }
 
+fn created_unix(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .created()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or_else(|| modified_unix(metadata))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -756,6 +767,27 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].rel_path, "工作/第一篇.md");
         assert!(!root.join(ASSETS_DIR).join("x").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn tree_entries_carry_timestamps_for_folders_and_notes() {
+        let (root, notebook) = temp_notebook();
+        notebook.create_folder("工作").unwrap();
+        notebook.create_note("工作/第一篇", "# 你好").unwrap();
+
+        let tree = notebook.list_tree().unwrap();
+        let folder = tree
+            .iter()
+            .find(|entry| entry.kind == EntryKind::Folder)
+            .unwrap();
+        assert!(folder.created > 0, "folder creation time");
+        assert!(folder.modified > 0, "folder modification time");
+        let note = tree
+            .iter()
+            .find(|entry| entry.kind == EntryKind::Note)
+            .unwrap();
+        assert!(note.created > 0, "note creation time");
         fs::remove_dir_all(root).unwrap();
     }
 

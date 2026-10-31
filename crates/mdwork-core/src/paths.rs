@@ -5,8 +5,13 @@ use crate::{Error, Result, WORKSPACE_FORMAT};
 pub const WORKSPACE_DIR_NAME: &str = "md-work";
 pub const META_DIR: &str = ".mdwork";
 pub const ASSETS_DIR: &str = "assets";
-pub const WORKSPACE_FILE: &str = "workspace.json";
-pub const NOTEBOOK_FILE: &str = "notebook.json";
+pub const WORKSPACE_FILE: &str = "workspace.toml";
+pub const WORKSPACE_FILE_LEGACY: &str = "workspace.json";
+pub const NOTEBOOK_FILE: &str = "notebook.toml";
+pub const NOTEBOOK_FILE_LEGACY: &str = "notebook.json";
+pub const CORE_CONFIG_FILE: &str = "core.toml";
+pub const RUNTIME_CONFIG_FILE: &str = "runtime.toml";
+pub const THEME_CONFIG_FILE: &str = "theme.toml";
 
 pub fn documents_dir() -> Result<PathBuf> {
     if let Some(path) = known_folders::get_known_folder_path(known_folders::KnownFolder::Documents)
@@ -33,19 +38,82 @@ pub fn app_data_dir() -> PathBuf {
     PathBuf::from(".md-work")
 }
 
+pub fn config_dir() -> PathBuf {
+    app_data_dir().join("config")
+}
+
+pub fn core_config_path() -> PathBuf {
+    config_dir().join(CORE_CONFIG_FILE)
+}
+
+pub fn runtime_config_path() -> PathBuf {
+    config_dir().join(RUNTIME_CONFIG_FILE)
+}
+
+pub fn theme_config_path() -> PathBuf {
+    config_dir().join(THEME_CONFIG_FILE)
+}
+
+/// Primary config path. [`crate::AppConfig::save_to`] treats it as the
+/// runtime file and writes the core/theme siblings next to it.
 pub fn config_path() -> PathBuf {
+    runtime_config_path()
+}
+
+/// Pre-TOML single-file configuration, migrated on first start.
+pub fn legacy_config_path() -> PathBuf {
     app_data_dir().join("config.json")
 }
 
+/// Legacy, workspace-agnostic session file. Kept for migration and tools.
 pub fn session_path() -> PathBuf {
+    app_data_dir().join("session.toml")
+}
+
+pub fn legacy_session_path() -> PathBuf {
     app_data_dir().join("session.json")
+}
+
+pub fn workspaces_path() -> PathBuf {
+    app_data_dir().join("workspaces.toml")
+}
+
+pub fn legacy_workspaces_path() -> PathBuf {
+    app_data_dir().join("workspaces.json")
+}
+
+pub fn sessions_dir() -> PathBuf {
+    app_data_dir().join("sessions")
+}
+
+/// Stable per-workspace session file; keyed by the normalized folder path so
+/// moving or renaming a folder simply starts a fresh session there.
+pub fn workspace_session_path(root: &std::path::Path) -> PathBuf {
+    sessions_dir().join(format!("{}.toml", session_key(root)))
+}
+
+pub fn session_key(root: &std::path::Path) -> String {
+    use sha2::{Digest, Sha256};
+
+    let normalized = root
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase();
+    let digest = Sha256::digest(normalized.as_bytes());
+    digest.iter().take(10).map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub fn notebook_prefs_path(notebook_id: &uuid::Uuid) -> PathBuf {
     app_data_dir()
         .join("notebooks")
         .join(notebook_id.to_string())
-        .join("prefs.json")
+        .join("prefs.toml")
+}
+
+/// Machine-managed dirty-note registry shared with the MCP server.
+pub fn dirty_path() -> PathBuf {
+    app_data_dir().join("dirty.toml")
 }
 
 pub fn recovery_dir() -> PathBuf {

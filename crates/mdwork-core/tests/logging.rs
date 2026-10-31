@@ -25,7 +25,7 @@ fn key_note_operations_are_logged() {
         .restore_trash_item(&item.id)
         .expect("note restored");
     mdwork_core::AppConfig::default()
-        .save_to(&base.join("config.json"))
+        .save_to(&base.join("config").join("runtime.toml"))
         .expect("settings saved");
 
     let text = std::fs::read_dir(&logs)

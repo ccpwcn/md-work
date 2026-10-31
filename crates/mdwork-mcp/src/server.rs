@@ -218,7 +218,7 @@ impl MdworkServer {
             require_scope(token, Scope::Read)?;
             let template =
                 ResourceTemplate::new("mdwork://notebook/{notebook_id}/note/{note_path}", "note")
-                    .with_title("md-work note")
+                    .with_title("MoJiān note")
                     .with_description("A Markdown note; note_path is percent-encoded.")
                     .with_mime_type("text/markdown");
             Ok(ListResourceTemplatesResult::with_all_items(vec![template]))
@@ -261,7 +261,7 @@ impl ServerHandler for MdworkServer {
                 .build(),
         )
         .with_instructions(
-            "md-work (墨笺) notebook server. All calls use the token's notebook and path ACL. \
+            "MoJiān (墨笺) notebook server. All calls use the token's notebook and path ACL. \
              Notes are UTF-8/GBK text; write_note expects the sha256 returned by read_note. \
              Deletes go to the notebook trash unless delete:permanent is granted.",
         )
@@ -497,7 +497,7 @@ mod tests {
             tokens: Arc::new(TokenStore::new(dir.join("tokens.bin"))),
             audit: Arc::new(AuditLog::new(dir.join("audit"))),
             stdio_token: None,
-            dirty_path: Some(dir.join("dirty.json")),
+            dirty_path: Some(dir.join("dirty.toml")),
             exports_dir: Some(dir.join("exports")),
         });
         let server = MdworkServer::new(ctx);

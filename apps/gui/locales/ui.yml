@@ -1,6 +1,6 @@
 _version: 2
 app.name:
-  en: "MoJian"
+  en: "MoJiān"
   zh-CN: "墨笺"
 app.subtitle:
   en: "Markdown notebook"
@@ -132,8 +132,8 @@ settings.tab.windows:
   en: "Windows"
   zh-CN: "Windows"
 settings.version:
-  en: "md-work {version} · MIT"
-  zh-CN: "墨笺 {version} · MIT"
+  en: "MoJiān %{version} · MIT"
+  zh-CN: "墨笺 %{version} · MIT"
 settings.typography:
   en: "Fonts"
   zh-CN: "字体"
@@ -162,7 +162,7 @@ settings.autosave_hint:
   en: "Turning this off keeps every change in memory until you press Ctrl+S."
   zh-CN: "关闭后所有修改只保存在内存中，需要按 Ctrl+S 保存。"
 settings.windows_assoc:
-  en: "“Open with MoJian” context menu"
+  en: "“Open with MoJiān” context menu"
   zh-CN: "「用墨笺打开」右键菜单"
 settings.windows_assoc_on:
   en: "Registered for the current user. Right-click a .md file in Explorer to use it."
@@ -174,7 +174,7 @@ settings.windows_register:
   en: "Register now"
   zh-CN: "立即注册"
 settings.windows_register_ok:
-  en: "Registered “Open with MoJian”."
+  en: "Registered “Open with MoJiān”."
   zh-CN: "已注册「用墨笺打开」。"
 settings.windows_register_failed:
   en: "Could not register the context menu"
@@ -210,17 +210,26 @@ settings.language:
   en: "Interface language"
   zh-CN: "界面语言"
 settings.panel_dock:
-  en: "Dock position"
-  zh-CN: "停靠位置"
+  en: "Panel docking"
+  zh-CN: "面板停靠"
 settings.panel_dock_hint:
-  en: "Which side of the window holds the Notes / Outline / Search / Bookmarks / Trash panel."
-  zh-CN: "笔记、大纲、搜索、书签、回收站面板放在窗口的哪一侧。"
+  en: "Dock each of the Notes / Outline / Search / Bookmarks / Trash panels to the left or right sidebar independently. Panels on the same side share one sidebar."
+  zh-CN: "笔记、大纲、搜索、书签、回收站五个面板可分别停靠到左侧或右侧；停靠在同一侧的面板共用一个侧栏。"
+settings.panel_dock_all:
+  en: "Dock all to:"
+  zh-CN: "全部停靠到："
 settings.dock.left:
   en: "Left sidebar"
   zh-CN: "左边栏"
 settings.dock.right:
   en: "Right sidebar"
   zh-CN: "右边栏"
+settings.dock.left_short:
+  en: "Left"
+  zh-CN: "左"
+settings.dock.right_short:
+  en: "Right"
+  zh-CN: "右"
 settings.panel_arrangement:
   en: "Arrangement"
   zh-CN: "排列方式"
@@ -257,6 +266,114 @@ mcp.loading:
 workspace.label:
   en: "Workspace"
   zh-CN: "工作区"
+workspace.title:
+  en: "Workspaces"
+  zh-CN: "工作区"
+workspace.none:
+  en: "No workspace"
+  zh-CN: "未打开工作区"
+workspace.current:
+  en: "Current"
+  zh-CN: "当前"
+workspace.missing:
+  en: "Folder not found"
+  zh-CN: "文件夹不存在"
+workspace.pick:
+  en: "Choose folder…"
+  zh-CN: "选择文件夹…"
+workspace.pick_prompt:
+  en: "Select a workspace folder"
+  zh-CN: "选择工作区文件夹"
+workspace.rename:
+  en: "Rename workspace"
+  zh-CN: "重命名工作区"
+workspace.forget:
+  en: "Remove from list"
+  zh-CN: "从列表移除"
+workspace.forgotten:
+  en: "Removed \"%{name}\" from the workspace list; files are untouched."
+  zh-CN: "已从列表移除「%{name}」，文件不会被删除。"
+workspace.switched:
+  en: "Switched to \"%{name}\""
+  zh-CN: "已切换到「%{name}」"
+workspace.empty_list:
+  en: "No workspaces yet. Choose a folder to add one."
+  zh-CN: "还没有工作区，选择一个文件夹即可添加。"
+workspace.name_placeholder:
+  en: "Leave blank to use the folder name"
+  zh-CN: "留空则使用文件夹名"
+workspace.name_saved:
+  en: "Workspace name saved."
+  zh-CN: "工作区名称已保存。"
+workspace.confirm_title:
+  en: "This folder is not a md-work workspace"
+  zh-CN: "该文件夹不是墨笺工作区"
+workspace.confirm_foreign:
+  en: "The folder you chose is not empty and is not a workspace supported by this app. Continuing will mix your notes with other files, which makes them hard to maintain. Continue anyway?"
+  zh-CN: "您选择的文件夹非空，也不是本软件支持的工作区，这会导致您的笔记文档和其他文件混在一起难以维护，是否继续？"
+workspace.confirm_notebook:
+  en: "The folder you chose is a single notebook, not a workspace. A workspace holds several notebooks. Opening it as a workspace may mix files. Continue anyway?"
+  zh-CN: "您选择的文件夹是一个笔记本，而不是工作区。工作区可以容纳多个笔记本，直接作为工作区打开可能导致文件混杂，是否继续？"
+workspace.confirm_yes:
+  en: "Continue"
+  zh-CN: "是，继续"
+workspace.confirm_no:
+  en: "Cancel"
+  zh-CN: "否"
+settings.tab.workspace:
+  en: "Workspace"
+  zh-CN: "工作区"
+settings.workspace_name:
+  en: "Workspace name"
+  zh-CN: "工作区名称"
+settings.workspace_name_hint:
+  en: "An alias shown in the titlebar and the workspace list. The folder on disk keeps its name."
+  zh-CN: "显示在标题栏和工作区列表中的别名，磁盘上的文件夹名称不会改变。"
+settings.workspace_location:
+  en: "Folder on disk"
+  zh-CN: "磁盘位置"
+settings.workspace_count:
+  en: "%{count} in the list"
+  zh-CN: "列表中共 %{count} 个"
+settings.workspace_about:
+  en: "What is a workspace?"
+  zh-CN: "什么是工作区？"
+settings.workspace_about_text:
+  en: "A workspace is an ordinary folder on disk. Create notebooks inside it; every notebook keeps its notes as plain Markdown files. Switch folders here or from the titlebar — switching never moves or deletes files."
+  zh-CN: "工作区就是磁盘上的一个普通文件夹：可以在里面新建多个笔记本，每个笔记本用 Markdown 文件管理笔记。可以在这里或标题栏切换工作区，切换不会移动或删除任何文件。"
+notice.title:
+  en: "Notifications"
+  zh-CN: "通知"
+notice.empty:
+  en: "No notifications"
+  zh-CN: "无通知"
+notice.clear:
+  en: "Clear all"
+  zh-CN: "清空全部"
+notice.mark_all_read:
+  en: "Mark all read"
+  zh-CN: "全部已读"
+notice.read:
+  en: "Read"
+  zh-CN: "已读"
+notice.unread:
+  en: "Unread"
+  zh-CN: "未读"
+notice.just_now:
+  en: "just now"
+  zh-CN: "刚刚"
+notice.minutes_ago:
+  en: "%{count} min ago"
+  zh-CN: "%{count} 分钟前"
+notice.hours_ago:
+  en: "%{count} h ago"
+  zh-CN: "%{count} 小时前"
+notice.days_ago:
+  en: "%{count} d ago"
+  zh-CN: "%{count} 天前"
+common.save:
+  en: "Save"
+  zh-CN: "保存"
 error.open:
   en: "Cannot open %{path}: %{reason}"
   zh-CN: "无法打开 %{path}：%{reason}"
@@ -729,7 +846,7 @@ mcp.tab.audit:
   en: "Audit"
   zh-CN: "审计"
 mcp.enable:
-  en: "Run the local MCP server while md-work is open"
+  en: "Run the local MCP server while MoJiān is open"
   zh-CN: "打开墨笺时启动本地 MCP 服务"
 mcp.enable_hint:
   en: "Listens on 127.0.0.1 only. Requests without a valid bearer token are rejected with 401."
@@ -924,7 +1041,7 @@ recovery.title:
   en: "Recover unsaved edits"
   zh-CN: "恢复未保存的编辑"
 recovery.desc:
-  en: "These buffers were dirty when md-work last stopped. Restoring reopens the note with the recovered text; nothing is written until you save."
+  en: "These buffers were dirty when MoJiān last stopped. Restoring reopens the note with the recovered text; nothing is written until you save."
   zh-CN: "上次退出时这些笔记还有未保存的修改。恢复会重新打开笔记并载入快照内容，只有你手动保存后才会写回磁盘。"
 recovery.restore:
   en: "Restore"
@@ -968,12 +1085,51 @@ sidebar.new_folder:
 sidebar.open_notebook:
   en: "Open notebook from another location…"
   zh-CN: "打开其他位置的笔记本…"
+sidebar.rename_notebook:
+  en: "Rename"
+  zh-CN: "重命名"
 sidebar.scan_issues:
   en: "%{count} folders could not be loaded"
   zh-CN: "%{count} 个文件夹无法加载"
 tree.move:
   en: "Move to…"
   zh-CN: "移动到…"
+tree.new_note:
+  en: "New note here"
+  zh-CN: "新建笔记"
+tree.new_child_note:
+  en: "New child note"
+  zh-CN: "新建子笔记"
+tree.more:
+  en: "More"
+  zh-CN: "更多"
+tree.new_subfolder:
+  en: "New subfolder here"
+  zh-CN: "新建子文件夹"
+tree.created_at:
+  en: "Created %{time}"
+  zh-CN: "创建于 %{time}"
+tree.updated_at:
+  en: "Updated %{time}"
+  zh-CN: "更新于 %{time}"
+tree.contains_notes:
+  en: "Contains %{count} notes"
+  zh-CN: "包含 %{count} 篇笔记"
+tabs.close:
+  en: "Close"
+  zh-CN: "关闭"
+tabs.close_others:
+  en: "Close others"
+  zh-CN: "关闭其他"
+tabs.close_left:
+  en: "Close tabs to the left"
+  zh-CN: "关闭左侧"
+tabs.close_right:
+  en: "Close tabs to the right"
+  zh-CN: "关闭右侧"
+tabs.close_all:
+  en: "Close all"
+  zh-CN: "关闭全部"
 tree.move_external:
   en: "External files have no notebook; save them into a notebook first."
   zh-CN: "外部文件不属于任何笔记本，请先另存到笔记本。"
@@ -998,6 +1154,12 @@ prompt.open_notebook_hint:
 prompt.open_notebook_placeholder:
   en: "D:\\Notes\\My notebook"
   zh-CN: "D:\\笔记\\我的笔记本"
+prompt.rename_notebook:
+  en: "Rename notebook"
+  zh-CN: "重命名笔记本"
+prompt.rename_notebook_hint:
+  en: "Enter a new display name for this notebook."
+  zh-CN: "输入笔记本的新名称。"
 prompt.empty:
   en: "Please enter a value."
   zh-CN: "请输入内容。"
@@ -1110,7 +1272,7 @@ palette.open_logs:
   en: "Open log folder"
   zh-CN: "打开日志文件夹"
 palette.register_assoc:
-  en: "Register “Open with MoJian” menu"
+  en: "Register “Open with MoJiān” menu"
   zh-CN: "注册「用墨笺打开」右键菜单"
 palette.rescan:
   en: "Rescan workspace"

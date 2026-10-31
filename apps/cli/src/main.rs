@@ -15,7 +15,7 @@ use uuid::Uuid;
 #[command(
     name = "md-work-cli",
     version,
-    about = "墨笺 md-work command line interface"
+    about = "墨笺 MoJiān command line interface"
 )]
 struct Cli {
     #[command(subcommand)]

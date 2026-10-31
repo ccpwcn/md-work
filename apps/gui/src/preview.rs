@@ -34,6 +34,7 @@ struct RenderCtx<'a> {
     base: Option<&'a Path>,
     style: InlineStyle,
     math: &'a HashMap<u64, Option<PathBuf>>,
+    images: &'a HashMap<u64, Option<PathBuf>>,
     wrap_code: bool,
     body_size: f32,
 }
@@ -42,6 +43,7 @@ pub fn render(
     ir: &PreviewIr,
     base: Option<&Path>,
     math: &HashMap<u64, Option<PathBuf>>,
+    images: &HashMap<u64, Option<PathBuf>>,
     wrap_code: bool,
     note_font: &str,
     note_size: f32,
@@ -70,6 +72,7 @@ pub fn render(
             size: body_size,
         },
         math,
+        images,
         wrap_code,
         body_size,
     };
@@ -233,7 +236,11 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
                         .text_color(theme.muted_foreground)
                         .child(label),
                 );
-            match resolve_image(src, context.base) {
+            match context
+                .images
+                .get(&image_key(src, context.base))
+                .and_then(|path| path.clone())
+            {
                 Some(path) => div()
                     .w_full()
                     .v_flex()
@@ -676,7 +683,9 @@ fn clone_style(style: &InlineStyle) -> InlineStyle {
     }
 }
 
-fn resolve_image(src: &str, base: Option<&Path>) -> Option<PathBuf> {
+/// Resolves a markdown image source to a path without touching the disk; the
+/// caller checks existence on the background executor.
+pub fn resolve_image_path(src: &str, base: Option<&Path>) -> Option<PathBuf> {
     let lower = src.to_lowercase();
     if lower.starts_with("http://")
         || lower.starts_with("https://")
@@ -687,12 +696,21 @@ fn resolve_image(src: &str, base: Option<&Path>) -> Option<PathBuf> {
     }
     let decoded = percent_decode(src);
     let path = PathBuf::from(decoded.replace('/', std::path::MAIN_SEPARATOR_STR));
-    let path = if path.is_absolute() {
-        path
+    if path.is_absolute() {
+        Some(path)
     } else {
-        base?.join(path)
-    };
-    path.is_file().then_some(path)
+        base.map(|base| base.join(path))
+    }
+}
+
+/// Cache key that distinguishes the same relative `src` in different folders.
+pub fn image_key(src: &str, base: Option<&Path>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    base.map(|path| path.to_string_lossy().to_lowercase())
+        .hash(&mut hasher);
+    src.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn percent_decode(text: &str) -> String {
@@ -783,6 +801,33 @@ pub fn collect_math(ir: &PreviewIr, visit: &mut impl FnMut(&str, bool)) {
                 }
             }
             Block::Image { alt, .. } => walk_inline(alt, visit),
+            _ => {}
+        }
+    }
+
+    for block in &ir.blocks {
+        walk_block(block, visit);
+    }
+}
+
+/// Visits every image source in the document so paths can be resolved off the
+/// render thread.
+pub fn collect_images(ir: &PreviewIr, visit: &mut impl FnMut(&str)) {
+    fn walk_block(block: &Block, visit: &mut impl FnMut(&str)) {
+        match block {
+            Block::Image { src, .. } => visit(src),
+            Block::List { items, .. } => {
+                for item in items {
+                    for block in &item.blocks {
+                        walk_block(block, visit);
+                    }
+                }
+            }
+            Block::Quote { blocks, .. } | Block::FootnoteDefinition { blocks, .. } => {
+                for block in blocks {
+                    walk_block(block, visit);
+                }
+            }
             _ => {}
         }
     }

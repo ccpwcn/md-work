@@ -26,11 +26,14 @@ fn main() {
         .set("FileVersion", &version_quad)
         .set("ProductVersion", &version_quad)
         .set("FileDescription", "墨笺 Markdown 笔记本")
-        .set("ProductName", "墨笺 (md-work)")
+        .set("ProductName", "墨笺 (MoJiān)")
         .set("OriginalFilename", "md-work.exe")
         .set("InternalName", "md-work")
         .set("LegalCopyright", "Copyright © 2026 lidawei. MIT License.")
-        .set("Comments", "Windows-first Markdown notebook written in Rust")
+        .set(
+            "Comments",
+            "Windows-first Markdown notebook written in Rust",
+        )
         .set_version_info(winresource::VersionInfo::FILEVERSION, version)
         .set_version_info(winresource::VersionInfo::PRODUCTVERSION, version)
         .set_version_info(winresource::VersionInfo::FILEOS, 0x0004_0004)

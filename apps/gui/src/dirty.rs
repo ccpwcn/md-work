@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use mdwork_core::dirty::{self, DirtyDoc, DirtyState};
-use mdwork_core::paths::app_data_dir;
+use mdwork_core::paths::dirty_path;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -23,7 +23,7 @@ struct Inner {
 impl DirtyRegistry {
     pub fn new() -> Self {
         let inner = Inner {
-            path: app_data_dir().join("dirty.json"),
+            path: dirty_path(),
             pid: std::process::id(),
             notes: Vec::new(),
             saved: Vec::new(),
@@ -73,14 +73,19 @@ impl Inner {
             return;
         }
         let state = DirtyState::with_notes(self.pid, self.notes.clone());
-        if state.save_to(&self.path).is_ok() {
-            self.saved = self.notes.clone();
-        }
+        let path = self.path.clone();
+        self.saved = self.notes.clone();
+        crate::disk::enqueue(move || {
+            if let Err(err) = state.save_to(&path) {
+                tracing::warn!(path = %path.display(), error = %err, "写入未保存标记失败");
+            }
+        });
     }
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        dirty::remove_file(&self.path);
+        let path = self.path.clone();
+        crate::disk::enqueue(move || dirty::remove_file(&path));
     }
 }

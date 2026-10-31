@@ -15,8 +15,10 @@ pub mod permissions;
 pub mod recovery;
 pub mod search;
 pub mod text;
+pub mod toml_io;
 pub mod watch;
 pub mod workspace;
+pub mod workspace_registry;
 
 pub use ai::{
     AiMessage, AiProvider, AiRole, AiUsage, CompletionRequest, CompletionResponse, ProviderRegistry,
@@ -32,7 +34,8 @@ pub use search::{
     SearchHit, SearchOutcome, SearchQuery, search_notebook, search_notebook_filtered,
 };
 pub use text::{TextStats, text_stats};
-pub use workspace::{ScanIssue, Workspace};
+pub use workspace::{FolderKind, ScanIssue, Workspace, has_notebook_marker};
+pub use workspace_registry::{WorkspaceEntry, WorkspaceRegistry};
 
 use std::path::PathBuf;
 
@@ -58,6 +61,20 @@ pub enum Error {
         path: PathBuf,
         #[source]
         source: serde_json::Error,
+    },
+
+    #[error("invalid TOML in {path}: {source}")]
+    Toml {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("cannot write TOML {path}: {source}")]
+    TomlWrite {
+        path: PathBuf,
+        #[source]
+        source: toml::ser::Error,
     },
 
     #[error("not a md-work notebook: {0}")]

@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui_kit::base::input::Position;
@@ -29,6 +31,14 @@ pub enum DiskConflict {
     Removed,
 }
 
+/// Outcome of an asynchronous save, so the shell can close tabs safely and
+/// surface failures without the editor blocking on the disk.
+#[derive(Debug, Clone)]
+pub enum DocEvent {
+    Saved { clean: bool },
+    SaveFailed { error: String },
+}
+
 pub struct Doc {
     pub notebook_id: Option<Uuid>,
     pub notebook_name: String,
@@ -48,6 +58,12 @@ pub struct Doc {
     revision: u64,
     save_scheduled: bool,
     snapshot_pending: bool,
+    saving: bool,
+    save_again: bool,
+    save_hold: bool,
+    /// Highest revision known to be on disk, shared with the writer thread so
+    /// recovery snapshots queued behind a save do not resurrect stale text.
+    saved_revision: Arc<AtomicU64>,
 }
 
 impl Doc {
@@ -110,6 +126,10 @@ impl Doc {
             revision: 0,
             save_scheduled: false,
             snapshot_pending: false,
+            saving: false,
+            save_again: false,
+            save_hold: false,
+            saved_revision: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -126,7 +146,7 @@ impl Doc {
     }
 
     fn persist_encoding(&self) {
-        let Some(root) = &self.notebook_root else {
+        let Some(root) = self.notebook_root.clone() else {
             return;
         };
         let hint = doc::EncodingHint {
@@ -134,13 +154,16 @@ impl Doc {
             bom: self.bom,
             eol: self.eol,
         };
-        if let Err(err) = notebook::store_encoding_hint(root, &self.rel_path, hint) {
-            tracing::warn!(
-                path = %self.rel_path,
-                error = %err,
-                "写入编码记录失败"
-            );
-        }
+        let rel_path = self.rel_path.clone();
+        crate::disk::enqueue(move || {
+            if let Err(err) = notebook::store_encoding_hint(&root, &rel_path, hint) {
+                tracing::warn!(
+                    path = %rel_path,
+                    error = %err,
+                    "写入编码记录失败"
+                );
+            }
+        });
     }
 
     /// Bumps whenever the buffer text changes, so derived state such as the
@@ -186,6 +209,7 @@ impl Doc {
     }
 
     /// Points the buffer at a renamed/moved file without touching its contents.
+    /// The caller holds saves while the rename runs, then releases them.
     pub fn rebase(&mut self, rel_path: String, path: PathBuf) {
         let previous = std::mem::replace(&mut self.rel_path, rel_path);
         self.path = path;
@@ -196,46 +220,128 @@ impl Doc {
                 self.registry.mark(notebook_id, &self.rel_path);
             }
         }
-        if let Some(root) = &self.notebook_root {
-            let _ = notebook::remove_encoding_hint(root, &previous);
+        if let Some(root) = self.notebook_root.clone() {
+            let rel_path = previous.clone();
+            crate::disk::enqueue(move || {
+                let _ = notebook::remove_encoding_hint(&root, &rel_path);
+            });
         }
         self.persist_encoding();
     }
 
-    pub fn save(&mut self, cx: &mut Context<Self>) -> Result<()> {
-        let text = self.editor.read(cx).value().to_string();
-        let bytes = doc::encode_text(&text, self.encoding, self.bom, self.eol)?;
-        write_atomic(&self.path, &bytes)?;
-        tracing::info!(
-            notebook = %self.notebook_name,
-            path = %self.rel_path,
-            bytes = bytes.len(),
-            encoding = self.encoding.label(),
-            autosave = self.autosave,
-            "保存笔记"
-        );
-        self.base_hash = doc::sha256_hex(&bytes);
-        self.dirty = false;
-        self.error = None;
-        self.conflict = None;
-        self.sync_dirty_marker();
-        self.persist_encoding();
-        let _ = mdwork_core::recovery::remove(&mdwork_core::paths::recovery_dir(), &self.path);
-        cx.notify();
-        Ok(())
+    /// Prevents autosaves while the file is being renamed on disk.
+    pub fn hold_saves(&mut self) {
+        self.save_hold = true;
+    }
+
+    /// Re-enables saving and flushes anything typed while the hold was active.
+    pub fn release_saves(&mut self, cx: &mut Context<Self>) {
+        self.save_hold = false;
+        if self.save_again {
+            self.save_again = false;
+            self.request_save(cx);
+        }
     }
 
     pub fn save_now(&mut self, cx: &mut Context<Self>) {
-        if let Err(err) = self.save(cx) {
-            tracing::error!(
-                notebook = %self.notebook_name,
-                path = %self.rel_path,
-                error = %err,
-                "保存笔记失败"
-            );
-            self.error = Some(err.to_string());
-            cx.notify();
+        self.request_save(cx);
+        cx.notify();
+    }
+
+    fn request_save(&mut self, cx: &mut Context<Self>) {
+        if self.save_hold {
+            self.save_again = true;
+            return;
         }
+        if self.saving {
+            self.save_again = true;
+            return;
+        }
+        let text = self.editor.read(cx).value().to_string();
+        let revision = self.revision;
+        let path = self.path.clone();
+        let encoding = self.encoding;
+        let bom = self.bom;
+        let eol = self.eol;
+        let root = self.notebook_root.clone();
+        let rel_path = self.rel_path.clone();
+        let name = self.notebook_name.clone();
+        let autosave = self.autosave;
+        let saved_revision = self.saved_revision.clone();
+        self.saving = true;
+        let receiver = crate::disk::submit(move || {
+            let result = (|| -> Result<(usize, String)> {
+                let bytes = doc::encode_text(&text, encoding, bom, eol)?;
+                write_atomic(&path, &bytes)?;
+                let hash = doc::sha256_hex(&bytes);
+                if let Some(root) = &root {
+                    let hint = doc::EncodingHint { encoding, bom, eol };
+                    if let Err(err) = notebook::store_encoding_hint(root, &rel_path, hint) {
+                        tracing::warn!(
+                            path = %rel_path,
+                            error = %err,
+                            "写入编码记录失败"
+                        );
+                    }
+                }
+                let _ = mdwork_core::recovery::remove(&mdwork_core::paths::recovery_dir(), &path);
+                saved_revision.fetch_max(revision, Ordering::Release);
+                tracing::info!(
+                    notebook = %name,
+                    path = %rel_path,
+                    bytes = bytes.len(),
+                    encoding = encoding.label(),
+                    autosave,
+                    "保存笔记"
+                );
+                Ok((bytes.len(), hash))
+            })();
+            (revision, result)
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok((saved, result)) = receiver.await {
+                let _ = this.update(cx, |doc, cx| doc.finish_save(saved, result, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn finish_save(
+        &mut self,
+        revision: u64,
+        result: Result<(usize, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.saving = false;
+        match result {
+            Ok((_bytes, hash)) => {
+                self.base_hash = hash;
+                self.error = None;
+                self.conflict = None;
+                let clean = self.revision == revision;
+                if clean {
+                    self.dirty = false;
+                    self.sync_dirty_marker();
+                }
+                cx.emit(DocEvent::Saved { clean });
+            }
+            Err(err) => {
+                let error = err.to_string();
+                tracing::error!(
+                    notebook = %self.notebook_name,
+                    path = %self.rel_path,
+                    error = %error,
+                    "保存笔记失败"
+                );
+                self.error = Some(error.clone());
+                cx.emit(DocEvent::SaveFailed { error });
+            }
+        }
+        if self.save_again {
+            self.save_again = false;
+            self.request_save(cx);
+        }
+        cx.notify();
     }
 
     /// Replaces the buffer with the file contents. Undo history is dropped and
@@ -256,11 +362,16 @@ impl Doc {
         self.base_hash = hash;
         self.dirty = false;
         self.revision += 1;
+        self.saved_revision
+            .fetch_max(self.revision, Ordering::Release);
         self.error = None;
         self.conflict = None;
         self.sync_dirty_marker();
         self.persist_encoding();
-        let _ = mdwork_core::recovery::remove(&mdwork_core::paths::recovery_dir(), &self.path);
+        let path = self.path.clone();
+        crate::disk::enqueue(move || {
+            let _ = mdwork_core::recovery::remove(&mdwork_core::paths::recovery_dir(), &path);
+        });
         cx.notify();
     }
 
@@ -276,28 +387,18 @@ impl Doc {
         cx.notify();
     }
 
-    /// Re-encodes the buffer with a different encoding/EOL, rewrites the file
-    /// atomically and remembers the choice for the next open.
+    /// Re-encodes the buffer with a different encoding/EOL and remembers the
+    /// choice; the write itself happens on the disk thread.
     pub fn save_as_encoding(
         &mut self,
         encoding: TextEncoding,
         bom: bool,
         eol: Eol,
         cx: &mut Context<Self>,
-    ) -> Result<()> {
-        let text = self.editor.read(cx).value().to_string();
-        let bytes = doc::encode_text(&text, encoding, bom, eol)?;
-        write_atomic(&self.path, &bytes)?;
+    ) {
         self.encoding = encoding;
         self.bom = bom;
         self.eol = eol;
-        self.base_hash = doc::sha256_hex(&bytes);
-        self.dirty = false;
-        self.error = None;
-        self.conflict = None;
-        self.sync_dirty_marker();
-        self.persist_encoding();
-        let _ = mdwork_core::recovery::remove(&mdwork_core::paths::recovery_dir(), &self.path);
         tracing::info!(
             path = %self.rel_path,
             encoding = encoding.label(),
@@ -305,8 +406,8 @@ impl Doc {
             bom,
             "另存为其他编码"
         );
+        self.request_save(cx);
         cx.notify();
-        Ok(())
     }
 
     /// Swaps the whole buffer for `text`, e.g. when restoring a crash snapshot.
@@ -367,28 +468,40 @@ impl Doc {
                     return;
                 }
                 let text = doc.editor.read(cx).value().to_string();
-                let root = doc.notebook_root.as_deref();
-                let name = (!doc.notebook_name.is_empty()).then_some(doc.notebook_name.as_str());
-                if let Err(err) = mdwork_core::recovery::save(
-                    &mdwork_core::paths::recovery_dir(),
-                    &doc.path,
-                    &doc.rel_path,
-                    root,
-                    name,
-                    Some(&doc.base_hash),
-                    &text,
-                ) {
-                    tracing::warn!(
-                        path = %doc.rel_path,
-                        error = %err,
-                        "写入崩溃恢复快照失败"
-                    );
-                }
+                let revision = doc.revision;
+                let path = doc.path.clone();
+                let rel_path = doc.rel_path.clone();
+                let root = doc.notebook_root.clone();
+                let name = (!doc.notebook_name.is_empty()).then(|| doc.notebook_name.clone());
+                let base_hash = doc.base_hash.clone();
+                let saved_revision = doc.saved_revision.clone();
+                crate::disk::enqueue(move || {
+                    if saved_revision.load(Ordering::Acquire) >= revision {
+                        return;
+                    }
+                    if let Err(err) = mdwork_core::recovery::save(
+                        &mdwork_core::paths::recovery_dir(),
+                        &path,
+                        &rel_path,
+                        root.as_deref(),
+                        name.as_deref(),
+                        Some(&base_hash),
+                        &text,
+                    ) {
+                        tracing::warn!(
+                            path = %rel_path,
+                            error = %err,
+                            "写入崩溃恢复快照失败"
+                        );
+                    }
+                });
             });
         })
         .detach();
     }
 }
+
+impl EventEmitter<DocEvent> for Doc {}
 
 impl Drop for Doc {
     fn drop(&mut self) {
@@ -451,4 +564,43 @@ pub fn read_external_doc(path: &Path) -> Result<(DecodedDoc, String)> {
     );
     let hash = doc::sha256_hex(&bytes);
     Ok((decoded, hash))
+}
+
+/// Description of a note the shell wants to show, resolved on a background
+/// thread before the editor entity is created.
+#[derive(Clone)]
+pub enum OpenRequest {
+    Notebook {
+        notebook: Notebook,
+        rel_path: String,
+    },
+    External {
+        path: PathBuf,
+    },
+}
+
+impl OpenRequest {
+    pub fn target_path(&self) -> Option<PathBuf> {
+        match self {
+            OpenRequest::Notebook { notebook, rel_path } => notebook.note_path(rel_path).ok(),
+            OpenRequest::External { path } => Some(path.clone()),
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            OpenRequest::Notebook { rel_path, .. } => rel_path.clone(),
+            OpenRequest::External { path } => path.display().to_string(),
+        }
+    }
+
+    pub fn read(&self) -> Result<(PathBuf, DecodedDoc, String)> {
+        match self {
+            OpenRequest::Notebook { notebook, rel_path } => read_notebook_doc(notebook, rel_path),
+            OpenRequest::External { path } => {
+                let (decoded, hash) = read_external_doc(path)?;
+                Ok((path.clone(), decoded, hash))
+            }
+        }
+    }
 }

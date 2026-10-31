@@ -705,7 +705,7 @@ mod tests {
             tokens: Arc::new(TokenStore::new(root.join("tokens.bin"))),
             audit: Arc::new(AuditLog::new(root.join("audit"))),
             stdio_token: None,
-            dirty_path: Some(root.join("dirty.json")),
+            dirty_path: Some(root.join("dirty.toml")),
             exports_dir: Some(root.join("exports")),
         });
         (MdworkServer::new(ctx), notebook, token)

@@ -19,7 +19,7 @@ fn temp_ctx() -> (std::path::PathBuf, Arc<ServerContext>, String) {
         tokens: Arc::new(tokens),
         audit: Arc::new(AuditLog::new(root.join("audit"))),
         stdio_token: None,
-        dirty_path: Some(root.join("dirty.json")),
+        dirty_path: Some(root.join("dirty.toml")),
         exports_dir: Some(root.join("exports")),
     });
     (root, ctx, wire)

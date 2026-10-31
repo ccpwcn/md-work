@@ -14,12 +14,13 @@ use zip::read::ZipArchive;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::atomic::write_atomic;
-use crate::bookmarks::Bookmarks;
+use crate::bookmarks::{Bookmarks, BOOKMARKS_HEADER};
 use crate::notebook::{
-    BOOKMARKS_FILE, ENCODING_FILE, EntryKind, Notebook, TrashItem, sanitize_notebook_folder_name,
+    BOOKMARKS_FILE, BOOKMARKS_FILE_LEGACY, ENCODING_FILE, ENCODING_FILE_LEGACY, EntryKind,
+    MARKER_HEADER, Notebook, TRASH_META_FILE, TrashItem, sanitize_notebook_folder_name,
 };
-use crate::paths::{ASSETS_DIR, META_DIR, NOTEBOOK_FILE};
+use crate::paths::{ASSETS_DIR, META_DIR, NOTEBOOK_FILE, NOTEBOOK_FILE_LEGACY};
+use crate::toml_io;
 use crate::{Error, NOTEBOOK_FORMAT, Result};
 
 pub const ARCHIVE_FORMAT: &str = "md-work/archive@1";
@@ -30,7 +31,11 @@ const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 const STAGING_DIR: &str = ".import-staging";
 const WORKSPACE_TRASH_DIR: &str = "trash";
 
-const META_FILES: [&str; 3] = [NOTEBOOK_FILE, BOOKMARKS_FILE, ENCODING_FILE];
+const META_FILES: [(&str, &str); 3] = [
+    (NOTEBOOK_FILE, NOTEBOOK_FILE_LEGACY),
+    (BOOKMARKS_FILE, BOOKMARKS_FILE_LEGACY),
+    (ENCODING_FILE, ENCODING_FILE_LEGACY),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestFile {
@@ -216,6 +221,7 @@ pub fn import_zip(
 
     let outcome = (|| {
         extract_archive(zip_path, &inspection, &staged_notebook)?;
+        normalize_staged_meta(&staged_notebook)?;
         apply_import(
             workspace_root,
             &plan,
@@ -319,14 +325,18 @@ fn collect_export_entries(notebook: &Notebook) -> Result<Vec<(String, PathBuf, u
         }
     }
 
-    for name in META_FILES {
-        let abs = notebook.meta_dir().join(name);
-        let Ok(metadata) = fs::metadata(&abs) else {
+    let meta_dir = notebook.meta_dir();
+    for (name, legacy) in META_FILES {
+        let candidate = if meta_dir.join(name).is_file() {
+            name
+        } else if meta_dir.join(legacy).is_file() {
+            legacy
+        } else {
             continue;
         };
-        if metadata.is_file() {
-            entries.push((format!("{META_DIR}/{name}"), abs, metadata.len()));
-        }
+        let abs = meta_dir.join(candidate);
+        let metadata = fs::metadata(&abs)?;
+        entries.push((format!("{META_DIR}/{candidate}"), abs, metadata.len()));
     }
 
     entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -432,17 +442,22 @@ fn inspect(zip_path: &Path) -> Result<Inspection> {
 }
 
 fn read_marker(archive: &mut ZipArchive<BufReader<File>>) -> Result<crate::notebook::Marker> {
-    let path = format!("{META_DIR}/{NOTEBOOK_FILE}");
-    let mut entry = archive
-        .by_name(&path)
-        .map_err(|_| Error::InvalidArchive(format!("缺少 {path}")))?;
-    if entry.size() > 1024 * 1024 {
-        return Err(Error::ArchiveLimit(format!("{path} 过大")));
-    }
-    let mut text = String::new();
-    entry.read_to_string(&mut text)?;
-    let marker: crate::notebook::Marker = serde_json::from_str(&text)
-        .map_err(|err| Error::InvalidArchive(format!("{path} 解析失败：{err}")))?;
+    let toml_path = format!("{META_DIR}/{NOTEBOOK_FILE}");
+    let legacy_path = format!("{META_DIR}/{NOTEBOOK_FILE_LEGACY}");
+    let (path, text) = match read_zip_text(archive, &toml_path)? {
+        Some(text) => (toml_path, text),
+        None => match read_zip_text(archive, &legacy_path)? {
+            Some(text) => (legacy_path, text),
+            None => return Err(Error::InvalidArchive(format!("缺少 {toml_path}"))),
+        },
+    };
+    let marker: crate::notebook::Marker = if path.ends_with(".toml") {
+        toml::from_str(&text)
+            .map_err(|err| Error::InvalidArchive(format!("{path} 解析失败：{err}")))?
+    } else {
+        serde_json::from_str(&text)
+            .map_err(|err| Error::InvalidArchive(format!("{path} 解析失败：{err}")))?
+    };
     if marker.format != NOTEBOOK_FORMAT {
         return Err(Error::UnsupportedFormat {
             path: PathBuf::from(&path),
@@ -450,6 +465,23 @@ fn read_marker(archive: &mut ZipArchive<BufReader<File>>) -> Result<crate::noteb
         });
     }
     Ok(marker)
+}
+
+fn read_zip_text(
+    archive: &mut ZipArchive<BufReader<File>>,
+    path: &str,
+) -> Result<Option<String>> {
+    let mut entry = match archive.by_name(path) {
+        Ok(entry) => entry,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(err) => return Err(zip_error(err)),
+    };
+    if entry.size() > 1024 * 1024 {
+        return Err(Error::ArchiveLimit(format!("{path} 过大")));
+    }
+    let mut text = String::new();
+    entry.read_to_string(&mut text)?;
+    Ok(Some(text))
 }
 
 fn extract_archive(zip_path: &Path, inspection: &Inspection, dest: &Path) -> Result<()> {
@@ -497,6 +529,57 @@ fn extract_archive(zip_path: &Path, inspection: &Inspection, dest: &Path) -> Res
     Ok(())
 }
 
+/// Rewrites legacy JSON metadata inside the staging folder as TOML, so imports
+/// always land as TOML regardless of the archive's vintage.
+fn normalize_staged_meta(staged: &Path) -> Result<()> {
+    let meta = staged.join(META_DIR);
+
+    let marker_path = meta.join(NOTEBOOK_FILE);
+    let marker_legacy = meta.join(NOTEBOOK_FILE_LEGACY);
+    if !marker_path.exists() && marker_legacy.is_file() {
+        let bytes = fs::read(&marker_legacy)?;
+        let marker: crate::notebook::Marker =
+            serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                path: marker_legacy.clone(),
+                source,
+            })?;
+        toml_io::save_with_header(&marker_path, MARKER_HEADER, &marker)?;
+        let _ = fs::remove_file(&marker_legacy);
+    }
+
+    let bookmarks_path = meta.join(BOOKMARKS_FILE);
+    let bookmarks_legacy = meta.join(BOOKMARKS_FILE_LEGACY);
+    if !bookmarks_path.exists() && bookmarks_legacy.is_file() {
+        let bytes = fs::read(&bookmarks_legacy)?;
+        let bookmarks: Bookmarks = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+            path: bookmarks_legacy.clone(),
+            source,
+        })?;
+        toml_io::save_with_header(&bookmarks_path, BOOKMARKS_HEADER, &bookmarks)?;
+        let _ = fs::remove_file(&bookmarks_legacy);
+    }
+
+    let encoding_path = meta.join(ENCODING_FILE);
+    let encoding_legacy = meta.join(ENCODING_FILE_LEGACY);
+    if !encoding_path.exists() && encoding_legacy.is_file() {
+        let bytes = fs::read(&encoding_legacy)?;
+        let legacy: LegacyEncoding =
+            serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                path: encoding_legacy.clone(),
+                source,
+            })?;
+        crate::notebook::save_encoding_map(staged, legacy.files)?;
+        let _ = fs::remove_file(&encoding_legacy);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyEncoding {
+    #[serde(default)]
+    files: BTreeMap<String, crate::EncodingHint>,
+}
+
 fn plan_with(
     workspace_root: &Path,
     inspection: &Inspection,
@@ -518,7 +601,7 @@ fn plan_with(
     };
 
     let target_exists = target_root.exists();
-    let target_is_notebook = target_root.join(META_DIR).join(NOTEBOOK_FILE).is_file();
+    let target_is_notebook = crate::workspace::has_notebook_marker(&target_root);
     if mode == ImportMode::Merge && target_exists && !target_is_notebook {
         return Err(Error::Exists(format!(
             "{} 已存在且不是墨笺笔记本",
@@ -620,11 +703,7 @@ fn apply_import(
             marker.id = Uuid::new_v4();
             marker.name = plan.folder_name.clone();
             let marker_path = staged_notebook.join(META_DIR).join(NOTEBOOK_FILE);
-            let bytes = serde_json::to_vec_pretty(&marker).map_err(|source| Error::Json {
-                path: marker_path.clone(),
-                source,
-            })?;
-            write_atomic(&marker_path, &bytes)?;
+            toml_io::save_with_header(&marker_path, MARKER_HEADER, &marker)?;
             if plan.target_root.exists() {
                 return Err(Error::Exists(plan.target_root.display().to_string()));
             }
@@ -742,10 +821,7 @@ fn apply_merge(
 
 fn merge_bookmarks(target_root: &Path, staged_notebook: &Path) -> Result<()> {
     let staged = staged_notebook.join(META_DIR).join(BOOKMARKS_FILE);
-    let Ok(bytes) = fs::read(&staged) else {
-        return Ok(());
-    };
-    let Ok(incoming) = serde_json::from_slice::<Bookmarks>(&bytes) else {
+    let Ok(Some(incoming)) = toml_io::load::<Bookmarks>(&staged) else {
         return Ok(());
     };
     if incoming.entries.is_empty() {
@@ -771,22 +847,11 @@ fn merge_bookmarks(target_root: &Path, staged_notebook: &Path) -> Result<()> {
 }
 
 fn merge_encoding(target_root: &Path, staged_notebook: &Path) -> Result<()> {
-    let staged = staged_notebook.join(META_DIR).join(ENCODING_FILE);
-    let Ok(bytes) = fs::read(&staged) else {
-        return Ok(());
-    };
-    let Ok(serde_json::Value::Object(incoming)) = serde_json::from_slice(&bytes) else {
-        return Ok(());
-    };
+    let incoming = crate::notebook::load_encoding_map(staged_notebook);
     if incoming.is_empty() {
         return Ok(());
     }
-    let target = target_root.join(META_DIR).join(ENCODING_FILE);
-    let mut merged = fs::read(&target)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
+    let mut merged = crate::notebook::load_encoding_map(target_root);
     let mut changed = false;
     for (key, value) in incoming {
         if !merged.contains_key(&key) {
@@ -795,14 +860,7 @@ fn merge_encoding(target_root: &Path, staged_notebook: &Path) -> Result<()> {
         }
     }
     if changed {
-        let bytes =
-            serde_json::to_vec_pretty(&serde_json::Value::Object(merged)).map_err(|source| {
-                Error::Json {
-                    path: target.clone(),
-                    source,
-                }
-            })?;
-        write_atomic(&target, &bytes)?;
+        crate::notebook::save_encoding_map(target_root, merged)?;
     }
     Ok(())
 }
@@ -826,11 +884,7 @@ fn move_to_workspace_trash(
         kind: EntryKind::Folder,
         deleted_at: now_unix(),
     };
-    let meta = serde_json::to_vec_pretty(&item).map_err(|source| Error::Json {
-        path: item_dir.join("meta.json"),
-        source,
-    })?;
-    write_atomic(&item_dir.join("meta.json"), &meta)?;
+    toml_io::save(&item_dir.join(TRASH_META_FILE), &item)?;
     Ok(payload)
 }
 
@@ -879,10 +933,7 @@ fn validate_entry_path(raw: &str) -> Result<String> {
         if index == 0 {
             let lower = segment.to_ascii_lowercase();
             if lower == META_DIR {
-                let allowed = META_FILES
-                    .iter()
-                    .any(|name| trimmed.eq_ignore_ascii_case(&format!("{META_DIR}/{name}")));
-                if !allowed {
+                if !is_allowed_meta_file(trimmed) {
                     return Err(Error::InvalidArchive(format!("不允许的元数据文件：{raw}")));
                 }
             } else if lower == ASSETS_DIR {
@@ -907,10 +958,16 @@ fn validate_entry_path(raw: &str) -> Result<String> {
     Ok(normalized)
 }
 
+fn is_allowed_meta_file(path: &str) -> bool {
+    META_FILES.iter().any(|(name, legacy)| {
+        path.eq_ignore_ascii_case(&format!("{META_DIR}/{name}"))
+            || path.eq_ignore_ascii_case(&format!("{META_DIR}/{legacy}"))
+    })
+}
+
 fn is_meta_path(path: &str) -> bool {
-    META_FILES
-        .iter()
-        .any(|name| path.eq_ignore_ascii_case(&format!("{META_DIR}/{name}")))
+    let lower = path.to_ascii_lowercase();
+    lower == META_DIR || lower.starts_with(&format!("{META_DIR}/"))
 }
 
 fn is_windows_device_name(segment: &str) -> bool {
@@ -1122,7 +1179,7 @@ mod tests {
     fn meta_file(marker: &crate::notebook::Marker) -> (String, Vec<u8>, Option<u32>) {
         (
             format!("{META_DIR}/{NOTEBOOK_FILE}"),
-            serde_json::to_vec_pretty(marker).unwrap(),
+            toml::to_string_pretty(marker).unwrap().into_bytes(),
             None,
         )
     }
@@ -1385,6 +1442,50 @@ mod tests {
 
         let _ = fs::remove_dir_all(source_root);
         let _ = fs::remove_dir_all(target_root);
+    }
+
+    #[test]
+    fn imports_legacy_json_metadata_as_toml() {
+        let root = temp_dir("legacy");
+        let marker = crate::notebook::Marker::new("旧笔记本");
+        let files = vec![
+            (
+                format!("{META_DIR}/{NOTEBOOK_FILE_LEGACY}"),
+                serde_json::to_vec_pretty(&marker).unwrap(),
+                None,
+            ),
+            (
+                format!("{META_DIR}/{BOOKMARKS_FILE_LEGACY}"),
+                r#"{"format":"md-work/bookmarks@1","entries":[{"rel_path":"笔记.md","title":"笔记","heading":null,"line":1,"created":1}]}"#
+                    .as_bytes()
+                    .to_vec(),
+                None,
+            ),
+            (
+                format!("{META_DIR}/{ENCODING_FILE_LEGACY}"),
+                br#"{"format":"md-work/encoding@1","files":{}}"#.to_vec(),
+                None,
+            ),
+            note_file("笔记.md", "内容"),
+        ];
+        let manifest = manifest_for(&files, &marker);
+        let zip_path = root.join("legacy.zip");
+        write_test_zip(&zip_path, &files, Some(&manifest));
+
+        let workspace = root.join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let outcome = import_zip(&workspace, &zip_path, &ImportOptions::default()).unwrap();
+        let meta = outcome.notebook.meta_dir();
+        assert!(meta.join(NOTEBOOK_FILE).is_file());
+        assert!(!meta.join(NOTEBOOK_FILE_LEGACY).exists());
+        assert!(meta.join(BOOKMARKS_FILE).is_file());
+        assert!(!meta.join(BOOKMARKS_FILE_LEGACY).exists());
+        assert!(meta.join(ENCODING_FILE).is_file());
+        assert!(!meta.join(ENCODING_FILE_LEGACY).exists());
+        assert_eq!(Bookmarks::load(&outcome.notebook).unwrap().entries.len(), 1);
+        assert_eq!(outcome.notebook.marker.id, marker.id);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -7,9 +7,22 @@ use uuid::Uuid;
 
 use crate::notebook::{Notebook, sanitize_notebook_folder_name};
 use crate::paths::{
-    META_DIR, NOTEBOOK_FILE, default_workspace_root, registry_path, workspace_meta_dir,
+    META_DIR, NOTEBOOK_FILE, NOTEBOOK_FILE_LEGACY, default_workspace_root, registry_path,
+    workspace_meta_dir,
 };
-use crate::{Error, Result, WORKSPACE_FORMAT};
+use crate::toml_io;
+use crate::{Result, WORKSPACE_FORMAT};
+
+pub const REGISTRY_HEADER: &str = "# 墨笺 md-work · 工作区缓存（自动生成，可安全删除）\n";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderKind {
+    Missing,
+    Empty,
+    Workspace,
+    Notebook,
+    Foreign,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanIssueKind {
@@ -74,6 +87,26 @@ impl Workspace {
         &self.root
     }
 
+    /// Read-only classification used before opening or creating a workspace.
+    pub fn inspect(path: &Path) -> FolderKind {
+        if !path.is_dir() {
+            return FolderKind::Missing;
+        }
+        if has_notebook_marker(path) {
+            return FolderKind::Notebook;
+        }
+        if path.join(META_DIR).is_dir() {
+            return FolderKind::Workspace;
+        }
+        match fs::read_dir(path) {
+            Ok(mut entries) => match entries.next() {
+                Some(_) => FolderKind::Foreign,
+                None => FolderKind::Empty,
+            },
+            Err(_) => FolderKind::Foreign,
+        }
+    }
+
     pub fn meta_dir(&self) -> PathBuf {
         workspace_meta_dir(&self.root)
     }
@@ -114,13 +147,12 @@ impl Workspace {
                     if name.starts_with('.') {
                         continue;
                     }
-                    let marker = path.join(META_DIR).join(NOTEBOOK_FILE);
-                    if !marker.is_file() {
+                    if !has_notebook_marker(&path) {
                         if looks_like_notes(&path) {
                             result.issues.push(ScanIssue {
                                 path,
                                 kind: ScanIssueKind::NotNotebook,
-                                message: "缺少 .mdwork/notebook.json：请确认这是墨笺笔记本，或在墨笺中重新创建".to_string(),
+                                message: "缺少 .mdwork/notebook.toml：请确认这是墨笺笔记本，或在墨笺中重新创建".to_string(),
                             });
                         }
                         continue;
@@ -209,7 +241,6 @@ impl Workspace {
     }
 
     pub fn save_registry(&self, notebooks: &[Notebook]) -> Result<()> {
-        fs::create_dir_all(workspace_meta_dir(&self.root))?;
         let registry = Registry {
             format: WORKSPACE_FORMAT.to_string(),
             notebooks: notebooks
@@ -221,17 +252,13 @@ impl Workspace {
                 })
                 .collect(),
         };
-        let bytes = serde_json::to_vec_pretty(&registry).map_err(|source| Error::Json {
-            path: registry_path(&self.root),
-            source,
-        })?;
-        crate::atomic::write_atomic(&registry_path(&self.root), &bytes)?;
-        Ok(())
+        toml_io::save_with_header(&registry_path(&self.root), REGISTRY_HEADER, &registry)
     }
 
     fn load_registry(&self) -> Option<Registry> {
-        let bytes = fs::read(registry_path(&self.root)).ok()?;
-        let registry: Registry = serde_json::from_slice(&bytes).ok()?;
+        let registry: Registry = toml_io::load_with_legacy(&registry_path(&self.root))
+            .ok()
+            .flatten()?;
         if registry.format == WORKSPACE_FORMAT {
             Some(registry)
         } else {
@@ -292,6 +319,11 @@ fn unique_name(base: &str, names: &mut HashSet<String>) -> String {
     let candidate = format!("{base} ({})", Uuid::new_v4());
     names.insert(candidate.to_lowercase());
     candidate
+}
+
+pub fn has_notebook_marker(path: &Path) -> bool {
+    path.join(META_DIR).join(NOTEBOOK_FILE).is_file()
+        || path.join(META_DIR).join(NOTEBOOK_FILE_LEGACY).is_file()
 }
 
 pub fn same_path(a: &Path, b: &Path) -> bool {
@@ -431,5 +463,50 @@ mod tests {
         assert!(workspace.notebook_for_path(&outside.join("a.md")).is_some());
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn inspect_classifies_folders_read_only() {
+        let root = std::env::temp_dir().join(format!("mdwork-inspect-{}", Uuid::new_v4()));
+        let empty = root.join("empty");
+        let foreign = root.join("foreign");
+        let workspace_root = root.join("workspace");
+        let notebook_root = root.join("notebook");
+        fs::create_dir_all(&empty).unwrap();
+        fs::create_dir_all(&foreign).unwrap();
+        fs::write(foreign.join("notes.md"), "# x").unwrap();
+        Workspace::open(&workspace_root).unwrap();
+        Notebook::create(&notebook_root, "本子").unwrap();
+
+        assert_eq!(
+            Workspace::inspect(&root.join("missing")),
+            FolderKind::Missing
+        );
+        assert_eq!(Workspace::inspect(&empty), FolderKind::Empty);
+        assert_eq!(Workspace::inspect(&foreign), FolderKind::Foreign);
+        assert_eq!(Workspace::inspect(&workspace_root), FolderKind::Workspace);
+        assert_eq!(Workspace::inspect(&notebook_root), FolderKind::Notebook);
+
+        assert!(fs::read_dir(&empty).unwrap().next().is_none(), "inspect must not write");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_json_marker_is_migrated_on_open() {
+        let root = std::env::temp_dir().join(format!("mdwork-legacy-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join(META_DIR)).unwrap();
+        let marker = crate::notebook::Marker::new("旧本");
+        fs::write(
+            root.join(META_DIR).join(NOTEBOOK_FILE_LEGACY),
+            serde_json::to_vec_pretty(&marker).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(Workspace::inspect(&root), FolderKind::Notebook);
+        let notebook = Notebook::open(&root).unwrap();
+        assert_eq!(notebook.marker.id, marker.id);
+        assert!(root.join(META_DIR).join(NOTEBOOK_FILE).is_file());
+        assert!(!root.join(META_DIR).join(NOTEBOOK_FILE_LEGACY).exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

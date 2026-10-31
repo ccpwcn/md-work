@@ -1,0 +1,34 @@
+# Gitee Go pipeline: build and test on every push and pull request.
+#
+# md-work is Windows-only (GPUI + DirectX), so this pipeline needs a
+# self-hosted Windows host group. Replace WINDOWS_HOST_GROUP_ID with the ID of
+# that host group (Gitee Go -> 主机组); cloud (Linux) runners cannot build it.
+# See doc/ci.md for setup steps.
+version: '1.0'
+name: ci
+displayName: CI
+
+triggers:
+  trigger: auto
+  push:
+    branches:
+      prefix:
+        - ''
+  pr:
+    branches:
+      prefix:
+        - ''
+
+stages:
+  - name: test
+    displayName: 构建与测试
+    strategy:
+      cri: []
+    steps:
+      - step: shell@agent
+        name: build-and-test
+        displayName: cargo build / test
+        hostGroupID: WINDOWS_HOST_GROUP_ID
+        script: |
+          cargo build --workspace
+          cargo test --workspace

@@ -27,7 +27,7 @@ fn context(root: &std::path::Path, token: TokenRecord) -> Arc<ServerContext> {
         tokens: Arc::new(TokenStore::new(root.join("tokens.bin"))),
         audit: Arc::new(AuditLog::new(root.join("audit"))),
         stdio_token: Some(token),
-        dirty_path: Some(root.join("dirty.json")),
+        dirty_path: Some(root.join("dirty.toml")),
         exports_dir: Some(root.join("exports")),
     })
 }
@@ -151,7 +151,7 @@ async fn write_flow_honors_acl_conflicts_and_dirty_buffers() {
     .await;
     assert_eq!(conflict.data.unwrap()["actual_sha256"], sha.as_str());
 
-    let dirty_path = root.join("dirty.json");
+    let dirty_path = root.join("dirty.toml");
     DirtyState::with_notes(
         std::process::id(),
         vec![DirtyDoc {

@@ -68,6 +68,15 @@ pub enum Block {
     Rule {
         line: usize,
     },
+    /// 源码里比「块与块之间那一个分隔空行」多出来的空行。
+    ///
+    /// 一个空行只表示下一块开始，预览和导出用各自的段间距，不再另画一行。
+    /// 从第二个空行起每一行记在这里：`lines == 1` 表示连续两个空行。
+    /// 复制纯文本时仍丢掉这些空行，避免预览复制出多余空行。
+    Blank {
+        lines: u32,
+        line: usize,
+    },
     Math {
         tex: String,
         display: bool,
@@ -141,9 +150,10 @@ impl PreviewIr {
     pub fn from_markdown(markdown: &str) -> Self {
         let arena = Arena::new();
         let root = parse_document(&arena, markdown, &options());
+        let lines: Vec<&str> = markdown.lines().collect();
         let mut blocks = Vec::new();
         let mut styles = StyleSheet::default();
-        collect_blocks(root, &mut blocks, &mut styles);
+        collect_blocks(root, &lines, &mut blocks, &mut styles);
         let blocks = expand_softbroken_images(blocks);
         Self { blocks, styles }
     }
@@ -184,10 +194,77 @@ fn options() -> Options<'static> {
     options
 }
 
-fn collect_blocks<'a>(node: &'a AstNode<'a>, out: &mut Vec<Block>, styles: &mut StyleSheet) {
+fn collect_blocks<'a>(
+    node: &'a AstNode<'a>,
+    lines: &[&str],
+    out: &mut Vec<Block>,
+    styles: &mut StyleSheet,
+) {
+    let mut produced: Vec<(usize, usize, Vec<Block>)> = Vec::new();
     for child in node.children() {
-        out.extend(blocks_from_node(child, styles));
+        let start = child.data().sourcepos.start.line;
+        let end = child.data().sourcepos.end.line;
+        let blocks = blocks_from_node(child, lines, styles);
+        if !blocks.is_empty() {
+            produced.push((start, end, blocks));
+        }
     }
+    for index in 0..produced.len() {
+        if index > 0 {
+            let prev_end = produced[index - 1].1;
+            let next_start = produced[index].0;
+            if let Some(blank) = blank_block_between(lines, prev_end, next_start) {
+                out.push(blank);
+            }
+        }
+        out.append(&mut produced[index].2);
+    }
+}
+
+/// 两个可见块之间，源码若全是空行且至少两行，多出来的行数做成 [`Block::Blank`]。
+fn blank_block_between(
+    lines: &[&str],
+    prev_end_line: usize,
+    next_start_line: usize,
+) -> Option<Block> {
+    let extra = extra_blank_lines(lines, prev_end_line, next_start_line);
+    (extra > 0).then_some(Block::Blank {
+        lines: extra,
+        line: prev_end_line.saturating_add(1),
+    })
+}
+
+fn extra_blank_lines(lines: &[&str], prev_end_line: usize, next_start_line: usize) -> u32 {
+    if prev_end_line == 0 || next_start_line <= prev_end_line.saturating_add(1) {
+        return 0;
+    }
+    let start_idx = prev_end_line;
+    let end_idx = next_start_line - 1;
+    if end_idx > lines.len() || start_idx >= end_idx {
+        return 0;
+    }
+    let between = &lines[start_idx..end_idx];
+    if between.is_empty() || !between.iter().copied().all(is_structural_blank_line) {
+        return 0;
+    }
+    u32::try_from(between.len())
+        .unwrap_or(u32::MAX)
+        .saturating_sub(1)
+}
+
+/// 真正的空行，或只剩块引用标记的行（`>`、`> >`）。
+fn is_structural_blank_line(line: &str) -> bool {
+    let mut rest = line.trim();
+    if rest.is_empty() {
+        return true;
+    }
+    while let Some(after) = rest.strip_prefix('>') {
+        rest = after.trim_start();
+        if rest.is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 fn collect_outline(blocks: &[Block], out: &mut Vec<OutlineItem>) {
@@ -215,7 +292,11 @@ fn collect_outline(blocks: &[Block], out: &mut Vec<OutlineItem>) {
     }
 }
 
-fn blocks_from_node<'a>(node: &'a AstNode<'a>, styles: &mut StyleSheet) -> Vec<Block> {
+fn blocks_from_node<'a>(
+    node: &'a AstNode<'a>,
+    lines: &[&str],
+    styles: &mut StyleSheet,
+) -> Vec<Block> {
     let line = node.data().sourcepos.start.line;
     match &node.data().value {
         NodeValue::Heading(heading) => vec![Block::Heading {
@@ -246,10 +327,10 @@ fn blocks_from_node<'a>(node: &'a AstNode<'a>, styles: &mut StyleSheet) -> Vec<B
                 line,
             }]
         }
-        NodeValue::List(list) => vec![block_list(node, list, line, styles)],
+        NodeValue::List(list) => vec![block_list(node, list, line, lines, styles)],
         NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => {
             let mut blocks = Vec::new();
-            collect_blocks(node, &mut blocks, styles);
+            collect_blocks(node, lines, &mut blocks, styles);
             vec![Block::Quote { blocks, line }]
         }
         NodeValue::ThematicBreak => vec![Block::Rule { line }],
@@ -261,7 +342,7 @@ fn blocks_from_node<'a>(node: &'a AstNode<'a>, styles: &mut StyleSheet) -> Vec<B
         }],
         NodeValue::FootnoteDefinition(footnote) => {
             let mut blocks = Vec::new();
-            collect_blocks(node, &mut blocks, styles);
+            collect_blocks(node, lines, &mut blocks, styles);
             vec![Block::FootnoteDefinition {
                 label: footnote.name.clone(),
                 blocks,
@@ -454,19 +535,27 @@ fn block_list<'a>(
     node: &'a AstNode<'a>,
     list: &NodeList,
     line: usize,
+    lines: &[&str],
     styles: &mut StyleSheet,
 ) -> Block {
     let mut items = Vec::new();
+    let mut prev_end: Option<usize> = None;
     for item in node.children() {
         let task = match &item.data().value {
             NodeValue::TaskItem(marker) => Some(marker.symbol.is_some()),
             NodeValue::Item(_) => None,
             _ => continue,
         };
-        items.push(ListItem {
-            task,
-            blocks: item_blocks(item, styles),
-        });
+        let start_line = item.data().sourcepos.start.line;
+        let end_line = item.data().sourcepos.end.line;
+        let mut blocks = item_blocks(item, lines, styles);
+        if let Some(prev_end) = prev_end
+            && let Some(blank) = blank_block_between(lines, prev_end, start_line)
+        {
+            blocks.insert(0, blank);
+        }
+        prev_end = Some(end_line);
+        items.push(ListItem { task, blocks });
     }
     Block::List {
         ordered: matches!(list.list_type, ListType::Ordered),
@@ -477,12 +566,15 @@ fn block_list<'a>(
     }
 }
 
-fn item_blocks<'a>(item: &'a AstNode<'a>, styles: &mut StyleSheet) -> Vec<Block> {
+fn item_blocks<'a>(item: &'a AstNode<'a>, lines: &[&str], styles: &mut StyleSheet) -> Vec<Block> {
     let item_line = item.data().sourcepos.start.line;
     let mut blocks = Vec::new();
     let mut pending: Vec<Inline> = Vec::new();
+    let mut prev_end: Option<usize> = None;
     for child in item.children() {
-        let child_blocks = blocks_from_node(child, styles);
+        let start = child.data().sourcepos.start.line;
+        let end = child.data().sourcepos.end.line;
+        let child_blocks = blocks_from_node(child, lines, styles);
         if !child_blocks.is_empty() {
             if !pending.is_empty() {
                 blocks.push(Block::Paragraph {
@@ -490,7 +582,13 @@ fn item_blocks<'a>(item: &'a AstNode<'a>, styles: &mut StyleSheet) -> Vec<Block>
                     line: item_line,
                 });
             }
+            if let Some(prev_end) = prev_end
+                && let Some(blank) = blank_block_between(lines, prev_end, start)
+            {
+                blocks.push(blank);
+            }
             blocks.extend(child_blocks);
+            prev_end = Some(end);
         } else if let Some(inline) = inline_from_node(child) {
             pending.push(inline);
         }
@@ -786,6 +884,7 @@ fn block_plain_text(block: &Block) -> String {
         }
         Block::Div { text, .. } => text.clone(),
         Block::Rule { .. } => "---".to_string(),
+        Block::Blank { .. } => String::new(),
         Block::Math { tex, display, .. } => {
             if *display {
                 format!("$$\n{}\n$$", tex.trim())
@@ -904,6 +1003,90 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(aligns, &[Align::Left, Align::Right]);
         assert_eq!(ir.to_plain_text(), "a\tb\n1\t2");
+    }
+
+    #[test]
+    fn one_blank_line_is_only_a_block_break() {
+        let ir = PreviewIr::from_markdown("# 标题\n\n一段文本。\n");
+        assert_eq!(ir.blocks.len(), 2);
+        assert!(
+            !ir.blocks
+                .iter()
+                .any(|block| matches!(block, Block::Blank { .. }))
+        );
+    }
+
+    #[test]
+    fn extra_blank_lines_stay_between_blocks() {
+        let ir = PreviewIr::from_markdown("一段文本。\n\n\n# 表格\n");
+        assert!(matches!(ir.blocks[0], Block::Paragraph { .. }));
+        assert!(matches!(ir.blocks[1], Block::Blank { lines: 1, .. }));
+        assert!(matches!(ir.blocks[2], Block::Heading { level: 1, .. }));
+
+        let ir = PreviewIr::from_markdown("甲\n\n\n\n乙\n");
+        assert!(matches!(ir.blocks[1], Block::Blank { lines: 2, .. }));
+
+        let ir = PreviewIr::from_markdown(
+            "| 名称 | 单价 |\n| --- | --- |\n| 苹果 | 6元 |\n\n\n# 引用\n",
+        );
+        assert!(
+            matches!(ir.blocks[0], Block::Table { .. }),
+            "{:?}",
+            ir.blocks[0]
+        );
+        assert!(matches!(ir.blocks[1], Block::Blank { lines: 1, .. }));
+        assert!(matches!(ir.blocks[2], Block::Heading { .. }));
+    }
+
+    #[test]
+    fn extra_blank_lines_between_list_items_are_kept() {
+        let ir = PreviewIr::from_markdown("- 甲\n\n\n- 乙\n");
+        match &ir.blocks[0] {
+            Block::List { items, .. } => {
+                assert_eq!(items.len(), 2, "{:?}", items);
+                assert!(
+                    matches!(items[1].blocks.first(), Some(Block::Blank { lines: 1, .. })),
+                    "{:?}",
+                    items[1].blocks
+                );
+            }
+            Block::Blank { .. } => panic!("blank should sit inside the list, got {:?}", ir.blocks),
+            other => panic!("expected a list, got {other:?}"),
+        }
+        let tight = PreviewIr::from_markdown("- 甲\n\n- 乙\n");
+        let Block::List { items, .. } = &tight.blocks[0] else {
+            panic!("expected a loose list, got {:?}", tight.blocks);
+        };
+        assert!(
+            items.iter().all(|item| item
+                .blocks
+                .iter()
+                .all(|block| !matches!(block, Block::Blank { .. }))),
+            "one blank line between items is the loose-list break, {:?}",
+            items
+        );
+    }
+
+    #[test]
+    fn extra_blank_lines_inside_quote_are_kept() {
+        let ir = PreviewIr::from_markdown("> 甲\n>\n>\n> 乙\n");
+        let Block::Quote { blocks, .. } = &ir.blocks[0] else {
+            panic!("expected quote, got {:?}", ir.blocks[0]);
+        };
+        assert!(matches!(blocks[1], Block::Blank { lines: 1, .. }));
+    }
+
+    #[test]
+    fn code_block_internal_blank_lines_are_content() {
+        let ir = PreviewIr::from_markdown("```\na\n\n\nb\n```\n");
+        assert_eq!(ir.blocks.len(), 1);
+        assert!(matches!(&ir.blocks[0], Block::CodeBlock { text, .. } if text.contains("\n\n\n")));
+    }
+
+    #[test]
+    fn plain_text_drops_extra_blank_lines() {
+        let text = PreviewIr::from_markdown("甲\n\n\n乙\n").to_plain_text();
+        assert_eq!(text, "甲\n乙");
     }
 
     #[test]

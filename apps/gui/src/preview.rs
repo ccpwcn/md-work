@@ -248,6 +248,13 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
             .bg(theme.border)
             .my(px(6.))
             .into_any_element(),
+        Block::Blank { lines, .. } => {
+            let line_h = context.body_size * 1.35;
+            div()
+                .w_full()
+                .h(px(line_h * (*lines as f32)))
+                .into_any_element()
+        }
         Block::Math { tex, display, .. } => {
             let key = math_key(tex, *display, &fill_hex(style.foreground), MATH_SIZE_PT);
             match context.math.get(&key).and_then(|path| path.as_ref()) {
@@ -682,6 +689,11 @@ fn render_list(
     let theme = cx.theme();
     let mut column = div().v_flex().w_full().gap_1();
     for (index, item) in items.iter().enumerate() {
+        let mut item_blocks = item.blocks.as_slice();
+        while let Some((blank @ Block::Blank { .. }, tail)) = item_blocks.split_first() {
+            column = column.child(render_block(blank, context, cx));
+            item_blocks = tail;
+        }
         let marker = match item.task {
             Some(true) => "☑".to_string(),
             Some(false) => "☐".to_string(),
@@ -689,7 +701,7 @@ fn render_list(
             None => "•".to_string(),
         };
         let mut content = div().v_flex().flex_1().min_w_0().gap_1();
-        for block in &item.blocks {
+        for block in item_blocks {
             if let Block::List {
                 ordered,
                 start,

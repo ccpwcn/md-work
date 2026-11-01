@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use mdwork_export::ExportOptions;
 use mdwork_export::exporter::{ExportEvent, ExportFormat, ExportRequest, run};
+use mdwork_export::{ExportOptions, TableWidth};
 
 fn workspace(name: &str) -> PathBuf {
     let dir =
@@ -202,6 +202,141 @@ fn exports_webp_and_can_overwrite() {
     };
     run(&again, &mut |_| {}).expect("webp overwrite");
     cleanup(&dir);
+}
+
+#[test]
+fn quote_rule_is_on_the_left_and_table_width_is_measurable() {
+    let dir = workspace("quote-table");
+    let quote = export_image(
+        &dir,
+        "quote.png",
+        "> 来自哪里。\n",
+        ExportOptions {
+            page_numbers: false,
+            png_dpi: 144,
+            ..Default::default()
+        },
+    );
+    let bar_x = leftmost_rule_column(&quote).unwrap_or_else(|| {
+        panic!(
+            "expected a vertical quote rule, image {}x{}",
+            quote.width(),
+            quote.height()
+        )
+    });
+    assert!(
+        bar_x < quote.width() / 4,
+        "quote rule should sit on the left, x={bar_x} width={}",
+        quote.width()
+    );
+
+    let table =
+        "| 名称 | emoji | 单价 |\n| --- | --- | --- |\n| 苹果 | 🍎 | 6元 |\n| 梨 | 🍐 | 5元 |\n";
+    let content = export_image(
+        &dir,
+        "table-content.png",
+        table,
+        ExportOptions {
+            page_numbers: false,
+            png_dpi: 96,
+            table_width: TableWidth::Content,
+            ..Default::default()
+        },
+    );
+    let full = export_image(
+        &dir,
+        "table-full.png",
+        table,
+        ExportOptions {
+            page_numbers: false,
+            png_dpi: 96,
+            table_width: TableWidth::Full,
+            ..Default::default()
+        },
+    );
+    let content_span = ink_span(&content);
+    let full_span = ink_span(&full);
+    assert!(
+        full_span > content_span * 3 / 2,
+        "full-width table span {full_span}px should be clearly wider than content span {content_span}px"
+    );
+    assert!(
+        full_span * 10 > u64::from(full.width()) * 7,
+        "full-width table should cover most of the text width, span {full_span}px page {}px",
+        full.width()
+    );
+    cleanup(&dir);
+}
+
+fn export_image(
+    dir: &Path,
+    name: &str,
+    markdown: &str,
+    options: ExportOptions,
+) -> image::DynamicImage {
+    let request = ExportRequest {
+        notebook_root: dir.to_path_buf(),
+        note_rel: "样本.md".to_string(),
+        notebook_name: String::new(),
+        title: "样本".to_string(),
+        format: ExportFormat::Png,
+        output: dir.join(name),
+        options,
+        markdown: Some(markdown.to_string()),
+        temp_dir: Some(dir.join(format!("tmp-{name}"))),
+    };
+    let outcome = run(&request, &mut |_| {}).unwrap_or_else(|err| panic!("export {name}: {err}"));
+    image::load_from_memory(&fs::read(&outcome.paths[0]).unwrap()).unwrap()
+}
+
+fn leftmost_rule_column(image: &image::DynamicImage) -> Option<u32> {
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    (0..width).find(|&x| {
+        let mut run = 0u32;
+        (0..height).any(|y| {
+            if is_rule_gray(rgba.get_pixel(x, y).0) {
+                run += 1;
+                run >= 12
+            } else {
+                run = 0;
+                false
+            }
+        })
+    })
+}
+
+fn is_rule_gray(pixel: [u8; 4]) -> bool {
+    let [r, g, b, a] = pixel;
+    if a < 128 {
+        return false;
+    }
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    (140..=210).contains(&max) && min >= 120 && max - min <= 20
+}
+
+fn ink_span(image: &image::DynamicImage) -> u64 {
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut widest = 0u64;
+    for y in 0..height {
+        let mut first = None;
+        let mut last = 0u32;
+        for x in 0..width {
+            let [r, g, b, a] = rgba.get_pixel(x, y).0;
+            if a > 20 && (r < 245 || g < 245 || b < 245) {
+                if first.is_none() {
+                    first = Some(x);
+                }
+                last = x;
+            }
+        }
+        if let Some(first) = first {
+            widest = widest.max(u64::from(last - first + 1));
+        }
+    }
+    widest
 }
 
 fn cleanup(dir: &Path) {

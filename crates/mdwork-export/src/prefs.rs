@@ -79,6 +79,7 @@ impl NotebookPrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mdwork_render::typst::TableWidth;
 
     #[test]
     fn round_trip_prefs() {
@@ -87,11 +88,13 @@ mod tests {
         prefs.last_export_pdf_dir = Some(r"D:\out".to_string());
         prefs.export.cover = true;
         prefs.export.toc_depth = 5;
+        prefs.export.table_width = TableWidth::Full;
         prefs.save_to(&path).unwrap();
         let loaded = NotebookPrefs::load_from(&path).unwrap();
         assert_eq!(loaded.last_export_pdf_dir, prefs.last_export_pdf_dir);
         assert!(loaded.export.cover);
         assert_eq!(loaded.export.toc_depth, 5);
+        assert_eq!(loaded.export.table_width, TableWidth::Full);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -114,6 +117,7 @@ mod tests {
         let prefs = NotebookPrefs::load_from(&path).unwrap();
         assert_eq!(prefs.last_export_pdf_dir.as_deref(), Some(r"D:\out"));
         assert!(prefs.export.cover);
+        assert_eq!(prefs.export.table_width, TableWidth::Content);
         assert!(path.is_file());
         assert!(!legacy.exists());
         let _ = std::fs::remove_file(&path);

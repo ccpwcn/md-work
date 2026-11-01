@@ -584,6 +584,12 @@ export.toc_depth:
 export.image_width:
   en: "Image %{pct}%"
   zh-CN: "图片宽度 %{pct}%"
+export.table_content:
+  en: "Table: fit content"
+  zh-CN: "表格按内容"
+export.table_full:
+  en: "Table: full width"
+  zh-CN: "表格满行"
 export.page_format:
   en: "Page label"
   zh-CN: "页码格式"
@@ -1157,6 +1163,12 @@ tree.new_note:
 tree.new_child_note:
   en: "New child note"
   zh-CN: "新建子笔记"
+tree.new_sibling_note:
+  en: "New sibling note"
+  zh-CN: "新建同级笔记"
+tree.new_sibling_folder:
+  en: "New sibling folder"
+  zh-CN: "新建同级文件夹"
 tree.more:
   en: "More"
   zh-CN: "更多"

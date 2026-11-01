@@ -534,22 +534,108 @@ pub(super) fn local_datetime_label(unix_secs: u64) -> String {
     }
 }
 
-pub(super) fn build_rows(tree: &[Entry], expanded: &HashSet<String>) -> Vec<TreeRow> {
+/// Label shown in the tree and in the in-place rename field.
+///
+/// Notes drop a trailing `.md`, matching `Notebook::list_tree`.
+pub(super) fn entry_display_name(rel_path: &str, kind: EntryKind) -> String {
+    let name = file_name(rel_path);
+    match kind {
+        EntryKind::Note => name.trim_end_matches(".md").to_string(),
+        EntryKind::Folder => name.to_string(),
+    }
+}
+
+/// File names of the direct children of `parent`, in tree order.
+pub(super) fn sibling_file_names(tree: &[Entry], parent: &str, order: &TreeOrder) -> Vec<String> {
+    let mut children: Vec<(String, bool)> = tree
+        .iter()
+        .filter(|item| parent_rel(&item.rel_path) == parent)
+        .map(|item| {
+            (
+                file_name(&item.rel_path).to_string(),
+                item.kind == EntryKind::Folder,
+            )
+        })
+        .collect();
+    let saved = order.names(parent).map(|names| names.to_vec());
+    children.sort_by(|left, right| {
+        sibling_rank(saved.as_deref(), &left.0)
+            .cmp(&sibling_rank(saved.as_deref(), &right.0))
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| left.0.to_lowercase().cmp(&right.0.to_lowercase()))
+    });
+    children.into_iter().map(|(name, _)| name).collect()
+}
+
+/// Puts `child` immediately after `after_name`. `None` appends.
+///
+/// An existing entry with the same name (any ASCII case) is moved, not duplicated.
+pub(super) fn insert_sibling_name(
+    names: &mut Vec<String>,
+    child: String,
+    after_name: Option<&str>,
+) {
+    names.retain(|name| !name.eq_ignore_ascii_case(&child));
+    let insert_at = match after_name {
+        Some(anchor) => names
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(anchor))
+            .map(|index| index + 1)
+            .unwrap_or(names.len()),
+        None => names.len(),
+    };
+    names.insert(insert_at, child);
+}
+
+/// Records where a just-created note or folder sits. `anchor` is the sibling
+/// relative path to insert after; `None` appends.
+pub(super) fn place_created(notebook: &Notebook, rel: &str, anchor: Option<&str>) {
+    let after = anchor.map(file_name);
+    if let Err(err) = notebook.place_child(parent_rel(rel), file_name(rel), after) {
+        tracing::warn!(error = %err, path = %rel, "记录新建项的顺序失败");
+    }
+}
+
+pub(super) fn load_notebook_entry(
+    notebook: Notebook,
+    expanded: HashSet<String>,
+    root_expanded: bool,
+) -> NotebookEntry {
+    let order = notebook.load_tree_order();
+    let tree = notebook.list_tree().unwrap_or_default();
+    let rows = build_rows(&tree, &expanded, &order);
+    NotebookEntry {
+        notebook,
+        tree,
+        expanded,
+        rows,
+        order,
+        root_expanded,
+    }
+}
+
+pub(super) fn build_rows(
+    tree: &[Entry],
+    expanded: &HashSet<String>,
+    order: &TreeOrder,
+) -> Vec<TreeRow> {
     let mut by_parent: BTreeMap<&str, Vec<&Entry>> = BTreeMap::new();
     for item in tree {
-        let parent = match item.rel_path.rfind('/') {
-            Some(index) => &item.rel_path[..index],
-            None => "",
-        };
+        let parent = parent_rel(&item.rel_path);
         by_parent.entry(parent).or_default().push(item);
     }
-    for items in by_parent.values_mut() {
-        items.sort_by(|a, b| {
-            let a_folder = a.kind == EntryKind::Folder;
-            let b_folder = b.kind == EntryKind::Folder;
-            b_folder
-                .cmp(&a_folder)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    for (parent, items) in &mut by_parent {
+        let saved = order.names(parent).map(|names| names.to_vec());
+        items.sort_by(|left, right| {
+            sibling_rank(saved.as_deref(), file_name(&left.rel_path))
+                .cmp(&sibling_rank(saved.as_deref(), file_name(&right.rel_path)))
+                .then_with(|| {
+                    let left_folder = left.kind == EntryKind::Folder;
+                    let right_folder = right.kind == EntryKind::Folder;
+                    right_folder
+                        .cmp(&left_folder)
+                        .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+                })
         });
     }
 
@@ -610,7 +696,24 @@ pub(super) fn push_rows(
 
 #[cfg(test)]
 mod tests {
-    use super::local_datetime_label;
+    use std::collections::HashSet;
+
+    use super::{
+        build_rows, entry_display_name, insert_sibling_name, local_datetime_label,
+        sibling_file_names,
+    };
+    use crate::app::{Entry, EntryKind, TreeOrder};
+
+    fn sample(rel_path: &str, name: &str, kind: EntryKind) -> Entry {
+        Entry {
+            rel_path: rel_path.to_string(),
+            name: name.to_string(),
+            kind,
+            size: 0,
+            created: 0,
+            modified: 0,
+        }
+    }
 
     #[test]
     fn formats_unix_time_in_the_current_century() {
@@ -618,5 +721,57 @@ mod tests {
         let label = local_datetime_label(1_700_000_000);
         assert!(label.starts_with("2023-11-"), "unexpected label: {label}");
         assert_eq!(label.len(), 16, "unexpected label: {label}");
+    }
+
+    #[test]
+    fn new_note_is_inserted_after_its_anchor() {
+        let tree = vec![
+            sample("甲.md", "甲", EntryKind::Note),
+            sample("丙.md", "丙", EntryKind::Note),
+        ];
+        let mut order = TreeOrder::default();
+        order.set_names("", vec!["甲.md".to_string(), "丙.md".to_string()]);
+        let mut names = sibling_file_names(&tree, "", &order);
+        insert_sibling_name(&mut names, "新笔记.md".to_string(), Some("甲.md"));
+        assert_eq!(names, vec!["甲.md", "新笔记.md", "丙.md"]);
+        order.set_names("", names);
+        let mut tree = tree;
+        tree.push(sample(
+            "新笔记.md",
+            &entry_display_name("新笔记.md", EntryKind::Note),
+            EntryKind::Note,
+        ));
+        let rows = build_rows(&tree, &HashSet::new(), &order);
+        let labels: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(labels, vec!["甲", "新笔记", "丙"]);
+    }
+
+    #[test]
+    fn child_created_under_a_folder_stays_one_level_down() {
+        let tree = vec![
+            sample("资料", "资料", EntryKind::Folder),
+            sample("随笔.md", "随笔", EntryKind::Note),
+            sample("资料/新笔记.md", "新笔记", EntryKind::Note),
+        ];
+        let mut order = TreeOrder::default();
+        order.set_names("", vec!["资料".to_string(), "随笔.md".to_string()]);
+        order.set_names("资料", vec!["新笔记.md".to_string()]);
+        let mut expanded = HashSet::new();
+        expanded.insert("资料".to_string());
+        let rows = build_rows(&tree, &expanded, &order);
+        let labels: Vec<_> = rows
+            .iter()
+            .map(|row| (row.name.as_str(), row.depth))
+            .collect();
+        assert_eq!(labels, vec![("资料", 0), ("新笔记", 1), ("随笔", 0)]);
+    }
+
+    #[test]
+    fn new_folder_appends_when_there_is_no_anchor() {
+        let tree = vec![sample("笔记.md", "笔记", EntryKind::Note)];
+        let order = TreeOrder::default();
+        let mut names = sibling_file_names(&tree, "", &order);
+        insert_sibling_name(&mut names, "新文件夹".to_string(), None);
+        assert_eq!(names, vec!["笔记.md", "新文件夹"]);
     }
 }

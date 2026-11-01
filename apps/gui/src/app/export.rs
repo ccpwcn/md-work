@@ -463,7 +463,12 @@ impl AppShell {
         let foreground = cx.theme().popover_foreground;
         let overlay = cx.theme().overlay;
         let danger = cx.theme().danger;
-        let label = |text: String| div().w(px(64.)).text_xs().text_color(muted).child(text);
+        // Name column is 64px, and each labeled row uses `gap_2` (8px), so
+        // unlabeled controls start at 72px and stay in the value column.
+        let label_width = px(64.);
+        let field_indent = px(72.);
+        let label =
+            move |text: String| div().w(label_width).text_xs().text_color(muted).child(text);
         let format_button = |format: ExportFormat,
                              label_key: &'static str,
                              recommended: bool,
@@ -504,13 +509,14 @@ impl AppShell {
         let option_menu = |id: &'static str,
                            text: String,
                            items: Vec<(String, bool, fn(&mut ExportOptions))>,
-                           shell: Entity<Self>| {
+                           shell: Entity<Self>,
+                           disabled: bool| {
             Button::new(id)
                 .ghost()
                 .compact()
                 .label(text)
                 .dropdown_caret(true)
-                .disabled(dialog.busy)
+                .disabled(disabled)
                 .dropdown_menu(move |menu, _, _| {
                     let mut menu = menu;
                     for (label, selected, apply) in &items {
@@ -596,7 +602,11 @@ impl AppShell {
                 div()
                     .id("export-dialog")
                     .v_flex()
-                    .w(px(620.))
+                    // 832 leaves a 72px name column and still fits the shared toggles
+                    // plus the image-only controls on one line. Those controls
+                    // stay in the layout for every format, so the dialog does
+                    // not resize when the format changes.
+                    .w(px(832.))
                     .gap_3()
                     .p_5()
                     .rounded_lg()
@@ -658,295 +668,353 @@ impl AppShell {
                                     ),
                                 ],
                                 shell.clone(),
+                                dialog.busy,
                             )),
                     )
                     .child(
                         div()
-                            .h_flex()
-                            .items_center()
+                            .pl(field_indent)
+                            .v_flex()
                             .gap_3()
-                            .when(is_raster, |row| {
-                                row.child(option_menu(
-                                    "export-dpi",
-                                    t!("export.dpi", dpi = dpi).to_string(),
-                                    vec![
-                                        (
-                                            t!("export.dpi", dpi = 96).to_string(),
-                                            dpi == 96,
-                                            |options| options.png_dpi = 96,
-                                        ),
-                                        (
-                                            t!("export.dpi", dpi = 144).to_string(),
-                                            dpi == 144,
-                                            |options| options.png_dpi = 144,
-                                        ),
-                                        (
-                                            t!("export.dpi", dpi = 192).to_string(),
-                                            dpi == 192,
-                                            |options| options.png_dpi = 192,
-                                        ),
-                                        (
-                                            t!("export.dpi", dpi = 300).to_string(),
-                                            dpi == 300,
-                                            |options| options.png_dpi = 300,
-                                        ),
-                                    ],
-                                    shell.clone(),
-                                ))
-                            })
-                            .child(checkbox(
-                                "export-cover",
-                                "export.cover",
-                                dialog.options.cover,
-                                |options, value| options.cover = value,
-                                cx,
-                            ))
-                            .child(checkbox(
-                                "export-toc",
-                                "export.toc",
-                                dialog.options.toc,
-                                |options, value| options.toc = value,
-                                cx,
-                            ))
-                            .child(checkbox(
-                                "export-page-numbers",
-                                "export.page_numbers",
-                                dialog.options.page_numbers,
-                                |options, value| options.page_numbers = value,
-                                cx,
-                            ))
-                            .child(checkbox(
-                                "export-code-wrap",
-                                "export.code_wrap",
-                                dialog.options.code_wrap,
-                                |options, value| options.code_wrap = value,
-                                cx,
-                            ))
-                            .child(checkbox(
-                                "export-code-highlight",
-                                "export.code_highlight",
-                                dialog.options.code_highlight,
-                                |options, value| options.code_highlight = value,
-                                cx,
-                            ))
-                            .when(is_raster, |row| {
-                                row.child(checkbox(
-                                    "export-page-files",
-                                    "export.page_files",
-                                    dialog.options.png_page_files,
-                                    |options, value| options.png_page_files = value,
-                                    cx,
-                                ))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap_2()
-                            .child(option_menu(
-                                "export-margin",
-                                t!("export.margin", mm = margin_mm).to_string(),
-                                vec![
-                                    (
-                                        t!("export.margin", mm = 10).to_string(),
-                                        margin_mm == 10,
-                                        |options| set_uniform_margin(options, 10.0),
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(checkbox(
+                                        "export-cover",
+                                        "export.cover",
+                                        dialog.options.cover,
+                                        |options, value| options.cover = value,
+                                        cx,
+                                    ))
+                                    .child(checkbox(
+                                        "export-toc",
+                                        "export.toc",
+                                        dialog.options.toc,
+                                        |options, value| options.toc = value,
+                                        cx,
+                                    ))
+                                    .child(checkbox(
+                                        "export-page-numbers",
+                                        "export.page_numbers",
+                                        dialog.options.page_numbers,
+                                        |options, value| options.page_numbers = value,
+                                        cx,
+                                    ))
+                                    .child(checkbox(
+                                        "export-code-wrap",
+                                        "export.code_wrap",
+                                        dialog.options.code_wrap,
+                                        |options, value| options.code_wrap = value,
+                                        cx,
+                                    ))
+                                    .child(checkbox(
+                                        "export-code-highlight",
+                                        "export.code_highlight",
+                                        dialog.options.code_highlight,
+                                        |options, value| options.code_highlight = value,
+                                        cx,
+                                    ))
+                                    .child(
+                                        div()
+                                            .h_flex()
+                                            .flex_shrink_0()
+                                            .items_center()
+                                            .gap_3()
+                                            .when(!is_raster, |group| group.invisible())
+                                            .child(option_menu(
+                                                "export-dpi",
+                                                t!("export.dpi", dpi = dpi).to_string(),
+                                                vec![
+                                                    (
+                                                        t!("export.dpi", dpi = 96).to_string(),
+                                                        dpi == 96,
+                                                        |options| options.png_dpi = 96,
+                                                    ),
+                                                    (
+                                                        t!("export.dpi", dpi = 144).to_string(),
+                                                        dpi == 144,
+                                                        |options| options.png_dpi = 144,
+                                                    ),
+                                                    (
+                                                        t!("export.dpi", dpi = 192).to_string(),
+                                                        dpi == 192,
+                                                        |options| options.png_dpi = 192,
+                                                    ),
+                                                    (
+                                                        t!("export.dpi", dpi = 300).to_string(),
+                                                        dpi == 300,
+                                                        |options| options.png_dpi = 300,
+                                                    ),
+                                                ],
+                                                shell.clone(),
+                                                dialog.busy || !is_raster,
+                                            ))
+                                            .child(
+                                                checkbox(
+                                                    "export-page-files",
+                                                    "export.page_files",
+                                                    dialog.options.png_page_files,
+                                                    |options, value| options.png_page_files = value,
+                                                    cx,
+                                                )
+                                                .disabled(dialog.busy || !is_raster),
+                                            ),
                                     ),
-                                    (
-                                        t!("export.margin", mm = 15).to_string(),
-                                        margin_mm == 15,
-                                        |options| set_uniform_margin(options, 15.0),
-                                    ),
-                                    (
-                                        t!("export.margin", mm = 20).to_string(),
-                                        margin_mm == 20,
-                                        |options| set_uniform_margin(options, 20.0),
-                                    ),
-                                    (
-                                        t!("export.margin", mm = 25).to_string(),
-                                        margin_mm == 25,
-                                        |options| set_uniform_margin(options, 25.0),
-                                    ),
-                                    (
-                                        t!("export.margin", mm = 30).to_string(),
-                                        margin_mm == 30,
-                                        |options| set_uniform_margin(options, 30.0),
-                                    ),
-                                ],
-                                shell.clone(),
-                            ))
-                            .child(option_menu(
-                                "export-font-size",
-                                t!(
-                                    "export.font_size",
-                                    pt = format_pt(dialog.options.font_size_pt)
-                                )
-                                .to_string(),
-                                vec![
-                                    (
-                                        t!("export.font_size", pt = "9").to_string(),
-                                        font_pt == 9,
-                                        |options| options.font_size_pt = 9.0,
-                                    ),
-                                    (
-                                        t!("export.font_size", pt = "10").to_string(),
-                                        font_pt == 10,
-                                        |options| options.font_size_pt = 10.0,
-                                    ),
-                                    (
-                                        t!("export.font_size", pt = "11").to_string(),
-                                        font_pt == 11,
-                                        |options| options.font_size_pt = 11.0,
-                                    ),
-                                    (
-                                        t!("export.font_size", pt = "12").to_string(),
-                                        font_pt == 12,
-                                        |options| options.font_size_pt = 12.0,
-                                    ),
-                                    (
-                                        t!("export.font_size", pt = "13").to_string(),
-                                        font_pt == 13,
-                                        |options| options.font_size_pt = 13.0,
-                                    ),
-                                    (
-                                        t!("export.font_size", pt = "14").to_string(),
-                                        font_pt == 14,
-                                        |options| options.font_size_pt = 14.0,
-                                    ),
-                                ],
-                                shell.clone(),
-                            ))
-                            .child(option_menu(
-                                "export-line-height",
-                                t!(
-                                    "export.line_height",
-                                    value = format!("{:.2}", dialog.options.line_height)
-                                )
-                                .to_string(),
-                                vec![
-                                    (
-                                        t!("export.line_height", value = "1.40").to_string(),
-                                        line_height == 140,
-                                        |options| options.line_height = 1.4,
-                                    ),
-                                    (
-                                        t!("export.line_height", value = "1.50").to_string(),
-                                        line_height == 150,
-                                        |options| options.line_height = 1.5,
-                                    ),
-                                    (
-                                        t!("export.line_height", value = "1.65").to_string(),
-                                        line_height == 165,
-                                        |options| options.line_height = 1.65,
-                                    ),
-                                    (
-                                        t!("export.line_height", value = "1.80").to_string(),
-                                        line_height == 180,
-                                        |options| options.line_height = 1.8,
-                                    ),
-                                    (
-                                        t!("export.line_height", value = "2.00").to_string(),
-                                        line_height == 200,
-                                        |options| options.line_height = 2.0,
-                                    ),
-                                ],
-                                shell.clone(),
-                            ))
-                            .child(option_menu(
-                                "export-toc-depth",
-                                t!("export.toc_depth", depth = toc_depth).to_string(),
-                                vec![
-                                    (
-                                        t!("export.toc_depth", depth = 1).to_string(),
-                                        toc_depth == 1,
-                                        |options| options.toc_depth = 1,
-                                    ),
-                                    (
-                                        t!("export.toc_depth", depth = 2).to_string(),
-                                        toc_depth == 2,
-                                        |options| options.toc_depth = 2,
-                                    ),
-                                    (
-                                        t!("export.toc_depth", depth = 3).to_string(),
-                                        toc_depth == 3,
-                                        |options| options.toc_depth = 3,
-                                    ),
-                                    (
-                                        t!("export.toc_depth", depth = 4).to_string(),
-                                        toc_depth == 4,
-                                        |options| options.toc_depth = 4,
-                                    ),
-                                    (
-                                        t!("export.toc_depth", depth = 5).to_string(),
-                                        toc_depth == 5,
-                                        |options| options.toc_depth = 5,
-                                    ),
-                                ],
-                                shell.clone(),
-                            ))
-                            .child(option_menu(
-                                "export-image-width",
-                                t!("export.image_width", pct = image_pct).to_string(),
-                                vec![
-                                    (
-                                        t!("export.image_width", pct = 60).to_string(),
-                                        image_pct == 60,
-                                        |options| options.image_max_width_pct = 60,
-                                    ),
-                                    (
-                                        t!("export.image_width", pct = 75).to_string(),
-                                        image_pct == 75,
-                                        |options| options.image_max_width_pct = 75,
-                                    ),
-                                    (
-                                        t!("export.image_width", pct = 90).to_string(),
-                                        image_pct == 90,
-                                        |options| options.image_max_width_pct = 90,
-                                    ),
-                                    (
-                                        t!("export.image_width", pct = 100).to_string(),
-                                        image_pct == 100,
-                                        |options| options.image_max_width_pct = 100,
-                                    ),
-                                ],
-                                shell.clone(),
-                            ))
-                            .child(option_menu(
-                                "export-page-format",
-                                format!("{}: {page_format}", t!("export.page_format")),
-                                vec![
-                                    (
-                                        format!("{}: 1", t!("export.page_format")),
-                                        page_format == "1",
-                                        |options| options.page_number_format = "1".to_string(),
-                                    ),
-                                    (
-                                        format!("{}: 1 / 1", t!("export.page_format")),
-                                        page_format == "1 / 1",
-                                        |options| options.page_number_format = "1 / 1".to_string(),
-                                    ),
-                                    (
-                                        format!("{}: - 1 -", t!("export.page_format")),
-                                        page_format == "- 1 -",
-                                        |options| options.page_number_format = "- 1 -".to_string(),
-                                    ),
-                                    (
-                                        format!("{}: 1 / 2", t!("export.page_format")),
-                                        page_format == "1 / 2",
-                                        |options| options.page_number_format = "1 / 2".to_string(),
-                                    ),
-                                ],
-                                shell.clone(),
-                            ))
-                            .child(checkbox(
-                                "export-justify",
-                                "export.justify",
-                                dialog.options.justify,
-                                |options, value| options.justify = value,
-                                cx,
-                            )),
+                            )
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(option_menu(
+                                        "export-margin",
+                                        t!("export.margin", mm = margin_mm).to_string(),
+                                        vec![
+                                            (
+                                                t!("export.margin", mm = 10).to_string(),
+                                                margin_mm == 10,
+                                                |options| set_uniform_margin(options, 10.0),
+                                            ),
+                                            (
+                                                t!("export.margin", mm = 15).to_string(),
+                                                margin_mm == 15,
+                                                |options| set_uniform_margin(options, 15.0),
+                                            ),
+                                            (
+                                                t!("export.margin", mm = 20).to_string(),
+                                                margin_mm == 20,
+                                                |options| set_uniform_margin(options, 20.0),
+                                            ),
+                                            (
+                                                t!("export.margin", mm = 25).to_string(),
+                                                margin_mm == 25,
+                                                |options| set_uniform_margin(options, 25.0),
+                                            ),
+                                            (
+                                                t!("export.margin", mm = 30).to_string(),
+                                                margin_mm == 30,
+                                                |options| set_uniform_margin(options, 30.0),
+                                            ),
+                                        ],
+                                        shell.clone(),
+                                        dialog.busy,
+                                    ))
+                                    .child(option_menu(
+                                        "export-font-size",
+                                        t!(
+                                            "export.font_size",
+                                            pt = format_pt(dialog.options.font_size_pt)
+                                        )
+                                        .to_string(),
+                                        vec![
+                                            (
+                                                t!("export.font_size", pt = "9").to_string(),
+                                                font_pt == 9,
+                                                |options| options.font_size_pt = 9.0,
+                                            ),
+                                            (
+                                                t!("export.font_size", pt = "10").to_string(),
+                                                font_pt == 10,
+                                                |options| options.font_size_pt = 10.0,
+                                            ),
+                                            (
+                                                t!("export.font_size", pt = "11").to_string(),
+                                                font_pt == 11,
+                                                |options| options.font_size_pt = 11.0,
+                                            ),
+                                            (
+                                                t!("export.font_size", pt = "12").to_string(),
+                                                font_pt == 12,
+                                                |options| options.font_size_pt = 12.0,
+                                            ),
+                                            (
+                                                t!("export.font_size", pt = "13").to_string(),
+                                                font_pt == 13,
+                                                |options| options.font_size_pt = 13.0,
+                                            ),
+                                            (
+                                                t!("export.font_size", pt = "14").to_string(),
+                                                font_pt == 14,
+                                                |options| options.font_size_pt = 14.0,
+                                            ),
+                                        ],
+                                        shell.clone(),
+                                        dialog.busy,
+                                    ))
+                                    .child(option_menu(
+                                        "export-line-height",
+                                        t!(
+                                            "export.line_height",
+                                            value = format!("{:.2}", dialog.options.line_height)
+                                        )
+                                        .to_string(),
+                                        vec![
+                                            (
+                                                t!("export.line_height", value = "1.40")
+                                                    .to_string(),
+                                                line_height == 140,
+                                                |options| options.line_height = 1.4,
+                                            ),
+                                            (
+                                                t!("export.line_height", value = "1.50")
+                                                    .to_string(),
+                                                line_height == 150,
+                                                |options| options.line_height = 1.5,
+                                            ),
+                                            (
+                                                t!("export.line_height", value = "1.65")
+                                                    .to_string(),
+                                                line_height == 165,
+                                                |options| options.line_height = 1.65,
+                                            ),
+                                            (
+                                                t!("export.line_height", value = "1.80")
+                                                    .to_string(),
+                                                line_height == 180,
+                                                |options| options.line_height = 1.8,
+                                            ),
+                                            (
+                                                t!("export.line_height", value = "2.00")
+                                                    .to_string(),
+                                                line_height == 200,
+                                                |options| options.line_height = 2.0,
+                                            ),
+                                        ],
+                                        shell.clone(),
+                                        dialog.busy,
+                                    ))
+                                    .child(option_menu(
+                                        "export-toc-depth",
+                                        t!("export.toc_depth", depth = toc_depth).to_string(),
+                                        vec![
+                                            (
+                                                t!("export.toc_depth", depth = 1).to_string(),
+                                                toc_depth == 1,
+                                                |options| options.toc_depth = 1,
+                                            ),
+                                            (
+                                                t!("export.toc_depth", depth = 2).to_string(),
+                                                toc_depth == 2,
+                                                |options| options.toc_depth = 2,
+                                            ),
+                                            (
+                                                t!("export.toc_depth", depth = 3).to_string(),
+                                                toc_depth == 3,
+                                                |options| options.toc_depth = 3,
+                                            ),
+                                            (
+                                                t!("export.toc_depth", depth = 4).to_string(),
+                                                toc_depth == 4,
+                                                |options| options.toc_depth = 4,
+                                            ),
+                                            (
+                                                t!("export.toc_depth", depth = 5).to_string(),
+                                                toc_depth == 5,
+                                                |options| options.toc_depth = 5,
+                                            ),
+                                        ],
+                                        shell.clone(),
+                                        dialog.busy,
+                                    ))
+                                    .child(option_menu(
+                                        "export-table-width",
+                                        match dialog.options.table_width {
+                                            TableWidth::Content => {
+                                                t!("export.table_content").to_string()
+                                            }
+                                            TableWidth::Full => t!("export.table_full").to_string(),
+                                        },
+                                        vec![
+                                            (
+                                                t!("export.table_content").to_string(),
+                                                dialog.options.table_width == TableWidth::Content,
+                                                |options| options.table_width = TableWidth::Content,
+                                            ),
+                                            (
+                                                t!("export.table_full").to_string(),
+                                                dialog.options.table_width == TableWidth::Full,
+                                                |options| options.table_width = TableWidth::Full,
+                                            ),
+                                        ],
+                                        shell.clone(),
+                                        dialog.busy,
+                                    ))
+                                    .child(option_menu(
+                                        "export-image-width",
+                                        t!("export.image_width", pct = image_pct).to_string(),
+                                        vec![
+                                            (
+                                                t!("export.image_width", pct = 60).to_string(),
+                                                image_pct == 60,
+                                                |options| options.image_max_width_pct = 60,
+                                            ),
+                                            (
+                                                t!("export.image_width", pct = 75).to_string(),
+                                                image_pct == 75,
+                                                |options| options.image_max_width_pct = 75,
+                                            ),
+                                            (
+                                                t!("export.image_width", pct = 90).to_string(),
+                                                image_pct == 90,
+                                                |options| options.image_max_width_pct = 90,
+                                            ),
+                                            (
+                                                t!("export.image_width", pct = 100).to_string(),
+                                                image_pct == 100,
+                                                |options| options.image_max_width_pct = 100,
+                                            ),
+                                        ],
+                                        shell.clone(),
+                                        dialog.busy,
+                                    ))
+                                    .child(option_menu(
+                                        "export-page-format",
+                                        format!("{}: {page_format}", t!("export.page_format")),
+                                        vec![
+                                            (
+                                                format!("{}: 1", t!("export.page_format")),
+                                                page_format == "1",
+                                                |options| {
+                                                    options.page_number_format = "1".to_string()
+                                                },
+                                            ),
+                                            (
+                                                format!("{}: 1 / 1", t!("export.page_format")),
+                                                page_format == "1 / 1",
+                                                |options| {
+                                                    options.page_number_format = "1 / 1".to_string()
+                                                },
+                                            ),
+                                            (
+                                                format!("{}: - 1 -", t!("export.page_format")),
+                                                page_format == "- 1 -",
+                                                |options| {
+                                                    options.page_number_format = "- 1 -".to_string()
+                                                },
+                                            ),
+                                            (
+                                                format!("{}: 1 / 2", t!("export.page_format")),
+                                                page_format == "1 / 2",
+                                                |options| {
+                                                    options.page_number_format = "1 / 2".to_string()
+                                                },
+                                            ),
+                                        ],
+                                        shell.clone(),
+                                        dialog.busy,
+                                    ))
+                                    .child(checkbox(
+                                        "export-justify",
+                                        "export.justify",
+                                        dialog.options.justify,
+                                        |options, value| options.justify = value,
+                                        cx,
+                                    )),
+                            ),
                     )
                     .child(
                         div()
@@ -991,7 +1059,7 @@ impl AppShell {
                                     ),
                             )
                             .child(
-                                div().pl(px(72.)).child(
+                                div().pl(field_indent).child(
                                     Checkbox::new("export-open-after")
                                         .label(t!("export.open_after").to_string())
                                         .checked(dialog.open_after_export)

@@ -19,6 +19,7 @@ use crate::notebook::{
     BOOKMARKS_FILE, BOOKMARKS_FILE_LEGACY, ENCODING_FILE, ENCODING_FILE_LEGACY, EntryKind,
     MARKER_HEADER, Notebook, TRASH_META_FILE, TrashItem, sanitize_notebook_folder_name,
 };
+use crate::order::TREE_ORDER_FILE;
 use crate::paths::{ASSETS_DIR, META_DIR, NOTEBOOK_FILE, NOTEBOOK_FILE_LEGACY};
 use crate::toml_io;
 use crate::{Error, NOTEBOOK_FORMAT, Result};
@@ -31,10 +32,11 @@ const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 const STAGING_DIR: &str = ".import-staging";
 const WORKSPACE_TRASH_DIR: &str = "trash";
 
-const META_FILES: [(&str, &str); 3] = [
+const META_FILES: [(&str, &str); 4] = [
     (NOTEBOOK_FILE, NOTEBOOK_FILE_LEGACY),
     (BOOKMARKS_FILE, BOOKMARKS_FILE_LEGACY),
     (ENCODING_FILE, ENCODING_FILE_LEGACY),
+    (TREE_ORDER_FILE, TREE_ORDER_FILE),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -121,6 +121,9 @@ impl Workspace {
         }
         fs::create_dir_all(&self.root)?;
         let notebook = Notebook::create(&self.root.join(&candidate), display_name)?;
+        if let Err(err) = self.remember_created_notebook(&notebook) {
+            tracing::warn!(error = %err, "记录新建笔记本的顺序失败");
+        }
         tracing::info!(
             workspace = %self.root.display(),
             notebook = %notebook.display_name(),
@@ -128,6 +131,19 @@ impl Workspace {
             "新建笔记本"
         );
         Ok(notebook)
+    }
+
+    /// Appends a just-created notebook. With no saved order yet, the others
+    /// keep their name sort and the new id is last.
+    fn remember_created_notebook(&self, notebook: &Notebook) -> Result<()> {
+        let previous = crate::order::load_notebook_ids(&self.root);
+        let mut scanned = self.scan().notebooks;
+        if previous.is_empty() {
+            scanned.retain(|item| item.marker.id != notebook.marker.id);
+            scanned.push(notebook.clone());
+        }
+        let ids: Vec<Uuid> = scanned.iter().map(|item| item.marker.id).collect();
+        crate::order::save_notebook_ids(&self.root, &ids)
     }
 
     /// Scans registry cache, child notebook folders and external registrations.
@@ -201,11 +217,13 @@ impl Workspace {
             }
         }
 
-        result.notebooks.sort_by(|a, b| {
-            a.display_name()
-                .to_lowercase()
-                .cmp(&b.display_name().to_lowercase())
-        });
+        let order = crate::order::load_notebook_ids(&self.root);
+        crate::order::sort_by_ids(
+            &mut result.notebooks,
+            &order,
+            |notebook| notebook.marker.id,
+            |notebook| notebook.display_name().to_lowercase(),
+        );
         tracing::debug!(
             root = %self.root.display(),
             notebooks = result.notebooks.len(),
@@ -231,6 +249,10 @@ impl Workspace {
             .filter(|existing| !same_path(&existing.root, &notebook.root))
             .collect();
         notebooks.push(notebook.clone());
+        let ids: Vec<Uuid> = notebooks.iter().map(|item| item.marker.id).collect();
+        if let Err(err) = crate::order::save_notebook_ids(&self.root, &ids) {
+            tracing::warn!(error = %err, "记录外部笔记本的顺序失败");
+        }
         self.save_registry(&notebooks)?;
         tracing::info!(
             notebook = %notebook.display_name(),
@@ -390,6 +412,21 @@ mod tests {
         assert_eq!(scan.notebooks.len(), 2);
         assert!(scan.issues.is_empty());
         assert!(registry_path(&root).is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_notebooks_append_instead_of_sorting_by_name() {
+        let (root, workspace) = temp_workspace();
+        workspace.create_notebook("B").unwrap();
+        workspace.create_notebook("A").unwrap();
+        let names: Vec<String> = workspace
+            .scan()
+            .notebooks
+            .iter()
+            .map(|notebook| notebook.display_name().to_string())
+            .collect();
+        assert_eq!(names, ["B", "A"]);
         fs::remove_dir_all(root).unwrap();
     }
 

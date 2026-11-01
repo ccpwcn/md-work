@@ -63,6 +63,8 @@ impl AppShell {
         self.tree_selection = None;
         self.active_notebook = None;
         self.tree_scroll = UniformListScrollHandle::new();
+        self.tree_drag = None;
+        self.tree_click_suppressed = false;
         self.tab_scroll = ScrollHandle::new();
         self.tab_drag = None;
         self.delete_confirm = None;
@@ -83,6 +85,8 @@ impl AppShell {
         self.search_status = SearchStatus::Idle;
         self.scan_issues.clear();
         self.renaming = None;
+        self.entries_reload_deferred = false;
+        self.create_hold = 0;
         self.export = None;
         self.zip = None;
         self.selection_sig = None;
@@ -143,15 +147,7 @@ impl AppShell {
                                         .notebooks
                                         .into_iter()
                                         .map(|notebook| {
-                                            let tree = notebook.list_tree().unwrap_or_default();
-                                            let rows = build_rows(&tree, &HashSet::new());
-                                            NotebookEntry {
-                                                notebook,
-                                                tree,
-                                                expanded: HashSet::new(),
-                                                rows,
-                                                root_expanded: false,
-                                            }
+                                            load_notebook_entry(notebook, HashSet::new(), false)
                                         })
                                         .collect();
                                 }

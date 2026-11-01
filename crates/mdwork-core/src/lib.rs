@@ -10,6 +10,7 @@ pub mod dirty;
 pub mod doc;
 pub mod image;
 pub mod notebook;
+pub mod order;
 pub mod paths;
 pub mod permissions;
 pub mod recovery;

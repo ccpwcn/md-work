@@ -133,15 +133,7 @@ impl AppShell {
                                         .notebooks
                                         .into_iter()
                                         .map(|notebook| {
-                                            let tree = notebook.list_tree().unwrap_or_default();
-                                            let rows = build_rows(&tree, &HashSet::new());
-                                            NotebookEntry {
-                                                notebook,
-                                                tree,
-                                                expanded: HashSet::new(),
-                                                rows,
-                                                root_expanded: false,
-                                            }
+                                            load_notebook_entry(notebook, HashSet::new(), false)
                                         })
                                         .collect();
                                 }
@@ -371,15 +363,7 @@ impl AppShell {
                                         .find(|(id, _, _)| *id == notebook.marker.id)
                                         .map(|(_, expanded, root)| (expanded.clone(), *root))
                                         .unwrap_or_default();
-                                    let tree = notebook.list_tree().unwrap_or_default();
-                                    let rows = build_rows(&tree, &expanded);
-                                    NotebookEntry {
-                                        notebook,
-                                        tree,
-                                        expanded,
-                                        rows,
-                                        root_expanded,
-                                    }
+                                    load_notebook_entry(notebook, expanded, root_expanded)
                                 })
                                 .collect::<Vec<_>>();
                             Ok((entries, issues))
@@ -416,6 +400,11 @@ impl AppShell {
     }
 
     pub(super) fn reload_entries(&mut self, cx: &mut Context<Self>) {
+        if self.renaming.is_some() || self.create_hold > 0 {
+            self.defer_entries_reload();
+            return;
+        }
+        self.entries_reload_deferred = false;
         self.entries_generation += 1;
         let generation = self.entries_generation;
         let notebooks: Vec<(Notebook, HashSet<String>)> = self
@@ -430,9 +419,10 @@ impl AppShell {
                     notebooks
                         .into_iter()
                         .map(|(notebook, expanded)| {
+                            let order = notebook.load_tree_order();
                             let tree = notebook.list_tree().unwrap_or_default();
-                            let rows = build_rows(&tree, &expanded);
-                            (notebook.marker.id, tree, rows)
+                            let rows = build_rows(&tree, &expanded, &order);
+                            (notebook.marker.id, tree, rows, order)
                         })
                         .collect::<Vec<_>>()
                 })
@@ -441,7 +431,7 @@ impl AppShell {
                 if this.entries_generation != generation {
                     return;
                 }
-                for (id, tree, rows) in refreshed {
+                for (id, tree, rows, order) in refreshed {
                     if let Some(entry) = this
                         .notebooks
                         .iter_mut()
@@ -449,6 +439,7 @@ impl AppShell {
                     {
                         entry.tree = tree;
                         entry.rows = rows;
+                        entry.order = order;
                     }
                 }
                 this.rebuild_sidebar_rows();

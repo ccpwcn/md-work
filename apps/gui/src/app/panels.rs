@@ -1149,6 +1149,17 @@ impl AppShell {
         let muted = cx.theme().muted_foreground;
         let count = rows.len();
         let notes_label = t!("sidebar.notes").to_string();
+        let tree_bounds = self.tree_bounds.clone();
+        if let Ok(mut bounds) = self.tree_bounds.lock() {
+            bounds.clear();
+        }
+        let drop_edge = self.tree_drop_edge();
+        let dragged = self
+            .tree_drag
+            .as_ref()
+            .filter(|drag| drag.started)
+            .map(|drag| drag.source.clone());
+        let drop_color = cx.theme().primary;
 
         uniform_list("sidebar-tree", count, move |range, _window, _cx| {
             range
@@ -1250,7 +1261,13 @@ impl AppShell {
                                         .item(PopupMenuItem::new(new_note_label.clone()).on_click(
                                             move |_, window, cx| {
                                                 note_shell.update(cx, |this, cx| {
-                                                    this.new_note_in(notebook_id, None, window, cx)
+                                                    this.new_note_in(
+                                                        notebook_id,
+                                                        None,
+                                                        SiblingPlace::End,
+                                                        window,
+                                                        cx,
+                                                    )
                                                 });
                                             },
                                         ))
@@ -1261,6 +1278,7 @@ impl AppShell {
                                                         this.new_folder_in(
                                                             notebook_id,
                                                             None,
+                                                            SiblingPlace::End,
                                                             window,
                                                             cx,
                                                         )
@@ -1338,8 +1356,47 @@ impl AppShell {
                                     transparent_black()
                                 })
                                 .hover(move |style| style.bg(hover_bg))
+                                .when(
+                                    matches!(
+                                        &dragged,
+                                        Some(tree_drag::DragSource::Notebook(id)) if *id == notebook_id
+                                    ),
+                                    |row| row.opacity(0.55).cursor(CursorStyle::ClosedHand),
+                                )
+                                .on_prepaint({
+                                    let bounds = tree_bounds.clone();
+                                    move |painted, _, _| {
+                                        if let Ok(mut list) = bounds.lock() {
+                                            list.push((index, painted));
+                                        }
+                                    }
+                                })
+                                .on_mouse_down(MouseButton::Left, {
+                                    let drag_shell = activate_shell.clone();
+                                    move |event: &MouseDownEvent, _, cx| {
+                                        let y = f32::from(event.position.y);
+                                        drag_shell.update(cx, |this, cx| {
+                                            this.begin_tree_drag(
+                                                tree_drag::DragSource::Notebook(notebook_id),
+                                                y,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })
+                                .on_mouse_up(MouseButton::Left, {
+                                    let drag_shell = activate_shell.clone();
+                                    move |_, _, cx| {
+                                        drag_shell.update(cx, |this, cx| {
+                                            this.cancel_tree_drag_if_idle(cx);
+                                        });
+                                    }
+                                })
                                 .on_click(move |_, _, cx| {
                                     activate_shell.update(cx, |this, cx| {
+                                        if this.take_tree_click() {
+                                            return;
+                                        }
                                         if this.active_notebook == Some(notebook_id) {
                                             this.select_tree_root(notebook_id, cx);
                                             this.toggle_notebook_root(notebook_id, cx);
@@ -1393,15 +1450,36 @@ impl AppShell {
                                     index,
                                     &group,
                                     menu_open,
-                                    true,
                                     more_label,
                                     child_note_label,
                                     menu_shell,
                                     plus_shell,
                                     notebook_id,
-                                    None,
+                                    PlusCreate::Child(None),
                                     build_notebook_menu,
                                 ))
+                                .when(drop_edge == Some(tree_drag::DropEdge::Before(index)), |row| {
+                                    row.child(
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .left_0()
+                                            .right_0()
+                                            .h(px(2.))
+                                            .bg(drop_color),
+                                    )
+                                })
+                                .when(drop_edge == Some(tree_drag::DropEdge::After(index)), |row| {
+                                    row.child(
+                                        div()
+                                            .absolute()
+                                            .bottom_0()
+                                            .left_0()
+                                            .right_0()
+                                            .h(px(2.))
+                                            .bg(drop_color),
+                                    )
+                                })
                                 .into_any_element()
                         }
                         SidebarRow::Entry { notebook_id, row } => {
@@ -1464,6 +1542,19 @@ impl AppShell {
                                                 .update(cx, |this, cx| this.cancel_rename(cx));
                                         }
                                     })
+                                    .child(
+                                        div()
+                                            .w(px(12.))
+                                            .flex_shrink_0()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(chevron),
+                                    )
+                                    .child(
+                                        div().flex_shrink_0().child(
+                                            Icon::new(type_icon).xsmall().text_color(muted),
+                                        ),
+                                    )
                                     .child(Input::new(&input).small().w_full())
                                     .child(
                                         Button::new(format!("tree-rename-cancel-{index}"))
@@ -1498,6 +1589,8 @@ impl AppShell {
                             let new_subfolder_label = t!("tree.new_subfolder").to_string();
                             let more_label = t!("tree.more").to_string();
                             let child_note_label = t!("tree.new_child_note").to_string();
+                            let sibling_note_label = t!("tree.new_sibling_note").to_string();
+                            let sibling_folder_label = t!("tree.new_sibling_folder").to_string();
                             let tooltip_rel = rel_path.clone();
                             let tooltip_folder = is_folder;
                             let tooltip_count = row.note_count;
@@ -1520,6 +1613,9 @@ impl AppShell {
                                 let paste_label = paste_label.clone();
                                 let new_note_label = new_note_label.clone();
                                 let new_subfolder_label = new_subfolder_label.clone();
+                                let child_note_label = child_note_label.clone();
+                                let sibling_note_label = sibling_note_label.clone();
+                                let sibling_folder_label = sibling_folder_label.clone();
                                 move |menu: gpui_kit::component::menu::PopupMenu, cx: &App| {
                                     let rename_shell = rename_shell.clone();
                                     let delete_shell = delete_shell.clone();
@@ -1529,6 +1625,9 @@ impl AppShell {
                                     let delete_rel = delete_rel.clone();
                                     let move_rel = move_rel.clone();
                                     let create_rel = create_rel.clone();
+                                    let child_note_label = child_note_label.clone();
+                                    let sibling_note_label = sibling_note_label.clone();
+                                    let sibling_folder_label = sibling_folder_label.clone();
                                     let can_paste =
                                         is_folder && move_shell.read(cx).tree_clipboard.is_some();
                                     let menu = if is_folder {
@@ -1536,13 +1635,18 @@ impl AppShell {
                                         let note_rel = create_rel.clone();
                                         let folder_shell = create_shell.clone();
                                         let folder_rel = create_rel.clone();
+                                        let sibling_shell = create_shell.clone();
+                                        let sibling_rel = create_rel.clone();
+                                        let sibling_folder_shell = create_shell.clone();
+                                        let sibling_folder_rel = create_rel.clone();
                                         menu.item(
-                                            PopupMenuItem::new(new_note_label.clone()).on_click(
+                                            PopupMenuItem::new(child_note_label).on_click(
                                                 move |_, window, cx| {
                                                     note_shell.update(cx, |this, cx| {
                                                         this.new_note_in(
                                                             notebook_id,
                                                             Some(note_rel.clone()),
+                                                            SiblingPlace::End,
                                                             window,
                                                             cx,
                                                         )
@@ -1557,6 +1661,94 @@ impl AppShell {
                                                         this.new_folder_in(
                                                             notebook_id,
                                                             Some(folder_rel.clone()),
+                                                            SiblingPlace::End,
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    });
+                                                }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(sibling_note_label).on_click(
+                                                move |_, window, cx| {
+                                                    sibling_shell.update(cx, |this, cx| {
+                                                        let parent = parent_rel(&sibling_rel);
+                                                        let parent = if parent.is_empty() {
+                                                            None
+                                                        } else {
+                                                            Some(parent.to_string())
+                                                        };
+                                                        this.new_note_in(
+                                                            notebook_id,
+                                                            parent,
+                                                            SiblingPlace::After(sibling_rel.clone()),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                },
+                                            ),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(sibling_folder_label).on_click(
+                                                move |_, window, cx| {
+                                                    sibling_folder_shell.update(cx, |this, cx| {
+                                                        let parent = parent_rel(&sibling_folder_rel);
+                                                        let parent = if parent.is_empty() {
+                                                            None
+                                                        } else {
+                                                            Some(parent.to_string())
+                                                        };
+                                                        this.new_folder_in(
+                                                            notebook_id,
+                                                            parent,
+                                                            SiblingPlace::After(
+                                                                sibling_folder_rel.clone(),
+                                                            ),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                },
+                                            ),
+                                        )
+                                        .separator()
+                                    } else {
+                                        let note_shell = create_shell.clone();
+                                        let note_rel = create_rel.clone();
+                                        let folder_shell = create_shell.clone();
+                                        let folder_rel = create_rel.clone();
+                                        let parent = parent_rel(&create_rel);
+                                        let parent = if parent.is_empty() {
+                                            None
+                                        } else {
+                                            Some(parent.to_string())
+                                        };
+                                        let note_parent = parent.clone();
+                                        let folder_parent = parent;
+                                        menu.item(
+                                            PopupMenuItem::new(new_note_label.clone()).on_click(
+                                                move |_, window, cx| {
+                                                    note_shell.update(cx, |this, cx| {
+                                                        this.new_note_in(
+                                                            notebook_id,
+                                                            note_parent.clone(),
+                                                            SiblingPlace::After(note_rel.clone()),
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    });
+                                                },
+                                            ),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(t!("sidebar.new_folder").to_string())
+                                                .on_click(move |_, window, cx| {
+                                                    folder_shell.update(cx, |this, cx| {
+                                                        this.new_folder_in(
+                                                            notebook_id,
+                                                            folder_parent.clone(),
+                                                            SiblingPlace::After(folder_rel.clone()),
                                                             window,
                                                             cx,
                                                         )
@@ -1564,8 +1756,6 @@ impl AppShell {
                                                 }),
                                         )
                                         .separator()
-                                    } else {
-                                        menu
                                     };
                                     let copy_shell = move_shell.clone();
                                     let copy_rel = move_rel.clone();
@@ -1705,11 +1895,55 @@ impl AppShell {
                                     })
                                     .build(window, cx)
                                 })
+                                .when(
+                                    matches!(
+                                        &dragged,
+                                        Some(tree_drag::DragSource::Entry { notebook_id: id, rel_path: path })
+                                            if *id == notebook_id && path == &rel_path
+                                    ),
+                                    |row| row.opacity(0.55).cursor(CursorStyle::ClosedHand),
+                                )
+                                .on_prepaint({
+                                    let bounds = tree_bounds.clone();
+                                    move |painted, _, _| {
+                                        if let Ok(mut list) = bounds.lock() {
+                                            list.push((index, painted));
+                                        }
+                                    }
+                                })
+                                .on_mouse_down(MouseButton::Left, {
+                                    let drag_shell = shell.clone();
+                                    let drag_rel = rel_path.clone();
+                                    move |event: &MouseDownEvent, _, cx| {
+                                        let y = f32::from(event.position.y);
+                                        drag_shell.update(cx, |this, cx| {
+                                            this.begin_tree_drag(
+                                                tree_drag::DragSource::Entry {
+                                                    notebook_id,
+                                                    rel_path: drag_rel.clone(),
+                                                },
+                                                y,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })
+                                .on_mouse_up(MouseButton::Left, {
+                                    let drag_shell = shell.clone();
+                                    move |_, _, cx| {
+                                        drag_shell.update(cx, |this, cx| {
+                                            this.cancel_tree_drag_if_idle(cx);
+                                        });
+                                    }
+                                })
                                 .on_click({
                                     let click_shell = shell.clone();
                                     let click_rel = rel_path.clone();
                                     move |_, window, cx| {
                                         click_shell.update(cx, |this, cx| {
+                                            if this.take_tree_click() {
+                                                return;
+                                            }
                                             if is_folder {
                                                 this.select_tree_entry(
                                                     notebook_id,
@@ -1781,15 +2015,44 @@ impl AppShell {
                                     index,
                                     &group,
                                     menu_open,
-                                    is_folder,
                                     more_label,
-                                    child_note_label,
+                                    if is_folder {
+                                        child_note_label
+                                    } else {
+                                        new_note_label
+                                    },
                                     menu_shell,
                                     plus_shell,
                                     notebook_id,
-                                    is_folder.then(|| create_rel.clone()),
+                                    if is_folder {
+                                        PlusCreate::Child(Some(create_rel.clone()))
+                                    } else {
+                                        PlusCreate::After(create_rel.clone())
+                                    },
                                     build_entry_menu,
                                 ))
+                                .when(drop_edge == Some(tree_drag::DropEdge::Before(index)), |row| {
+                                    row.child(
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .left_0()
+                                            .right_0()
+                                            .h(px(2.))
+                                            .bg(drop_color),
+                                    )
+                                })
+                                .when(drop_edge == Some(tree_drag::DropEdge::After(index)), |row| {
+                                    row.child(
+                                        div()
+                                            .absolute()
+                                            .bottom_0()
+                                            .left_0()
+                                            .right_0()
+                                            .h(px(2.))
+                                            .bg(drop_color),
+                                    )
+                                })
                                 .into_any_element()
                         }
                     }
@@ -1808,13 +2071,12 @@ fn sidebar_row_trailing(
     index: usize,
     group: &str,
     menu_open: bool,
-    can_add_child: bool,
     more_label: String,
-    child_note_label: String,
+    plus_label: String,
     menu_shell: Entity<AppShell>,
     plus_shell: Entity<AppShell>,
     notebook_id: Uuid,
-    parent: Option<String>,
+    plus: PlusCreate,
     build_menu: Rc<
         dyn Fn(gpui_kit::component::menu::PopupMenu, &App) -> gpui_kit::component::menu::PopupMenu,
     >,
@@ -1852,21 +2114,30 @@ fn sidebar_row_trailing(
         })
         .child(more);
 
-    if can_add_child {
-        let parent = parent.clone();
-        actions = actions.child(
-            Button::new(format!("tree-add-{index}"))
-                .ghost()
-                .compact()
-                .icon(IconName::Plus)
-                .tooltip(child_note_label)
-                .on_click(move |_, window, cx| {
-                    plus_shell.update(cx, |this, cx| {
-                        this.new_note_in(notebook_id, parent.clone(), window, cx);
-                    });
-                }),
-        );
-    }
+    actions = actions.child(
+        Button::new(format!("tree-add-{index}"))
+            .ghost()
+            .compact()
+            .icon(IconName::Plus)
+            .tooltip(plus_label)
+            .on_click(move |_, window, cx| {
+                let plus = plus.clone();
+                plus_shell.update(cx, |this, cx| match plus {
+                    PlusCreate::Child(parent) => {
+                        this.new_note_in(notebook_id, parent, SiblingPlace::End, window, cx);
+                    }
+                    PlusCreate::After(rel) => {
+                        let parent = parent_rel(&rel);
+                        let parent = if parent.is_empty() {
+                            None
+                        } else {
+                            Some(parent.to_string())
+                        };
+                        this.new_note_in(notebook_id, parent, SiblingPlace::After(rel), window, cx);
+                    }
+                });
+            }),
+    );
 
     actions.into_any_element()
 }

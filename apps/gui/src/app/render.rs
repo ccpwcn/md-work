@@ -467,7 +467,7 @@ impl AppShell {
                 .filter(|item| item.kind == EntryKind::Folder)
                 .cloned()
                 .collect();
-            let folder_rows = build_rows(&folder_tree, &folder_expanded);
+            let folder_rows = build_rows(&folder_tree, &folder_expanded, &entry.order);
             for (row_index, row) in folder_rows.iter().enumerate() {
                 let rel_path = row.rel_path.clone();
                 let label = row.name.clone();

@@ -342,6 +342,25 @@ impl Notebook {
         candidate == root || candidate.starts_with(&format!("{root}/"))
     }
 
+    pub fn load_tree_order(&self) -> crate::order::TreeOrder {
+        crate::order::TreeOrder::load(&self.root)
+    }
+
+    /// Records `child_name` among the children of `parent` (`""` is the root).
+    /// `after_name` is a sibling directory name; `None` appends.
+    pub fn place_child(
+        &self,
+        parent: &str,
+        child_name: &str,
+        after_name: Option<&str>,
+    ) -> Result<()> {
+        crate::order::place_child(&self.root, parent, child_name, after_name)
+    }
+
+    pub fn save_tree_order(&self, order: &crate::order::TreeOrder) -> Result<()> {
+        order.save(&self.root)
+    }
+
     pub fn list_entries(&self) -> Result<Vec<Entry>> {
         Ok(self
             .walk(false)?
@@ -477,6 +496,7 @@ impl Notebook {
             return Err(Error::NotFound(from.to_string()));
         }
         let is_dir = source.is_dir();
+        let source_rel = self.rel_path(&source)?;
         let target_rel = if is_dir {
             self.normalize_rel(to)?
         } else {
@@ -487,11 +507,8 @@ impl Notebook {
         if target.exists() {
             return Err(Error::Exists(target_rel));
         }
-        if is_dir {
-            let source_rel = self.rel_path(&source)?;
-            if target_rel.starts_with(&format!("{source_rel}/")) {
-                return Err(Error::InvalidPath(target_rel));
-            }
+        if is_dir && target_rel.starts_with(&format!("{source_rel}/")) {
+            return Err(Error::InvalidPath(target_rel));
         }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
@@ -507,6 +524,11 @@ impl Notebook {
             let _ = self.forget_encoding(from);
         } else if is_dir {
             let _ = self.rekey_encodings_under(from, &target_rel);
+        }
+        if let Err(err) =
+            crate::order::sync_after_rename(&self.root, &source_rel, &target_rel, is_dir)
+        {
+            tracing::warn!(error = %err, from = %source_rel, to = %target_rel, "更新同级顺序失败");
         }
         tracing::info!(
             notebook = %self.display_name(),
@@ -698,6 +720,11 @@ impl Notebook {
         fs::create_dir_all(&item_dir)?;
         fs::rename(&source, item_dir.join("payload"))?;
         toml_io::save(&item_dir.join(TRASH_META_FILE), &item)?;
+        if let Err(err) =
+            crate::order::forget_child(&self.root, &item.rel_path, kind == EntryKind::Folder)
+        {
+            tracing::warn!(error = %err, path = %item.rel_path, "从同级顺序移除失败");
+        }
         tracing::info!(
             notebook = %self.display_name(),
             path = %item.rel_path,
@@ -746,6 +773,14 @@ impl Notebook {
         }
         fs::rename(item_dir.join("payload"), &target)?;
         fs::remove_dir_all(&item_dir)?;
+        if let Err(err) = crate::order::place_child(
+            &self.root,
+            crate::order::parent_rel(&target_rel),
+            crate::order::file_name(&target_rel),
+            None,
+        ) {
+            tracing::warn!(error = %err, path = %target_rel, "恢复后的同级顺序写入失败");
+        }
         tracing::info!(
             notebook = %self.display_name(),
             path = %target_rel,

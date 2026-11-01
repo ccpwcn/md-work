@@ -77,7 +77,8 @@ impl AppShell {
             entry.expanded.insert(rel_path.to_string());
         }
         let expanded = entry.expanded.clone();
-        entry.rows = build_rows(&entry.tree, &expanded);
+        let order = entry.order.clone();
+        entry.rows = build_rows(&entry.tree, &expanded, &order);
         self.rebuild_sidebar_rows();
         cx.notify();
     }
@@ -100,7 +101,8 @@ impl AppShell {
             return;
         }
         let expanded = entry.expanded.clone();
-        entry.rows = build_rows(&entry.tree, &expanded);
+        let order = entry.order.clone();
+        entry.rows = build_rows(&entry.tree, &expanded, &order);
         self.rebuild_sidebar_rows();
         cx.notify();
     }
@@ -340,13 +342,20 @@ impl AppShell {
             self.notify_warning(t!("editor.no_notebook").to_string(), cx);
             return;
         };
-        self.new_folder_in(notebook_id, None, window, cx);
+        let (parent, place) = self
+            .tree_selection
+            .as_ref()
+            .filter(|selection| selection.notebook_id() == notebook_id)
+            .map(TreeSelection::create_target)
+            .unwrap_or((None, SiblingPlace::End));
+        self.new_folder_in(notebook_id, parent, place, window, cx);
     }
 
     pub(super) fn new_folder_in(
         &mut self,
         notebook_id: Uuid,
         parent: Option<String>,
+        place: SiblingPlace,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -359,6 +368,12 @@ impl AppShell {
             return;
         };
         let target = notebook.clone();
+        let anchor = match &place {
+            SiblingPlace::End => None,
+            SiblingPlace::After(rel) => Some(rel.clone()),
+        };
+        let placed_after = anchor.clone();
+        self.begin_create_hold();
         let receiver = disk::submit(move || -> mdwork_core::Result<String> {
             let mut name = "新文件夹".to_string();
             let mut counter = 2;
@@ -373,7 +388,9 @@ impl AppShell {
                     .map(|path| path.exists())
                     .unwrap_or(true);
                 if !exists {
-                    return target.create_folder(&rel);
+                    let created = target.create_folder(&rel)?;
+                    place_created(&target, &created, anchor.as_deref());
+                    return Ok(created);
                 }
                 name = format!("新文件夹 {counter}");
                 counter += 1;
@@ -382,20 +399,32 @@ impl AppShell {
         cx.spawn(async move |this, cx| {
             let result = match receiver.await {
                 Ok(result) => result,
-                Err(_) => return,
+                Err(_) => {
+                    let _ = this.update(cx, |this, cx| this.end_create_hold(cx));
+                    return;
+                }
             };
-            let _ = this.update_in(cx, |this, window, cx| {
+            let applied = this.update_in(cx, |this, window, cx| {
                 match result {
                     Ok(rel_path) => {
-                        this.reload_entries(cx);
+                        this.present_created_entry(
+                            notebook_id,
+                            &rel_path,
+                            EntryKind::Folder,
+                            placed_after.as_deref(),
+                            window,
+                            cx,
+                        );
                         this.persist_session(cx);
-                        this.expand_to(notebook_id, &rel_path);
-                        this.begin_rename(notebook_id, &rel_path, window, cx);
                     }
                     Err(err) => this.notify_error(format!("新建文件夹失败：{err}"), cx),
                 }
+                this.end_create_hold(cx);
                 cx.notify();
             });
+            if applied.is_err() {
+                let _ = this.update(cx, |this, cx| this.end_create_hold(cx));
+            }
         })
         .detach();
     }
@@ -620,6 +649,7 @@ impl AppShell {
                 dest_folder.as_deref(),
                 unique,
             )?;
+            place_created(&target, &copied, None);
             if delete_source {
                 let _ = source.delete_entry(&source_rel_for_disk);
             }
@@ -800,8 +830,22 @@ impl AppShell {
         else {
             return;
         };
-        let receiver = disk::submit(move || {
-            source.copy_entry_to(&target, &source_rel, dest_folder.as_deref(), unique)
+        let anchor = if unique {
+            let source_parent = parent_rel(&source_rel);
+            let dest_parent = dest_folder.as_deref().unwrap_or("");
+            if source_notebook_id == dest_notebook_id && source_parent == dest_parent {
+                Some(source_rel.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let receiver = disk::submit(move || -> mdwork_core::Result<String> {
+            let copied =
+                source.copy_entry_to(&target, &source_rel, dest_folder.as_deref(), unique)?;
+            place_created(&target, &copied, anchor.as_deref());
+            Ok(copied)
         });
         cx.spawn(async move |this, cx| {
             let result = receiver.await;
@@ -834,6 +878,88 @@ impl AppShell {
         .detach();
     }
 
+    /// Inserts a just-created note or folder into the open tree and starts
+    /// in-place rename on that row.
+    ///
+    /// The following disk scan is asynchronous, so the new row has to be
+    /// staged first. Otherwise rename looks for a row that is not loaded yet
+    /// and returns without showing the field.
+    pub(super) fn present_created_entry(
+        &mut self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        kind: EntryKind,
+        after_rel: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage_created_entry(notebook_id, rel_path, kind, after_rel);
+        self.select_tree_entry(notebook_id, rel_path, kind, cx);
+        self.scroll_sidebar_entry(notebook_id, rel_path);
+        self.begin_rename(notebook_id, rel_path, window, cx);
+        self.reload_entries(cx);
+    }
+
+    pub(super) fn stage_created_entry(
+        &mut self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        kind: EntryKind,
+        after_rel: Option<&str>,
+    ) {
+        let parent = parent_rel(rel_path).to_string();
+        let child_name = file_name(rel_path).to_string();
+        {
+            let Some(entry) = self
+                .notebooks
+                .iter_mut()
+                .find(|entry| entry.notebook.marker.id == notebook_id)
+            else {
+                return;
+            };
+            if !entry
+                .tree
+                .iter()
+                .any(|item| item.rel_path.eq_ignore_ascii_case(rel_path))
+            {
+                entry.tree.push(Entry {
+                    rel_path: rel_path.to_string(),
+                    name: entry_display_name(rel_path, kind),
+                    kind,
+                    size: 0,
+                    created: 0,
+                    modified: 0,
+                });
+            }
+            let mut names = sibling_file_names(&entry.tree, &parent, &entry.order);
+            insert_sibling_name(&mut names, child_name, after_rel.map(file_name));
+            entry.order.set_names(parent, names);
+            entry.root_expanded = true;
+            let mut ancestor = rel_path;
+            while let Some(index) = ancestor.rfind('/') {
+                ancestor = &ancestor[..index];
+                entry.expanded.insert(ancestor.to_string());
+            }
+            let expanded = entry.expanded.clone();
+            let order = entry.order.clone();
+            entry.rows = build_rows(&entry.tree, &expanded, &order);
+        }
+        self.rebuild_sidebar_rows();
+    }
+
+    pub(super) fn scroll_sidebar_entry(&mut self, notebook_id: Uuid, rel_path: &str) {
+        let Some(row) = self.sidebar_rows.iter().position(|row| match row {
+            SidebarRow::Entry {
+                notebook_id: id,
+                row,
+            } => *id == notebook_id && row.rel_path == rel_path,
+            SidebarRow::Notebook { .. } => false,
+        }) else {
+            return;
+        };
+        self.tree_scroll.scroll_to_item(row, ScrollStrategy::Center);
+    }
+
     pub(super) fn begin_rename(
         &mut self,
         notebook_id: Uuid,
@@ -841,7 +967,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(name) = self
+        let name = self
             .notebooks
             .iter()
             .find(|entry| entry.notebook.marker.id == notebook_id)
@@ -852,9 +978,14 @@ impl AppShell {
                     .find(|row| row.rel_path == rel_path)
                     .map(|row| row.name.clone())
             })
-        else {
-            return;
-        };
+            .unwrap_or_else(|| {
+                let file = file_name(rel_path);
+                if file.to_ascii_lowercase().ends_with(".md") {
+                    entry_display_name(rel_path, EntryKind::Note)
+                } else {
+                    file.to_string()
+                }
+            });
         // No clean_on_escape: Escape must cancel the rename, not clear the field.
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name));
         input.update(cx, |state, cx| {
@@ -872,12 +1003,44 @@ impl AppShell {
             rel_path: rel_path.to_string(),
             input,
         });
+        // Drop a scan that is already in flight. Applying it would rebuild the
+        // row under the caret and the field's blur handler would commit.
+        self.defer_entries_reload();
         cx.notify();
+    }
+
+    /// Ignores tree scans until the current create or rename finishes.
+    ///
+    /// Bumping the generation also drops a scan that has already started, so
+    /// it cannot paint a new file at the end of the level before `place_created`
+    /// has recorded where it belongs.
+    pub(super) fn defer_entries_reload(&mut self) {
+        self.entries_generation += 1;
+        self.entries_reload_deferred = true;
+    }
+
+    pub(super) fn begin_create_hold(&mut self) {
+        self.create_hold = self.create_hold.saturating_add(1);
+        self.defer_entries_reload();
+    }
+
+    pub(super) fn end_create_hold(&mut self, cx: &mut Context<Self>) {
+        self.create_hold = self.create_hold.saturating_sub(1);
+        if self.create_hold == 0 && self.renaming.is_none() {
+            self.flush_deferred_entries_reload(cx);
+        }
     }
 
     pub(super) fn cancel_rename(&mut self, cx: &mut Context<Self>) {
         if self.renaming.take().is_some() {
+            self.flush_deferred_entries_reload(cx);
             cx.notify();
+        }
+    }
+
+    fn flush_deferred_entries_reload(&mut self, cx: &mut Context<Self>) {
+        if self.entries_reload_deferred {
+            self.reload_entries(cx);
         }
     }
 
@@ -887,19 +1050,50 @@ impl AppShell {
         };
         let value = renaming.input.read(cx).value().trim().to_string();
         if value.is_empty() {
+            self.flush_deferred_entries_reload(cx);
             cx.notify();
             return;
         }
-        let target = match renaming.rel_path.rsplit_once('/') {
-            Some((parent, _)) => format!("{parent}/{value}"),
-            None => value,
+        let target = match parent_rel(&renaming.rel_path) {
+            "" => value,
+            parent => format!("{parent}/{value}"),
         };
-        if target.eq_ignore_ascii_case(&renaming.rel_path) {
+        // The field shows the note title without `.md`. Accepting that title
+        // must keep the file, not try to rename it onto itself.
+        if self.rename_is_noop(renaming.notebook_id, &renaming.rel_path, &target) {
+            self.flush_deferred_entries_reload(cx);
             cx.notify();
             return;
         }
         self.begin_move_entry(renaming.notebook_id, renaming.rel_path.clone(), target, cx);
         cx.notify();
+    }
+
+    /// True when `to` names the same notebook entry as `from`.
+    fn rename_is_noop(&self, notebook_id: Uuid, from: &str, to: &str) -> bool {
+        if to.eq_ignore_ascii_case(from) {
+            return true;
+        }
+        let Some(entry) = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == notebook_id)
+        else {
+            return false;
+        };
+        let is_folder = entry
+            .tree
+            .iter()
+            .any(|item| item.rel_path.eq_ignore_ascii_case(from) && item.kind == EntryKind::Folder);
+        let Ok(source) = entry.notebook.normalize_rel(from) else {
+            return false;
+        };
+        let normalized = if is_folder {
+            entry.notebook.normalize_rel(to)
+        } else {
+            entry.notebook.normalize_note_rel(to)
+        };
+        normalized.is_ok_and(|target| target.eq_ignore_ascii_case(&source))
     }
 
     /// Renames or moves an entry on the writer thread. Open buffers are held
@@ -917,6 +1111,7 @@ impl AppShell {
             .find(|entry| entry.notebook.marker.id == notebook_id)
             .map(|entry| entry.notebook.clone())
         else {
+            self.flush_deferred_entries_reload(cx);
             return;
         };
         let affected: Vec<EntityId> = self
@@ -977,12 +1172,14 @@ impl AppShell {
                         this.reveal_active(cx);
                     }
                     Ok(Err(err)) => {
+                        this.flush_deferred_entries_reload(cx);
                         this.notify_error(
                             t!("tree.rename_failed", error = err.to_string()).to_string(),
                             cx,
                         );
                     }
                     Err(_) => {
+                        this.flush_deferred_entries_reload(cx);
                         this.notify_error(
                             t!("tree.rename_failed", error = "写入任务已停止").to_string(),
                             cx,

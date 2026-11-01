@@ -26,6 +26,7 @@ use mdwork_core::config::{
 use mdwork_core::doc::{Eol, TextEncoding};
 use mdwork_core::image::{self, ImageHost, ImageKind};
 use mdwork_core::notebook::{Entry, EntryKind, Notebook, TrashItem};
+use mdwork_core::order::{self, TreeOrder, file_name, parent_rel, sibling_rank};
 use mdwork_core::permissions::{self as perms, Scope, TokenRecord};
 use mdwork_core::search::{self, SearchHit, SearchQuery};
 use mdwork_core::text::text_stats;
@@ -33,6 +34,7 @@ use mdwork_core::workspace_registry::WorkspaceRegistry;
 use mdwork_core::{FolderKind, Workspace};
 use mdwork_export::{
     ExportEvent, ExportFormat, ExportJob, ExportOptions, ExportRequest, NotebookPrefs, PaperSize,
+    TableWidth,
 };
 use mdwork_mcp::{AuditEntry, AuditLog, TokenStore};
 use mdwork_render::preview::{OutlineItem, PreviewIr};
@@ -58,6 +60,7 @@ mod render;
 mod searcher;
 mod settings;
 mod toolbar;
+mod tree_drag;
 mod util;
 mod window_place;
 mod workspace;
@@ -101,6 +104,8 @@ struct NotebookEntry {
     tree: Vec<Entry>,
     expanded: HashSet<String>,
     rows: Vec<TreeRow>,
+    /// Saved sibling order. Parents missing from it keep the name sort.
+    order: TreeOrder,
     /// Whether this notebook root is expanded in the unified sidebar tree.
     root_expanded: bool,
 }
@@ -132,6 +137,24 @@ enum SidebarRow {
     },
 }
 
+/// Where a newly created note or folder sits among its siblings.
+#[derive(Clone, Debug)]
+enum SiblingPlace {
+    /// Last child of the chosen parent.
+    End,
+    /// Immediately after this sibling's notebook-relative path.
+    After(String),
+}
+
+/// Plus button on a sidebar row.
+#[derive(Clone, Debug)]
+enum PlusCreate {
+    /// New note at the end of `parent` (`None` is the notebook root).
+    Child(Option<String>),
+    /// New note immediately after this relative path.
+    After(String),
+}
+
 /// Sidebar focus used as the create target for title-bar / shortcut「新建笔记」.
 #[derive(Clone, PartialEq, Eq)]
 enum TreeSelection {
@@ -153,22 +176,31 @@ impl TreeSelection {
         }
     }
 
-    /// Parent folder for a newly created note, or `None` for the notebook root.
-    fn create_parent(&self) -> Option<String> {
+    /// Where「新建」lands for this selection.
+    ///
+    /// A notebook or folder receives a child at the end of its children. A note
+    /// receives a sibling immediately after itself.
+    fn create_target(&self) -> (Option<String>, SiblingPlace) {
         match self {
-            TreeSelection::NotebookRoot(_) => None,
+            TreeSelection::NotebookRoot(_) => (None, SiblingPlace::End),
             TreeSelection::Entry {
                 rel_path,
                 kind: EntryKind::Folder,
                 ..
-            } => Some(rel_path.clone()),
+            } => (Some(rel_path.clone()), SiblingPlace::End),
             TreeSelection::Entry {
                 rel_path,
                 kind: EntryKind::Note,
                 ..
-            } => rel_path
-                .rfind('/')
-                .map(|index| rel_path[..index].to_string()),
+            } => {
+                let parent = parent_rel(rel_path);
+                let parent = if parent.is_empty() {
+                    None
+                } else {
+                    Some(parent.to_string())
+                };
+                (parent, SiblingPlace::After(rel_path.clone()))
+            }
         }
     }
 
@@ -507,6 +539,11 @@ pub struct AppShell {
     changed: Option<Arc<Mutex<Receiver<Vec<PathBuf>>>>>,
     window_handle: gpui_kit::AnyWindowHandle,
     tree_scroll: UniformListScrollHandle,
+    tree_drag: Option<tree_drag::TreeDrag>,
+    /// Sidebar row indexes and their latest painted bounds, for drag hit-testing.
+    tree_bounds: Arc<Mutex<Vec<(usize, Bounds<Pixels>)>>>,
+    /// A finished drag must not also activate the row under the pointer.
+    tree_click_suppressed: bool,
     tab_scroll: ScrollHandle,
     tab_drag: Option<TabDrag>,
     /// Doc indices and their latest painted bounds for tab hit-testing.
@@ -564,6 +601,12 @@ pub struct AppShell {
     initializing: bool,
     reload_generation: u64,
     entries_generation: u64,
+    /// A tree scan arrived while an in-place rename was open. Run it after
+    /// the field closes so the refresh cannot dismiss the input.
+    entries_reload_deferred: bool,
+    /// Creates in flight. A reload during this window can paint the new row
+    /// at the end of its level before its sibling order is saved.
+    create_hold: u32,
     trash_generation: u64,
     switch_generation: u64,
     /// Bumps on each placement change so a slower save does not overwrite a newer one.
@@ -771,6 +814,9 @@ impl AppShell {
             changed: None,
             window_handle: window.window_handle(),
             tree_scroll: UniformListScrollHandle::new(),
+            tree_drag: None,
+            tree_bounds: Arc::new(Mutex::new(Vec::new())),
+            tree_click_suppressed: false,
             tab_scroll: ScrollHandle::new(),
             tab_drag: None,
             tab_bounds: Arc::new(Mutex::new(Vec::new())),
@@ -823,6 +869,8 @@ impl AppShell {
             initializing: true,
             reload_generation: 0,
             entries_generation: 0,
+            entries_reload_deferred: false,
+            create_hold: 0,
             trash_generation: 0,
             switch_generation: 0,
             window_save_generation: 0,
@@ -1028,6 +1076,9 @@ impl Render for AppShell {
         }
         if self.tab_drag.is_some() {
             root = root.child(self.render_tab_drag_listeners(cx));
+        }
+        if self.tree_drag.is_some() {
+            root = root.child(self.render_tree_drag_listeners(cx));
         }
 
         if self.export.is_some() {

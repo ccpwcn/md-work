@@ -590,7 +590,8 @@ impl AppShell {
         }
         if changed {
             let expanded = entry.expanded.clone();
-            entry.rows = build_rows(&entry.tree, &expanded);
+            let order = entry.order.clone();
+            entry.rows = build_rows(&entry.tree, &expanded, &order);
             self.rebuild_sidebar_rows();
         }
     }
@@ -695,23 +696,23 @@ impl AppShell {
             self.notify_warning(t!("editor.no_notebook").to_string(), cx);
             return;
         };
-        let parent = self.new_note_parent(id, cx);
-        self.new_note_in(id, parent, window, cx);
-    }
-
-    /// Folder that title-bar / shortcut「新建笔记」should create into.
-    ///
-    /// Prefers the sidebar selection; otherwise the parent of the active note.
-    pub(super) fn new_note_parent(&self, notebook_id: Uuid, cx: &App) -> Option<String> {
-        if let Some(selection) = self
+        let (parent, place) = self
             .tree_selection
             .as_ref()
-            .filter(|selection| selection.notebook_id() == notebook_id)
-        {
-            return selection.create_parent();
-        }
-        self.active_rel_path(cx)
-            .and_then(|rel| rel.rfind('/').map(|index| rel[..index].to_string()))
+            .filter(|selection| selection.notebook_id() == id)
+            .map(TreeSelection::create_target)
+            .unwrap_or_else(|| {
+                let parent = self.active_rel_path(cx).and_then(|rel| {
+                    let parent = parent_rel(&rel);
+                    if parent.is_empty() {
+                        None
+                    } else {
+                        Some(parent.to_string())
+                    }
+                });
+                (parent, SiblingPlace::End)
+            });
+        self.new_note_in(id, parent, place, window, cx);
     }
 
     pub(super) fn select_tree_root(&mut self, notebook_id: Uuid, cx: &mut Context<Self>) {
@@ -755,6 +756,7 @@ impl AppShell {
         &mut self,
         notebook_id: Uuid,
         parent: Option<String>,
+        place: SiblingPlace,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -768,6 +770,12 @@ impl AppShell {
         };
 
         let target = notebook.clone();
+        let anchor = match &place {
+            SiblingPlace::End => None,
+            SiblingPlace::After(rel) => Some(rel.clone()),
+        };
+        let placed_after = anchor.clone();
+        self.begin_create_hold();
         let receiver = disk::submit(move || -> mdwork_core::Result<String> {
             let mut name = "新笔记.md".to_string();
             let mut counter = 2;
@@ -781,7 +789,9 @@ impl AppShell {
                     .map(|path| path.exists())
                     .unwrap_or(true);
                 if !exists {
-                    return target.create_note(&rel, "");
+                    let created = target.create_note(&rel, "")?;
+                    place_created(&target, &created, anchor.as_deref());
+                    return Ok(created);
                 }
                 name = format!("新笔记 {counter}.md");
                 counter += 1;
@@ -790,22 +800,35 @@ impl AppShell {
         cx.spawn(async move |this, cx| {
             let result = match receiver.await {
                 Ok(result) => result,
-                Err(_) => return,
+                Err(_) => {
+                    let _ = this.update(cx, |this, cx| this.end_create_hold(cx));
+                    return;
+                }
             };
-            let _ = this.update_in(cx, |this, window, cx| {
+            let applied = this.update_in(cx, |this, window, cx| {
                 match result {
                     Ok(rel_path) => {
-                        this.reload_entries(cx);
-                        this.expand_to(notebook_id, &rel_path);
-                        // Open first, then enter in-place rename so the tree
-                        // input keeps focus (select-all ready to type over).
+                        // Stage the row first so the rename field has a place
+                        // to land, then open the note, then focus the field.
+                        this.stage_created_entry(
+                            notebook_id,
+                            &rel_path,
+                            EntryKind::Note,
+                            placed_after.as_deref(),
+                        );
+                        this.scroll_sidebar_entry(notebook_id, &rel_path);
                         this.open_note(&notebook, &rel_path, window, cx);
                         this.begin_rename(notebook_id, &rel_path, window, cx);
+                        this.reload_entries(cx);
                     }
                     Err(err) => this.notify_error(format!("新建笔记失败：{err}"), cx),
                 }
+                this.end_create_hold(cx);
                 cx.notify();
             });
+            if applied.is_err() {
+                let _ = this.update(cx, |this, cx| this.end_create_hold(cx));
+            }
         })
         .detach();
     }

@@ -60,6 +60,21 @@ impl PaperSize {
     }
 }
 
+/// How wide an exported table is.
+///
+/// Markdown does not specify table width. [`TableWidth::Content`] keeps each
+/// column as narrow as its text. [`TableWidth::Full`] stretches the table
+/// across the text width, with columns sharing that width equally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TableWidth {
+    /// Size each column to its contents.
+    #[default]
+    Content,
+    /// Stretch the table to the full text width.
+    Full,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct ExportOptions {
@@ -86,6 +101,7 @@ pub struct ExportOptions {
     pub code_highlight: bool,
     pub image_max_width_pct: u8,
     pub justify: bool,
+    pub table_width: TableWidth,
     pub png_dpi: u32,
     pub png_page_files: bool,
     pub author: String,
@@ -117,6 +133,7 @@ impl Default for ExportOptions {
             code_highlight: true,
             image_max_width_pct: 100,
             justify: true,
+            table_width: TableWidth::Content,
             png_dpi: 144,
             png_page_files: false,
             author: String::new(),
@@ -433,18 +450,31 @@ impl<'a> Emitter<'a> {
     }
 
     fn body(&mut self, ir: &PreviewIr) {
+        let mut extra_before = 0u32;
         for block in &ir.blocks {
             if matches!(block, Block::FootnoteDefinition { .. }) {
+                continue;
+            }
+            if let Block::Blank { lines, .. } = block {
+                extra_before += lines;
                 continue;
             }
             let markup = self.block(block);
             if markup.trim().is_empty() {
                 continue;
             }
+            if extra_before > 0 {
+                // 跟在上一段的段落分隔之后，避免再被空行拆成独立段落把间距加倍。
+                self.line(&self.blank_space(extra_before));
+                extra_before = 0;
+            }
             let line = block_line(block);
             self.line_map.push((self.next_line(), line));
             self.line(&markup);
             self.line("");
+        }
+        if extra_before > 0 {
+            self.line(&self.blank_space(extra_before));
         }
 
         let unused: Vec<String> = self
@@ -480,10 +510,7 @@ impl<'a> Emitter<'a> {
                 items,
                 ..
             } => self.list(*ordered, *start, items),
-            Block::Quote { blocks, .. } => {
-                let body = self.blocks_markup(blocks);
-                format!("#quote(block: true)[\n{body}\n]")
-            }
+            Block::Quote { blocks, .. } => quote_block(&self.blocks_markup(blocks)),
             Block::Table {
                 head, rows, aligns, ..
             } => self.table(head, rows, aligns),
@@ -498,6 +525,8 @@ impl<'a> Emitter<'a> {
             } => self.block_image(src, title.as_deref(), alt, *width, *height, attrs),
             Block::Div { text, attrs, .. } => self.styled_text_box(text, attrs, true),
             Block::Rule { .. } => "#line(length: 100%, stroke: 0.5pt + luma(185))".to_string(),
+            // 与预览同一约定：`lines` 是分隔空行之外的额外行数，不折叠。
+            Block::Blank { lines, .. } => self.blank_space(*lines),
             Block::Math { tex, .. } => self.math(tex, true),
             Block::FootnoteDefinition { .. } => String::new(),
         }
@@ -505,16 +534,38 @@ impl<'a> Emitter<'a> {
 
     fn blocks_markup(&mut self, blocks: &[Block]) -> String {
         let mut parts = Vec::new();
+        let mut extra_before = 0u32;
         for block in blocks {
             if matches!(block, Block::FootnoteDefinition { .. }) {
                 continue;
             }
-            let markup = self.block(block);
-            if !markup.trim().is_empty() {
-                parts.push(markup);
+            if let Block::Blank { lines, .. } = block {
+                extra_before += lines;
+                continue;
             }
+            let mut markup = self.block(block);
+            if markup.trim().is_empty() {
+                continue;
+            }
+            if extra_before > 0 {
+                markup = format!("{}\n{markup}", self.blank_space(extra_before));
+                extra_before = 0;
+            }
+            parts.push(markup);
+        }
+        if extra_before > 0 {
+            parts.push(self.blank_space(extra_before));
         }
         parts.join("\n\n")
+    }
+
+    /// 一行额外空行 = 当前正文行距。`weak: false` 让它不会被段落间距吃掉。
+    fn blank_space(&self, lines: u32) -> String {
+        let em = (lines as f32) * self.options.line_height.clamp(1.0, 3.0);
+        let rounded = (em * 100.0).round() / 100.0;
+        let text = format!("{rounded:.2}");
+        let text = text.trim_end_matches('0').trim_end_matches('.');
+        format!("#v({text}em, weak: false)")
     }
 
     fn list(&mut self, ordered: bool, start: usize, items: &[crate::preview::ListItem]) -> String {
@@ -585,6 +636,7 @@ impl<'a> Emitter<'a> {
                 cells.push(format!("[{cell}]"));
             }
         }
+        let columns = table_column_spec(columns, self.options.table_width);
         format!(
             "#table(columns: {columns}, align: {align}, {})",
             cells.join(", ")
@@ -841,6 +893,7 @@ fn block_line(block: &Block) -> usize {
         | Block::Image { line, .. }
         | Block::Div { line, .. }
         | Block::Rule { line }
+        | Block::Blank { line, .. }
         | Block::Math { line, .. }
         | Block::FootnoteDefinition { line, .. } => *line,
     }
@@ -988,6 +1041,24 @@ fn template_markup(template: &str, meta: &DocMeta) -> String {
     }
     out.push_str(&escape_text(rest));
     out
+}
+
+/// Markdown block quote: a left rule across the text width.
+///
+/// Typst's `#quote(block: true)` only insets both sides, so the rule the
+/// preview draws never appears in the PDF.
+fn quote_block(body: &str) -> String {
+    let frame = "width: 100%, inset: (left: 10pt, y: 1pt), \
+        stroke: (left: 2pt + luma(176)), above: 0.65em, below: 0.65em";
+    format!("#block({frame})[\n{body}\n]")
+}
+
+fn table_column_spec(count: usize, width: TableWidth) -> String {
+    let count = count.max(1);
+    match width {
+        TableWidth::Content => count.to_string(),
+        TableWidth::Full => format!("({})", vec!["1fr"; count].join(", ")),
+    }
 }
 
 fn quote_str(value: &str) -> String {
@@ -1247,6 +1318,32 @@ mod tests {
     }
 
     #[test]
+    fn extra_blank_lines_become_vertical_space() {
+        let ir = PreviewIr::from_markdown("甲\n\n\n乙\n");
+        let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
+        assert!(
+            doc.source.contains("#v(1.65em, weak: false)\n乙"),
+            "two source blank lines should keep one visible line on the next block, got {}",
+            doc.source
+        );
+        assert!(
+            !doc.source.contains("#v(1.65em, weak: false)\n\n"),
+            "the extra line must not become a second paragraph break"
+        );
+
+        let ir = PreviewIr::from_markdown("甲\n\n\n\n乙\n");
+        let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
+        assert!(doc.source.contains("#v(3.3em, weak: false)"));
+
+        let ir = PreviewIr::from_markdown("甲\n\n乙\n");
+        let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
+        assert!(
+            !doc.source.contains("#v("),
+            "a single blank line is only the block break"
+        );
+    }
+
+    #[test]
     fn renders_headings_and_paragraphs() {
         let ir = PreviewIr::from_markdown("# 标题\n\n正文 **加粗** 和 `代码`。\n");
         let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
@@ -1320,6 +1417,33 @@ mod tests {
         assert!(doc.source.contains("table.header("));
         assert!(doc.source.contains("☑"));
         assert!(doc.source.contains("☐"));
+    }
+
+    #[test]
+    fn full_width_tables_share_the_text_width() {
+        let ir = PreviewIr::from_markdown("| 名称 | 数值 |\n|:--|--:|\n| a | 1 |\n");
+        let options = ExportOptions {
+            table_width: TableWidth::Full,
+            ..Default::default()
+        };
+        let doc = convert(&ir, &options, &meta(), Path::new("."));
+        assert!(
+            doc.source
+                .contains("#table(columns: (1fr, 1fr), align: (left, right)")
+        );
+    }
+
+    #[test]
+    fn blockquote_draws_a_left_rule() {
+        let ir = PreviewIr::from_markdown("# 引用\n\n下面是引用块\n\n> 来自哪里。\n");
+        let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
+        assert!(doc.source.contains("来自哪里"), "{}", doc.source);
+        assert!(
+            doc.source.contains("stroke: (left: 2pt + luma(176))"),
+            "{}",
+            doc.source
+        );
+        assert!(!doc.source.contains("#quote("), "{}", doc.source);
     }
 
     #[test]

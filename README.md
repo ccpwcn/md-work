@@ -1,4 +1,4 @@
-# 澧ㄧ 路 MoJi膩n
+# 墨笺 · MoJiān
 
 [![CI](https://github.com/ccpwcn/md-work/actions/workflows/ci.yml/badge.svg)](https://github.com/ccpwcn/md-work/actions/workflows/ci.yml)
 [![Release](https://github.com/ccpwcn/md-work/actions/workflows/release.yml/badge.svg)](https://github.com/ccpwcn/md-work/actions/workflows/release.yml)
@@ -7,157 +7,157 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)](https://github.com/ccpwcn/md-work/releases)
 [![Rust](https://img.shields.io/badge/rust-1.97%2B-orange)](https://www.rust-lang.org/)
 
-## 涓€銆侀」鐩畝浠?
+## 一、项目简介
 
-**褰撳墠鐗堟湰锛?.1.1**銆俉indows 浼樺厛鐨勭函 Rust Markdown 绗旇鏈€斺€斾负 AI 鏃朵唬鐨勭瑪璁颁笌鏂囨。宸ヤ綔娴佽€岀敓銆?
+**当前版本：1.2.0**。Windows 优先的纯 Rust Markdown 笔记本——为 AI 时代的笔记与文档工作流而生。
 
-鐗堟湰鍙蜂互鏍圭洰褰?`Cargo.toml` 鐨?`[workspace.package].version` 涓哄敮涓€鏉ユ簮锛涘悇 crate銆丆LI `--version`銆佽缃〉銆乄indows 璧勬簮 VERSIONINFO銆丯SIS 瀹夎鍖呬笌鏍囩 `v*` 鍧囦笌涔嬪榻愩€傞暅鍍忎粨搴擄細[Gitee](https://gitee.com/ccpwcn/md-work)銆?
-
----
-
-## 浜屻€佽蒋浠跺姛鑳戒笌鐗硅壊
-
-澧ㄧ閽堝 AI 鏃朵唬鐨勬枃妗ｅ満鏅噸鏂拌璁★紝涓撻棬瑙ｅ喅甯傞潰涓婂鏁?Markdown 缂栬緫鍣ㄧ殑鍑犲ぇ鐥涚偣锛?
-
-### 1. 杞婚噺锛屼笉鍚冨唴瀛?
-
-鐜版湁缂栬緫鍣ㄥ線寰€鏄€岄噸鍨嬫鍣ㄣ€嶏細涓嶅皯鍩轰簬 Electron 鐨勪骇鍝侊紝鎵撳紑绌虹櫧鏂囨。灏辫 500MB锝?GB锛屾墦寮€绋嶅ぇ涓€鐐圭殑鏂囨。杞绘澗瓒呰繃 1.5GB銆傚唴瀛樿繖涔堣吹锛屼綍蹇呮氮璐广€?
-
-澧ㄧ鍚姩鍚庡唴瀛樺崰鐢ㄩ€氬父鍦?**100MB 浠ヤ笅**锛屽ぇ绾︽槸鍚岀被浜у搧鐨勪簲鍒嗕箣涓€鍒板崄鍒嗕箣涓€銆?
-
-### 2. 闈㈠悜 AI锛岃€屼笉鏄彟涓€涓?Word
-
-澶氭暟 Markdown 缂栬緫鍣ㄤ粛鎸夈€岀粰浜虹湅鐨勬帓鐗堣蒋浠躲€嶆潵鍋氾細鏍煎紡銆佸竷灞€銆佺増寮忎竴搴斾勘鍏紝鏈川涓婃槸鍙︿竴涓?Word銆侫I 鍗忎綔涓嶉渶瑕佽繖浜涒€斺€斿畠闇€瑕佺殑鏄?*蹇€熸垚鍨嬨€佹牸寮忔槑纭€佸紩鐢ㄦ纭?*銆?
-
-澧ㄧ鎸夎繖涓洰鏍囪鍓氦浜掍笌鑳藉姏锛氬啓寰楀揩銆佺粨鏋勬竻銆佺粰 AI 璇诲緱鎳傘€佸綊妗ｄ篃鏂逛究銆?
-
-### 3. 寮€婧愬厤璐癸紝鍩虹鍔熻兘姘镐箙鍏嶈垂
-
-鏈蒋浠跺紑婧愩€佸熀纭€鍔熻兘姘镐箙鍏嶈垂銆傛棩鍚庡彲鑳藉鍔犺处鍙蜂笌浠樿垂澧炲己鑳藉姏锛屼絾鏍稿績缂栬緫銆侀瑙堛€佸鍏ュ鍑轰笌鏈湴宸ヤ綔娴佷笉浼氬彉鎴愪粯璐瑰銆?
-
-### 4. 鑷繁淇偅浜涖€屽骞存湭淇€嶇殑鏃х柧
-
-璧勬簮绠＄悊鍣ㄥ弻鍑诲穿婧冦€佹剰澶栫┖琛屻€乪moji 澶辫壊鈥︹€﹁繖绫婚棶棰樺湪涓€浜涜€佺墝杞欢閲屾寕浜嗗緢涔呫€傛寚鏈涘埆浜轰笉濡傝嚜宸卞姩鎵嬶紝澧ㄧ鍦ㄨ璁′笂鍒绘剰閬垮紑杩欎簺鍧戙€?
-
-### 5. 鍐呯疆涓?AI 鎵撲氦閬撶殑鑳藉姏
-
-绗旇鍙互浜ょ粰 AI 闃呰涓庡鐞嗭紱AI 浜у嚭鐨勬枃妗ｄ篃鍙互鐩存帴鏀惧洖澧ㄧ褰掓。銆傞€氳繃鍐呯疆 MCP锛坰tdio / 鏈満 HTTP锛夋妸宸ヤ綔鍖恒€佺瑪璁版湰涓庣瑪璁版帴鍏?AI 宸ュ叿閾俱€?
-
-### 6. 甯歌鑳藉姏榻愬叏
-
-缂栬緫銆佹牸寮忋€佹帓鐗堝竷灞€銆佸ぇ绾层€佹悳绱€佷功绛俱€佸鍏ュ鍑恒€佹暣鏈墦鍖呫€佸穿婧冩仮澶嶁€︹€﹁鏈夌殑閮芥湁锛屼笉鍋氳姳鏋跺瓙锛屽仛瀹炵敤鐨勬湰鍦扮瑪璁版湰銆?
-
-### 7. 澶ф枃妗ｄ笌瀵煎嚭涔熷緢蹇?
-
-瀹炴祴绾?**50MB** 鐨勫ぇ鏂囨。鍙湪 **2 绉掑唴**鎵撳紑锛堝悓鏂囨。鍦ㄥ鏁扮幇鏈夎蒋浠朵笂寰堥毦鍦?5 绉掑唴鎵撳紑锛夈€傚悓鏂囨。瀵煎嚭 PDF锛屽競闈㈠父瑙佽蒋浠跺ぇ绾?15锝?0 绉掞紝澧ㄧ澶х害 **5 绉?*銆?
+版本号以根目录 `Cargo.toml` 的 `[workspace.package].version` 为唯一来源；各 crate、CLI `--version`、设置页、Windows 资源 VERSIONINFO、NSIS 安装包与标签 `v*` 均与之对齐。镜像仓库：[Gitee](https://gitee.com/ccpwcn/md-work)。
 
 ---
 
-鐢ㄥⅷ绗烘墦寮€鏈?README锛屽氨鏄渶濂界殑璇存槑锛?
+## 二、软件功能与特色
 
-缂栬緫妯″紡锛?
+墨笺针对 AI 时代的文档场景重新设计，专门解决市面上多数 Markdown 编辑器的几大痛点：
 
-![澧ㄧ鎵撳紑鏈?README锛堢紪杈戯級](doc/images/readme-in-mojian.png)
+### 1. 轻量，不吃内存
 
-棰勮妯″紡锛?
+现有编辑器往往是「重型武器」：不少基于 Electron 的产品，打开空白文档就要 500MB～1GB，打开稍大一点的文档轻松超过 1.5GB。内存这么贵，何必浪费。
 
-![澧ㄧ鎵撳紑鏈?README锛堥瑙堬級](doc/images/readme-in-mojian-preview.png)
+墨笺启动后内存占用通常在 **100MB 以下**，大约是同类产品的五分之一到十分之一。
+
+### 2. 面向 AI，而不是另一个 Word
+
+多数 Markdown 编辑器仍按「给人看的排版软件」来做：格式、布局、版式一应俱全，本质上是另一个 Word。AI 协作不需要这些——它需要的是**快速成型、格式明确、引用正确**。
+
+墨笺按这个目标裁剪交互与能力：写得快、结构清、给 AI 读得懂、归档也方便。
+
+### 3. 开源免费，基础功能永久免费
+
+本软件开源、基础功能永久免费。日后可能增加账号与付费增强能力，但核心编辑、预览、导入导出与本地工作流不会变成付费墙。
+
+### 4. 自己修那些「多年未修」的旧疾
+
+资源管理器双击崩溃、意外空行、emoji 失色……这类问题在一些老牌软件里挂了很久。指望别人不如自己动手，墨笺在设计上刻意避开这些坑。
+
+### 5. 内置与 AI 打交道的能力
+
+笔记可以交给 AI 阅读与处理；AI 产出的文档也可以直接放回墨笺归档。通过内置 MCP（stdio / 本机 HTTP）把工作区、笔记本与笔记接入 AI 工具链。
+
+### 6. 常规能力齐全
+
+编辑、格式、排版布局、大纲、搜索、书签、导入导出、整本打包、崩溃恢复……该有的都有，不做花架子，做实用的本地笔记本。
+
+### 7. 大文档与导出也很快
+
+实测约 **50MB** 的大文档可在 **2 秒内**打开（同文档在多数现有软件上很难在 5 秒内打开）。同文档导出 PDF，市面常见软件大约 15～30 秒，墨笺大约 **5 秒**。
 
 ---
 
-## 涓夈€佷笅杞?/ 瀹夎 / 浣跨敤
+用墨笺打开本 README，就是最好的说明：
 
-### 涓嬭浇
+编辑模式：
 
-鍒?[GitHub Releases](https://github.com/ccpwcn/md-work/releases/latest)锛堟垨 [Gitee Releases](https://gitee.com/ccpwcn/md-work/releases)锛変笅杞芥渶鏂扮増锛?
+![墨笺打开本 README（编辑）](doc/images/readme-in-mojian.png)
 
-| 浜х墿 | 璇存槑 |
+预览模式：
+
+![墨笺打开本 README（预览）](doc/images/readme-in-mojian-preview.png)
+
+---
+
+## 三、下载 / 安装 / 使用
+
+### 下载
+
+到 [GitHub Releases](https://github.com/ccpwcn/md-work/releases/latest)（或 [Gitee Releases](https://gitee.com/ccpwcn/md-work/releases)）下载最新版：
+
+| 产物 | 说明 |
 | --- | --- |
-| `md-work-1.2.0-setup.exe` | NSIS 瀹夎鍖咃紙鎺ㄨ崘锛?|
-| `md-work-1.2.0-win64.zip` | 渚挎惡鐗堬紝瑙ｅ帇鍗崇敤 |
+| `md-work-1.2.0-setup.exe` | NSIS 安装包（推荐） |
+| `md-work-1.2.0-win64.zip` | 便携版，解压即用 |
 
-### 瀹夎
+### 安装
 
-- **瀹夎鍖?*锛氬弻鍑?`md-work-*-setup.exe`锛屾寜鎻愮ず閫夋嫨宸ヤ綔鍖猴紙榛樿 `鎴戠殑鏂囨。\md-work`锛夈€傚畨瑁呭埌褰撳墠鐢ㄦ埛鐩綍锛?*涓嶉渶瑕佺鐞嗗憳鏉冮檺**锛屼笉鍐?HKLM锛屼篃涓嶄細闈欓粯鎶㈣蛋 `.md` 鐨勯粯璁ゆ墦寮€鏂瑰紡銆?
-- **闈欓粯瀹夎**锛歚md-work-1.2.0-setup.exe /S`锛堜笉寮归〉闈紝浣跨敤榛樿宸ヤ綔鍖猴級銆?
-- **渚挎惡鐗?*锛氳В鍘?zip 鍚庣洿鎺ヨ繍琛?`md-work.exe`銆?
+- **安装包**：双击 `md-work-*-setup.exe`，按提示选择工作区（默认 `我的文档\md-work`）。安装到当前用户目录，**不需要管理员权限**，不写 HKLM，也不会静默抢走 `.md` 的默认打开方式。
+- **静默安装**：`md-work-1.2.0-setup.exe /S`（不弹页面，使用默认工作区）。
+- **便携版**：解压 zip 后直接运行 `md-work.exe`。
 
-瀹夎鐩綍锛堟寜鐢ㄦ埛锛夛細`%LOCALAPPDATA%\Programs\md-work`銆?
+安装目录（按用户）：`%LOCALAPPDATA%\Programs\md-work`。
 
-### 浣跨敤鍏ラ棬
+### 使用入门
 
-1. 鍚姩鍚庨€夋嫨鎴栫‘璁ゅ伐浣滃尯锛堢鐩樹笂鐨勬櫘閫氭枃浠跺す锛夈€?
-2. 鍦ㄥ伐浣滃尯閲屾柊寤虹瑪璁版湰涓庣瑪璁帮紝寮€濮嬪啓 Markdown銆?
-3. `Ctrl+T` 鍒囨崲缂栬緫 / 棰勮锛沗Ctrl+Shift+P` 鎵撳紑鍛戒护闈㈡澘銆?
-4. 闇€瑕佺粰 AI 鐢ㄦ椂锛氳缃?鈫?MCP锛岀敓鎴愪护鐗屽苟鍚敤鏈満 HTTP锛屽啀鎶婂湴鍧€涓庝护鐗岄厤鍒板鎴风銆?
+1. 启动后选择或确认工作区（磁盘上的普通文件夹）。
+2. 在工作区里新建笔记本与笔记，开始写 Markdown。
+3. `Ctrl+T` 切换编辑 / 预览；`Ctrl+Shift+P` 打开命令面板。
+4. 需要给 AI 用时：设置 → MCP，生成令牌并启用本机 HTTP，再把地址与令牌配到客户端。
 
-甯哥敤蹇嵎閿細
+常用快捷键：
 
-| 蹇嵎閿?| 鍔熻兘 |
+| 快捷键 | 功能 |
 | --- | --- |
-| `Ctrl+S` | 淇濆瓨褰撳墠绗旇 |
-| `Ctrl+N` | 鏂板缓绗旇 |
-| `Ctrl+F` / `Ctrl+H` | 鏌ユ壘 / 鏇挎崲 |
-| `Ctrl+T` | 鍒囨崲缂栬緫 / 棰勮 |
-| `Ctrl+Shift+P` | 鍛戒护闈㈡澘 |
-| `Ctrl+B` / `Ctrl+I` | 鍔犵矖 / 鏂滀綋 |
-| `Ctrl+K` | 鎻掑叆閾炬帴 |
+| `Ctrl+S` | 保存当前笔记 |
+| `Ctrl+N` | 新建笔记 |
+| `Ctrl+F` / `Ctrl+H` | 查找 / 替换 |
+| `Ctrl+T` | 切换编辑 / 预览 |
+| `Ctrl+Shift+P` | 命令面板 |
+| `Ctrl+B` / `Ctrl+I` | 加粗 / 斜体 |
+| `Ctrl+K` | 插入链接 |
 
-鏇寸粏鐨勫姛鑳借鏄庛€侀厤缃矾寰勩€丮CP / CLI 涓庢瀯寤烘柟寮忚涓嬫柟銆屾妧鏈疄鐜颁笌瀹炴柦鏂规銆嶃€?
+更细的功能说明、配置路径、MCP / CLI 与构建方式见下方「技术实现与实施方案」。
 
 ---
 
-## 鍥涖€佹妧鏈疄鐜颁笌瀹炴柦鏂规
+## 四、技术实现与实施方案
 
-鐣岄潰鐢?GPUI + gpui-component 椹卞姩锛屾覆鏌撲笌瀵煎嚭鍩轰簬 comrak 涓?Typst锛孧CP 鏈嶅姟鍩轰簬 rmcp銆傜瑪璁颁互鏅€氭枃浠跺す淇濆瓨锛屼笉閿佸畾鏁版嵁鏍煎紡銆?
+界面由 GPUI + gpui-component 驱动，渲染与导出基于 comrak 与 Typst，MCP 服务基于 rmcp。笔记以普通文件夹保存，不锁定数据格式。
 
-鍙傝€?VNote 鐨勪娇鐢ㄤ範鎯紝浣嗛拡瀵瑰叾甯歌椤界柧鍋氫簡淇锛氳祫婧愮鐞嗗櫒鍙屽嚮 `.md` 宕╂簝銆丳DF 瀵煎嚭璐ㄩ噺宸€佺己灏戜功绛句笌鏁存湰鎵撳寘銆丮CP 鑳藉姏涓嶅畬鏁淬€?
+参考 VNote 的使用习惯，但针对其常见顽疾做了修正：资源管理器双击 `.md` 崩溃、PDF 导出质量差、缺少书签与整本打包、MCP 能力不完整。
 
-### 鍔熻兘涓€瑙?
+### 功能一览
 
-- **宸ヤ綔鍖?*锛氬伐浣滃尯鏄鐩樹笂鐨勪竴涓櫘閫氭枃浠跺す锛岄噷闈㈠彲浠ュ缓澶氫釜绗旇鏈€傛爣棰樻爮宸︿笂瑙掔殑涓嬫媺妗嗗彲闅忔椂鍒囨崲宸ヤ綔鍖恒€侀€夋嫨浠绘剰鏂囦欢澶癸紙涔熷彲浠ュ鍏ヤ箣鍓嶅鍑虹殑绗旇鏈?zip锛夛紱涓嬫鍚姩鑷姩鎵撳紑涓婃鐨勫伐浣滃尯銆佺瑪璁版湰涓庣瑪璁般€傚彲鍦ㄣ€岃缃?鈫?宸ヤ綔鍖恒€嶇粰宸ヤ綔鍖鸿捣鍒悕锛岀鐩樹笂鐨勬枃浠跺す鍚嶄繚鎸佷笉鍙樸€傚垏鎹㈠伐浣滃尯涓嶄細绉诲姩鎴栧垹闄ゆ枃浠躲€?
-- **绗旇鏈?*锛氭櫘閫氭枃浠跺す鍗崇瑪璁版湰锛屾敮鎸佸绗旇鏈€佹爲褰㈢洰褰曘€佹柊寤烘枃浠跺す/绗旇銆侀噸鍛藉悕銆佺Щ鍔ㄣ€佸洖鏀剁珯銆?
-- **缂栬緫鍣?*锛歁arkdown 璇硶楂樹寒銆佽蒋鎹㈣銆佹煡鎵?鏇挎崲锛坄Ctrl+F` / `Ctrl+H`锛夈€侀瑙堬紙`Ctrl+T`锛夈€佸ぇ绾层€佸瓧鏁?璇嶆暟缁熻銆侀€夊尯缁熻銆?
-- **棰勮浠ｇ爜鍧?*锛氭寜璇█鍋氳娉曢珮浜紝鍙€愬潡澶嶅埗锛涢暱琛屽彲鍒囨崲鎹㈣/妯悜婊氬姩銆?
-- **澶栭儴鏂囦欢**锛氬彲鐩存帴鎵撳紑宸ヤ綔鍖哄鐨?`.md`锛屽湪鏍囩鏍忎竴閿€滃瓨鍏ョ瑪璁版湰鈥濓紙閲嶅悕鑷姩鍔犲簭鍙凤紝鍘熸枃浠朵笉鍙橈級銆?
-- **鎼滅储**锛氳法绗旇鍏ㄦ枃鎼滅储锛屽彲閫夊尯鍒嗗ぇ灏忓啓銆佹鍒欍€佹寜鏂囦欢鍚嶏紱缁撴灉璺宠浆鍒板搴旇銆?
-- **涔︾**锛氫负浠绘剰绗旇鎴栨爣棰樻坊鍔犱功绛惧苟蹇€熻烦杞€?
-- **鍛戒护闈㈡澘**锛歚Ctrl+Shift+P` 妯＄硦妫€绱㈠叏閮ㄥ懡浠ゃ€?
-- **闈㈡澘**锛氱瑪璁?澶х翰/鎼滅储/涔︾/鍥炴敹绔欎簲涓潰鏉垮彲鍒嗗埆鍋滈潬宸︿晶鎴栧彸渚э紝涔熷彲妯悜鎴栫旱鍚戞帓鍒楋紱鎷栧姩鍒嗛殧鏉¤皟鏁村搴︼紝鍙屽嚮鎭㈠榛樿锛屽搴﹂殢閰嶇疆淇濆瓨銆?
-- **瀵煎嚭**锛歍ypst 娓叉煋 PDF/PNG锛屾敮鎸侀〉杈硅窛銆佸瓧鍙枫€佽楂樸€佺洰褰曟繁搴︺€佸浘鐗囧搴︺€侀〉鐮佹牸寮忋€佷袱绔榻愩€?
-- **鏁存湰鎵撳寘**锛氬鍑?瀵煎叆绗旇鏈?`.zip`锛堝惈瀵煎叆棰勮銆佸啿绐佺瓥鐣ワ級锛屽鍏ユ椂鏍￠獙璺緞閫冮€搞€佺粷瀵硅矾寰勩€佺鍙烽摼鎺ヤ笌浣撶Н涓婇檺銆?
-- **缂栫爜涓庢崲琛?*锛氳嚜鍔ㄨ瘑鍒?UTF-8/GBK 绛夌紪鐮佷笌 CRLF/LF锛屾寜鍘熺紪鐮佷繚瀛橈紝鍙彟瀛樹负鎸囧畾缂栫爜銆?
-- **宕╂簝鎭㈠**锛氱紪杈戜腑閫斿紓甯搁€€鍑烘椂锛屼笅娆″惎鍔ㄥ彲浠庡揩鐓ф仮澶嶆湭淇濆瓨鍐呭锛涗繚瀛樺悗鑷姩娓呯悊蹇収銆?
-- **宕╂簝涓婃姤**锛氬穿婧冩棩蹇楅粯璁ゅ彧淇濆瓨鍦ㄦ湰鍦帮紱鍦ㄨ繍琛岄厤缃腑濉叆 Gitee 浠ょ墝鍚庯紝鍚姩鏃惰嫢缃戠粶鍙敤涓旀湁鍘嗗彶宕╂簝璁板綍锛屼細鑷姩鍦?Gitee 浠撳簱鍒涘缓 Issue 骞堕檮涓婂穿婧冩棩蹇楋紙涓嶅惈绗旇鍐呭锛夈€備护鐗屼篃鍙敤鐜鍙橀噺 `MDWORK_GITEE_TOKEN` 鎻愪緵锛屼笂浼犲け璐ヤ笉褰卞搷鍚姩銆?
-- **鍥剧墖**锛氭湰鍦?`assets/` 鍥惧簥锛堝彲閰嶇疆閫氱敤 HTTP / PicGo 鍏煎鎺ュ彛锛夛紝鍥剧墖鍐欏叆闄愬埗鍦ㄧ瑪璁版湰 `assets/` 鍐呫€?
-- **MCP**锛歴tdio 涓?Streamable HTTP锛堜粎 `127.0.0.1`锛夛紝榛樿鎷掔粷锛堟棤浠ょ墝杩斿洖 401锛夛紝DPAPI 鍔犲瘑浠ょ墝锛屾寜绗旇鏈?绗旇鐨?ACL銆乬lob 鍏佽/鎷掔粷锛屽璁?JSONL 涓嶈褰曠瑪璁版鏂囥€?
-- **鍗曞疄渚?*锛氫簩娆″惎鍔ㄤ細鎶婃枃浠惰矾寰勮浆鍙戠粰宸茶繍琛屽疄渚嬶紱涓嶉潤榛樹慨鏀?Windows `.md` 榛樿搴旂敤銆?
-- **閫氱煡涓績**锛氭爣棰樻爮閾冮摏鏄剧ず鏈鏁帮紝鏅€氭秷鎭€佽鍛婁笌閿欒鎸変富棰樿壊鍖哄垎锛屽彲鍏ㄩ儴宸茶鎴栨竻绌恒€?
+- **工作区**：工作区是磁盘上的一个普通文件夹，里面可以建多个笔记本。标题栏左上角的下拉框可随时切换工作区、选择任意文件夹（也可以导入之前导出的笔记本 zip）；下次启动自动打开上次的工作区、笔记本与笔记。可在「设置 → 工作区」给工作区起别名，磁盘上的文件夹名保持不变。切换工作区不会移动或删除文件。
+- **笔记本**：普通文件夹即笔记本，支持多笔记本、树形目录、新建文件夹/笔记、重命名、移动、回收站。
+- **编辑器**：Markdown 语法高亮、软换行、查找/替换（`Ctrl+F` / `Ctrl+H`）、预览（`Ctrl+T`）、大纲、字数/词数统计、选区统计。
+- **预览代码块**：按语言做语法高亮，可逐块复制；长行可切换换行/横向滚动。
+- **外部文件**：可直接打开工作区外的 `.md`，在标签栏一键“存入笔记本”（重名自动加序号，原文件不变）。
+- **搜索**：跨笔记全文搜索，可选区分大小写、正则、按文件名；结果跳转到对应行。
+- **书签**：为任意笔记或标题添加书签并快速跳转。
+- **命令面板**：`Ctrl+Shift+P` 模糊检索全部命令。
+- **面板**：笔记/大纲/搜索/书签/回收站五个面板可分别停靠左侧或右侧，也可横向或纵向排列；拖动分隔条调整宽度，双击恢复默认，宽度随配置保存。
+- **导出**：Typst 渲染 PDF/PNG，支持页边距、字号、行高、目录深度、图片宽度、页码格式、两端对齐。
+- **整本打包**：导出/导入笔记本 `.zip`（含导入预览、冲突策略），导入时校验路径逃逸、绝对路径、符号链接与体积上限。
+- **编码与换行**：自动识别 UTF-8/GBK 等编码与 CRLF/LF，按原编码保存，可另存为指定编码。
+- **崩溃恢复**：编辑中途异常退出时，下次启动可从快照恢复未保存内容；保存后自动清理快照。
+- **崩溃上报**：崩溃日志默认只保存在本地；在运行配置中填入 Gitee 令牌后，启动时若网络可用且有历史崩溃记录，会自动在 Gitee 仓库创建 Issue 并附上崩溃日志（不含笔记内容）。令牌也可用环境变量 `MDWORK_GITEE_TOKEN` 提供，上传失败不影响启动。
+- **图片**：本地 `assets/` 图床（可配置通用 HTTP / PicGo 兼容接口），图片写入限制在笔记本 `assets/` 内。
+- **MCP**：stdio 与 Streamable HTTP（仅 `127.0.0.1`），默认拒绝（无令牌返回 401），DPAPI 加密令牌，按笔记本/笔记的 ACL、glob 允许/拒绝，审计 JSONL 不记录笔记正文。
+- **单实例**：二次启动会把文件路径转发给已运行实例；不静默修改 Windows `.md` 默认应用。
+- **通知中心**：标题栏铃铛显示未读数，普通消息、警告与错误按主题色区分，可全部已读或清空。
 
-### 鐩綍涓庨厤缃?
+### 目录与配置
 
-| 鍐呭 | 浣嶇疆 |
+| 内容 | 位置 |
 | --- | --- |
-| 鏍稿績閰嶇疆锛堝彧璇昏涔夛級 | `%LOCALAPPDATA%\md-work\config\core.toml` |
-| 杩愯閰嶇疆锛堣缃」銆侀潰鏉垮仠闈犮€佷笂娆℃墦寮€锛?| `%LOCALAPPDATA%\md-work\config\runtime.toml` |
-| 涓婚閰嶇疆锛堢毊鑲ゃ€佸瓧浣擄級 | `%LOCALAPPDATA%\md-work\config\theme.toml` |
-| 鏃ュ織銆丮CP 浠ょ墝銆佹仮澶嶅揩鐓с€佸穿婧冭褰?| `%LOCALAPPDATA%\md-work\` |
-| 宸ヤ綔鍖哄厓鏁版嵁 | `<宸ヤ綔鍖?\.mdwork\workspace.toml` |
-| 绗旇鏈厓鏁版嵁 | `<绗旇鏈?\.mdwork\notebook.toml`銆乣bookmarks.toml`銆乣encoding.toml` |
-| 榛樿宸ヤ綔鍖?| `%USERPROFILE%\Documents\md-work` |
-| 瀹夎鐩綍锛堟寜鐢ㄦ埛锛?| `%LOCALAPPDATA%\Programs\md-work` |
+| 核心配置（只读语义） | `%LOCALAPPDATA%\md-work\config\core.toml` |
+| 运行配置（设置项、面板停靠、上次打开） | `%LOCALAPPDATA%\md-work\config\runtime.toml` |
+| 主题配置（皮肤、字体） | `%LOCALAPPDATA%\md-work\config\theme.toml` |
+| 日志、MCP 令牌、恢复快照、崩溃记录 | `%LOCALAPPDATA%\md-work\` |
+| 工作区元数据 | `<工作区>\.mdwork\workspace.toml` |
+| 笔记本元数据 | `<笔记本>\.mdwork\notebook.toml`、`bookmarks.toml`、`encoding.toml` |
+| 默认工作区 | `%USERPROFILE%\Documents\md-work` |
+| 安装目录（按用户） | `%LOCALAPPDATA%\Programs\md-work` |
 
-涓変唤閰嶇疆閮芥槸甯︽敞閲婄殑 TOML锛屽彲浠ョ洿鎺ョ紪杈戙€俙core.toml` 椤堕儴浼氭爣鏄庛€屾閰嶇疆涓嶅彲淇敼锛屽惁鍒欏彲鑳藉鑷磋蒋浠惰繍琛屽紓甯搞€嶏紱涓変唤鏂囦欢鍏ㄩ儴缂哄け鏃朵細浠ユ渶灏忛粯璁ゅ€煎惎鍔ㄥ苟閲嶆柊鐢熸垚銆傛煇涓敭鍐欓敊鏃讹紝绋嬪簭浼氭彁绀哄叿浣撴枃浠朵笌閿悕锛岄潪鏍稿績閰嶇疆鐨勯敊璇笉浼氫腑鏂惎鍔ㄣ€?
+三份配置都是带注释的 TOML，可以直接编辑。`core.toml` 顶部会标明「此配置不可修改，否则可能导致软件运行异常」；三份文件全部缺失时会以最小默认值启动并重新生成。某个键写错时，程序会提示具体文件与键名，非核心配置的错误不会中断启动。
 
-瀹夎鍖呭彧鍐?HKCU 涓庡綋鍓嶇敤鎴风洰褰曪紝涓嶇敵璇风鐞嗗憳鏉冮檺锛屼笉淇敼 HKLM锛屼篃涓嶄細闈欓粯鏇存敼 `.md` 鏂囦欢鍏宠仈銆?
+安装包只写 HKCU 与当前用户目录，不申请管理员权限，不修改 HKLM，也不会静默更改 `.md` 文件关联。
 
 ### MCP
 
-1. 鎵撳紑 璁剧疆 鈫?MCP锛岀敓鎴愪护鐗屽苟鍚敤 HTTP 鏈嶅姟锛堥粯璁ょ鍙?`11026`锛夈€?
-2. 瀹㈡埛绔繛鎺?`http://127.0.0.1:11026/mcp`锛屼娇鐢?`Authorization: Bearer <浠ょ墝>`銆?
-3. 鏃犱护鐗屾垨浠ょ墝閿欒杩斿洖 401锛涜秴鍑?ACL 鐨勭瑪璁版湰/绗旇杩斿洖 403锛汫UI 涓湁鏈繚瀛樹慨鏀圭殑绗旇榛樿鎷掑啓銆?
+1. 打开 设置 → MCP，生成令牌并启用 HTTP 服务（默认端口 `11026`）。
+2. 客户端连接 `http://127.0.0.1:11026/mcp`，使用 `Authorization: Bearer <令牌>`。
+3. 无令牌或令牌错误返回 401；超出 ACL 的笔记本/笔记返回 403；GUI 中有未保存修改的笔记默认拒写。
 
-涔熷彲浠ョ敤 stdio锛?
+也可以用 stdio：
 
 ```powershell
 md-work-cli mcp serve --stdio
@@ -166,77 +166,77 @@ md-work-cli mcp serve --stdio
 ### CLI
 
 ```powershell
-# 鍒楀嚭宸ヤ綔鍖哄唴鐨勭瑪璁版湰
+# 列出工作区内的笔记本
 md-work-cli notebook list --json
 
-# 鎼滅储锛堟敮鎸佹鍒欍€佸尯鍒嗗ぇ灏忓啓锛?
-md-work-cli search "娓叉煋" --regex --limit 50
+# 搜索（支持正则、区分大小写）
+md-work-cli search "渲染" --regex --limit 50
 
-# 瀵煎嚭鏁存湰绗旇鏈?
-md-work-cli notebook export "鎴戠殑绗旇鏈? -o notes.zip
+# 导出整本笔记本
+md-work-cli notebook export "我的笔记本" -o notes.zip
 
-# 瀵煎叆骞堕婕斿啿绐?
+# 导入并预演冲突
 md-work-cli notebook import notes.zip --mode merge --policy keep-both --dry-run
 ```
 
-`md-work-cli export --request <json>` 渚?GUI 涓庡閮ㄥ伐鍏疯皟鐢?Typst 瀵煎嚭銆?
+`md-work-cli export --request <json>` 供 GUI 与外部工具调用 Typst 导出。
 
-### 鏋勫缓
+### 构建
 
-瑕佹眰锛歐indows 10/11 x64銆丷ust 1.97+锛堣 `rust-toolchain.toml`锛夈€乂isual Studio 2022 C++ 宸ュ叿閾俱€?
+要求：Windows 10/11 x64、Rust 1.97+（见 `rust-toolchain.toml`）、Visual Studio 2022 C++ 工具链。
 
 ```powershell
-$env:CARGO_HOME = "E:/dependencies/cargo_caches"   # 鏈満缂撳瓨浣嶇疆锛屽彲鎸夐渶鐪佺暐
+$env:CARGO_HOME = "E:/dependencies/cargo_caches"   # 本机缓存位置，可按需省略
 cargo build --workspace
 cargo test --workspace
 ```
 
-鍗囩増鏈彿璇风敤鑴氭湰锛堜細鍚屾 README / NSIS 鍥為€€鍊?/ 楠屾敹娓呭崟锛屽苟鍒锋柊 `Cargo.lock`锛夛細
+升版本号请用脚本（会同步 README / NSIS 回退值 / 验收清单，并刷新 `Cargo.lock`）：
 
 ```powershell
-.\scripts\bump-version.ps1 1.2.0   # 鎸囧畾鐩爣鐗堟湰锛堢ず渚嬶級
-.\scripts\bump-version.ps1 -Patch  # 淇鍙?+1
-.\scripts\bump-version.ps1 -Minor  # 娆＄増鏈?+1
-.\scripts\bump-version.ps1 -Major  # 涓荤増鏈?+1
+.\scripts\bump-version.ps1 1.2.0   # 指定目标版本（示例）
+.\scripts\bump-version.ps1 -Patch  # 修订号 +1
+.\scripts\bump-version.ps1 -Minor  # 次版本 +1
+.\scripts\bump-version.ps1 -Major  # 主版本 +1
 ```
 
-鑴氭湰涓嶈礋璐ｆ彁浜ゆ垨鎵撴爣绛撅紱鍙戠増娴佺▼瑙?[doc/ci.md](doc/ci.md)銆?
+脚本不负责提交或打标签；发版流程见 [doc/ci.md](doc/ci.md)。
 
-#### 鍥炬爣涓庢墦鍖?
+#### 图标与打包
 
-鏈満鍔熻兘娴嬪緱宸笉澶氥€佸噯澶囬獙璇併€屽畨瑁呭寘 鈫?瀹夎 鈫?浣跨敤銆嶆椂锛屼竴閿墦瀹夎鍖咃細
+本机功能测得差不多、准备验证「安装包 → 安装 → 使用」时，一键打安装包：
 
 ```powershell
-.\scripts\build-installer.ps1            # 鍚?cargo test + release + NSIS
-.\scripts\build-installer.ps1 -SkipTests # 寮€鍙戞€佸凡娴嬭繃鍙烦杩囨祴璇?
+.\scripts\build-installer.ps1            # 含 cargo test + release + NSIS
+.\scripts\build-installer.ps1 -SkipTests # 开发态已测过可跳过测试
 ```
 
-鏈満 NSIS 榛樿鎵?`E:\apps\nsis`锛堜篃鍙敤 `-NsisHome` / 鐜鍙橀噺 `NSIS_HOME`锛夈€備骇鐗╁湪 `dist\md-work-<version>-setup.exe`銆?
+本机 NSIS 默认找 `E:\apps\nsis`（也可用 `-NsisHome` / 环境变量 `NSIS_HOME`）。产物在 `dist\md-work-<version>-setup.exe`。
 
-涔熷彲鍒嗘璋冪敤 xtask锛?
+也可分步调用 xtask：
 
 ```powershell
-cargo run -p xtask -- icon        # 鐢?assets/icon.svg 鐢熸垚 assets/icon.ico
-cargo run -p xtask -- package     # release 鏋勫缓 鈫?dist/md-work-1.2.0-win64/ 涓?.zip
-cargo run -p xtask -- installer   # 璋冪敤 makensis 鐢熸垚 dist/md-work-1.2.0-setup.exe
+cargo run -p xtask -- icon        # 由 assets/icon.svg 生成 assets/icon.ico
+cargo run -p xtask -- package     # release 构建 → dist/md-work-1.2.0-win64/ 与 .zip
+cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.2.0-setup.exe
 ```
 
-`installer` 闇€瑕?[NSIS 3](https://nsis.sourceforge.io/)锛坄makensis` 鍦?PATH銆乣NSIS_HOME`銆乣E:\apps\nsis` 鎴栭粯璁?Program Files 鐩綍锛夈€傚畨瑁呰剼鏈綅浜?`packaging/nsis/md-work.nsi`锛屾寜鐢ㄦ埛瀹夎銆丠KCU 鍗歌浇淇℃伅銆佸嵏杞芥椂淇濈暀绗旇涓庤缃€傚畨瑁呯▼搴忓寘鍚€岄€夋嫨宸ヤ綔鍖恒€嶉〉闈紙榛樿 `鎴戠殑鏂囨。\md-work`锛夛紝棣栨瀹夎鏃舵妸鎵€閫夋枃浠跺す鍐欏叆 `HKCU\Software\md-work\WorkspaceRoot`锛涘簲鐢ㄥ彧鍦?`config\runtime.toml`锛堜互鍙婃棫鐗?`config.json`锛夊皻鏃犲伐浣滃尯鏃堕噰鐢ㄨ鍊硷紝闅忓悗鍐欏洖瀹屾暣閰嶇疆锛屽崌绾т笉浼氳鐩栫幇鏈夎缃€傛敮鎸?`/S` 闈欓粯瀹夎锛堜笉寮归〉闈紝鐩存帴浣跨敤榛樿宸ヤ綔鍖猴級銆?
+`installer` 需要 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH、`NSIS_HOME`、`E:\apps\nsis` 或默认 Program Files 目录）。安装脚本位于 `packaging/nsis/md-work.nsi`，按用户安装、HKCU 卸载信息、卸载时保留笔记与设置。安装程序包含「选择工作区」页面（默认 `我的文档\md-work`），首次安装时把所选文件夹写入 `HKCU\Software\md-work\WorkspaceRoot`；应用只在 `config\runtime.toml`（以及旧版 `config.json`）尚无工作区时采用该值，随后写回完整配置，升级不会覆盖现有设置。支持 `/S` 静默安装（不弹页面，直接使用默认工作区）。
 
-#### 鎸佺画闆嗘垚
+#### 持续集成
 
-GitHub Actions 涓?Gitee Go 鐨勬祦姘寸嚎閰嶇疆銆丟itee 鑷缓 Windows 涓绘満缁勪笌鍙戠増姝ラ瑙?[doc/ci.md](doc/ci.md)锛氭帹閫佸垎鏀垨 PR 鑷姩鏋勫缓骞惰繍琛屾祴璇曪紝鎺ㄩ€?`v*` 鏍囩鑷姩鏋勫缓瀹夎鍖呭苟鍙戝竷 Release銆?
+GitHub Actions 与 Gitee Go 的流水线配置、Gitee 自建 Windows 主机组与发版步骤见 [doc/ci.md](doc/ci.md)：推送分支或 PR 自动构建并运行测试，推送 `v*` 标签自动构建安装包并发布 Release。
 
-### 宸茬煡闄愬埗锛坴1 鑼冨洿锛?
+### 已知限制（v1 范围）
 
-- 涓嶅惈 Mermaid / PlantUML / Graphviz 鍥捐〃娓叉煋銆?
-- 涓嶅惈 AI 鍔╂墜锛堜粎淇濈暀 `AiProvider` 鎵╁睍鐐癸級銆?
-- 涓嶅惈鏍囩銆佷簯鍚屾銆佸绐楀彛銆?
-- 涓嶅惈浣跨敤缁熻閬ユ祴涓庤嚜鍔ㄦ洿鏂帮紱宕╂簝涓婃姤榛樿鍏抽棴锛屼粎鍦ㄩ厤缃护鐗屽悗鍚?Gitee 鎻愪氦宕╂簝鏍堛€?
-- 棰勮涓庡鍑轰腑鐨勪唬鐮佸潡鏆備笉甯﹁鍙凤紙Typst 0.15 鐨?`raw` 涓嶆敮鎸佽鍙凤級銆?
-- 鏈惎鐢?Windows 闀胯矾寰勶紙>260 瀛楃锛夋敮鎸侊細gpui 棰勭紪璇戝簱鑷甫 manifest锛屾棤娉曞啀娉ㄥ叆 `longPathAware`銆?
-- 绗旇鏂囦欢璇诲啓浠嶅湪 UI 绾跨▼锛岃秴澶ф枃浠舵墦寮€/淇濆瓨鏃跺彲鑳藉嚭鐜扮煭鏆傚崱椤裤€?
+- 不含 Mermaid / PlantUML / Graphviz 图表渲染。
+- 不含 AI 助手（仅保留 `AiProvider` 扩展点）。
+- 不含标签、云同步、多窗口。
+- 不含使用统计遥测与自动更新；崩溃上报默认关闭，仅在配置令牌后向 Gitee 提交崩溃栈。
+- 预览与导出中的代码块暂不带行号（Typst 0.15 的 `raw` 不支持行号）。
+- 未启用 Windows 长路径（>260 字符）支持：gpui 预编译库自带 manifest，无法再注入 `longPathAware`。
+- 笔记文件读写仍在 UI 线程，超大文件打开/保存时可能出现短暂卡顿。
 
-### 璁稿彲
+### 许可
 
-MIT銆傜涓夋柟缁勪欢瑙?[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)銆?
+MIT。第三方组件见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

@@ -29,6 +29,28 @@ stages:
         displayName: 构建安装包
         hostGroupID: WINDOWS_HOST_GROUP_ID
         script: |
+          powershell -NoProfile -Command @'
+          $ErrorActionPreference = "Stop"
+          $ref = $env:GITEE_REF_NAME
+          if (-not $ref) { $ref = $env:CI_COMMIT_TAG }
+          if (-not $ref) { throw "缺少标签名（GITEE_REF_NAME / CI_COMMIT_TAG）" }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+          $tag = $ref.TrimStart('v')
+          if ($tag -ne $version) {
+            throw "Tag $ref does not match workspace version $version"
+          }
+          $notes = "doc/changelog/v$version.md"
+          if (-not (Test-Path -LiteralPath $notes)) {
+            throw "缺少发版说明：$notes"
+          }
+          $body = Get-Content -LiteralPath $notes -Raw -Encoding utf8
+          if ([string]::IsNullOrWhiteSpace($body)) {
+            throw "发版说明为空：$notes"
+          }
+          Set-Content -LiteralPath .gitee-release-notes.md -Value $body -Encoding utf8
+          Write-Host "将使用发版说明 $notes"
+          '@
           cargo test --workspace
           cargo run -p xtask -- package
           powershell -NoProfile -Command "if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) { choco install nsis -y --no-progress }"
@@ -40,7 +62,9 @@ stages:
         gitRelease:
           releaseName: ${GITEE_REF_NAME}
           tagName: ${GITEE_REF_NAME}
-          releaseNote: 由 Gitee Go 自动构建的 Windows 安装包
+          # 正文与 GitHub 相同：打标签前必须提交 doc/changelog/vX.Y.Z.md
+          releaseNote: |
+            详见仓库 doc/changelog 中与本标签同名的发版说明（vX.Y.Z.md）。
           attachment:
             - dist/md-work-*-setup.exe
             - dist/md-work-*-win64.zip

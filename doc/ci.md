@@ -9,10 +9,15 @@ DirectX，因此所有 CI 都必须跑在 Windows 上。
 | Gitee | `.workflow/ci.yml` | `.workflow/release.yml` | 需要自建 Windows 主机组 |
 
 GitHub 侧无需额外配置：推送分支或向 `main` 提 PR 会构建并运行
-`cargo test --workspace`；推送 `v*` 标签会构建便携 zip 与 NSIS 安装包，并附到
-GitHub Release。发布流水线会先校验标签与 `Cargo.toml` 的版本号一致（避免打出
-错误版本），构建产物同时作为工作流 artifact 保留 90 天。两条流水线都支持在
-Actions 页面手动触发（`workflow_dispatch`）。
+`cargo test --workspace`；**只有推送 `v*` 标签才会发版**。发布流水线会：
+
+1. 校验标签与 `Cargo.toml` 的 `[workspace.package].version` 一致；
+2. 校验存在非空的 `doc/changelog/vX.Y.Z.md`（与标签同名），并将其作为
+   GitHub Release 正文（不再自动生成说明）；
+3. 跑 `cargo test --workspace`，再打便携 zip 与 NSIS 安装包并附到 Release。
+
+构建产物同时作为工作流 artifact 保留 90 天。两条流水线都支持在 Actions 页面
+手动触发（`workflow_dispatch`：可打包，但无标签时不会创建 Release）。
 
 ## Gitee 远端
 
@@ -44,8 +49,7 @@ Gitee Go 的云端执行器是 Linux，无法编译 GPUI/DirectX 部分，因此
 之后的行为与 GitHub 一致：
 
 - 任意分支 push / PR：执行 `cargo build --workspace` 与 `cargo test --workspace`。
-- 推送 `v*` 标签：运行测试，执行 `cargo run -p xtask -- package` 与
-  `cargo run -p xtask -- installer`，并把
+- 推送 `v*` 标签：先校验版本与 `doc/changelog/vX.Y.Z.md`，再测试、打包，并把
   `dist/md-work-<版本>-setup.exe`、`dist/md-work-<版本>-win64.zip`
   附加到同名 Gitee Release。
 
@@ -56,17 +60,22 @@ Gitee Go 的云端执行器是 Linux，无法编译 GPUI/DirectX 部分，因此
 cargo test --workspace
 
 # 2. 升版本号（同步 Cargo.toml / NSIS / README / 验收清单 / Cargo.lock）并提交
-.\scripts\bump-version.ps1 1.1.2   # 或 -Patch / -Minor / -Major
-# 3. 打标签并同时推送两个远端（标签须与 Cargo 版本一致）
-git tag v1.1.2
+.\scripts\bump-version.ps1 1.2.0   # 或 -Patch / -Minor / -Major
+
+# 3. 写好发版说明（文件名必须与标签一致，含 v 前缀）并提交
+#    例：doc/changelog/v1.2.0.md
+#    约定见 doc/changelog/README.md
+
+# 4. 打标签并同时推送两个远端（标签须与 Cargo 版本一致）
+git tag v1.2.0
 git push origin main
 git push gitee main
-git push origin v1.0.0
-git push gitee v1.0.0
+git push origin v1.2.0
+git push gitee v1.2.0
 ```
 
-标签推送后，GitHub Actions 与 Gitee Go 各自构建安装包并创建 Release。安装包保
-留 `/S` 静默安装参数，供升级脚本使用。
+缺 changelog 或版本不一致时发布任务会失败，不会创建空 Release。安装包保留
+`/S` 静默安装参数，供升级脚本使用。
 
 ## 本地打包（只有明确要求时才执行）
 

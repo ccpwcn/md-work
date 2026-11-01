@@ -235,7 +235,6 @@ GitHub Actions 与 Gitee Go 的流水线配置、Gitee 自建 Windows 主机组�
 - 不含使用统计遥测与自动更新；崩溃上报默认关闭，仅在配置令牌后向 Gitee 提交崩溃栈。
 - 预览与导出中的代码块暂不带行号（Typst 0.15 的 `raw` 不支持行号）。
 - 未启用 Windows 长路径（>260 字符）支持：gpui 预编译库自带 manifest，无法再注入 `longPathAware`。
-- 笔记文件读写仍在 UI 线程，超大文件打开/保存时可能出现短暂卡顿。
 
 ### 许可
 

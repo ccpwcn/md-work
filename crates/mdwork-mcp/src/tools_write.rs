@@ -133,7 +133,7 @@ struct AddBookmarkOut {
 struct ExportNoteArgs {
     notebook_id: String,
     path: String,
-    /// `pdf` (default) or `png`. PNG output may contain several page files.
+    /// `pdf` (default), `png`, or `webp`. Raster output may contain several page files.
     #[serde(default)]
     format: Option<String>,
     /// Output file name without folders; defaults to `<notebook> - <note>`.
@@ -553,9 +553,10 @@ impl MdworkServer {
                 None => mdwork_export::ExportFormat::Pdf,
                 Some(raw) if raw == "pdf" => mdwork_export::ExportFormat::Pdf,
                 Some(raw) if raw == "png" => mdwork_export::ExportFormat::Png,
+                Some(raw) if raw == "webp" => mdwork_export::ExportFormat::Webp,
                 Some(raw) => {
                     return Err(invalid_params(format!(
-                        "unsupported export format: {raw} (use pdf or png)"
+                        "unsupported export format: {raw} (use pdf, png, or webp)"
                     )));
                 }
             };

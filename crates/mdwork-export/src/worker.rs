@@ -80,6 +80,7 @@ impl ExportJob {
         let thread_payload = payload_dir.clone();
         std::thread::spawn(move || {
             let mut saw_done = false;
+            let mut saw_error = false;
             if let Some(stdout) = stdout {
                 for line in BufReader::new(stdout).lines().map_while(|line| line.ok()) {
                     let trimmed = line.trim();
@@ -87,8 +88,10 @@ impl ExportJob {
                         continue;
                     }
                     if let Ok(event) = serde_json::from_str::<ExportEvent>(trimmed) {
-                        if matches!(event, ExportEvent::Done { .. }) {
-                            saw_done = true;
+                        match &event {
+                            ExportEvent::Done { .. } => saw_done = true,
+                            ExportEvent::Error { .. } => saw_error = true,
+                            _ => {}
                         }
                         if let Ok(mut queue) = thread_events.lock() {
                             queue.push(event);
@@ -106,16 +109,11 @@ impl ExportJob {
             if !thread_cancelled.load(Ordering::SeqCst) {
                 let stderr =
                     fs::read_to_string(thread_control.join("stderr.log")).unwrap_or_default();
-                if !saw_done {
-                    let message = stderr
-                        .lines()
-                        .rev()
-                        .find(|line| !line.trim().is_empty())
-                        .map(str::to_string)
-                        .unwrap_or_else(|| match status {
-                            Some(status) => format!("导出失败（{}）", status),
-                            None => "导出进程意外结束".to_string(),
-                        });
+                // Prefer the JSON Error event from the child. Only scrape stderr when
+                // the process died without reporting; never surface raw backtrace frames
+                // like "22: RtlUserThreadStart" to the UI.
+                if !saw_done && !saw_error {
+                    let message = friendly_export_error(&stderr, status);
                     if let Ok(mut queue) = thread_events.lock() {
                         queue.push(ExportEvent::Error { message });
                     }
@@ -178,6 +176,117 @@ fn unique_suffix() -> String {
     )
 }
 
+fn friendly_export_error(stderr: &str, status: Option<std::process::ExitStatus>) -> String {
+    if let Some(message) = panic_message_from_stderr(stderr) {
+        return format!("导出失败：{message}");
+    }
+    if let Some(message) = anyhow_message_from_stderr(stderr) {
+        return message;
+    }
+    if stderr_looks_like_backtrace(stderr) {
+        return "导出进程异常退出。请重试；若持续失败，可先改用 PNG。".to_string();
+    }
+    let fallback = stderr
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !is_backtrace_frame(line));
+    match fallback {
+        Some(line) => line.to_string(),
+        None => match status {
+            Some(status) if !status.success() => {
+                format!("导出失败（进程退出码 {}）", status_code(status))
+            }
+            Some(_) | None => "导出进程意外结束".to_string(),
+        },
+    }
+}
+
+fn panic_message_from_stderr(stderr: &str) -> Option<String> {
+    let lines: Vec<&str> = stderr.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed
+            .strip_prefix("thread '")
+            .and_then(|rest| rest.split_once("' panicked at "))
+            .map(|(_, rest)| rest)
+        else {
+            continue;
+        };
+        // Newer rustc:
+        //   thread 'main' panicked at src\foo.rs:12:5:
+        //   actual message
+        // Older rustc:
+        //   thread 'main' panicked at 'message', src\foo.rs:12:5
+        let message = if looks_like_rust_location(rest.trim_end_matches(':').trim()) {
+            lines
+                .get(index + 1)
+                .map(|next| next.trim())
+                .filter(|next| !next.is_empty() && !is_backtrace_frame(next))
+                .unwrap_or("")
+        } else if let Some((message, location)) = rest.rsplit_once(", ") {
+            if looks_like_rust_location(location) {
+                message
+            } else {
+                rest
+            }
+        } else {
+            rest
+        };
+        let message = message.trim().trim_matches('"');
+        if !message.is_empty() && !looks_like_rust_location(message) {
+            return Some(message.to_string());
+        }
+    }
+    None
+}
+
+fn anyhow_message_from_stderr(stderr: &str) -> Option<String> {
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if let Some(message) = trimmed.strip_prefix("Error:") {
+            let message = message.trim();
+            if !message.is_empty() {
+                return Some(message.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn stderr_looks_like_backtrace(stderr: &str) -> bool {
+    stderr.lines().any(is_backtrace_frame)
+        || stderr.contains("stack backtrace")
+        || stderr.contains("Stack backtrace")
+}
+
+fn is_backtrace_frame(line: &str) -> bool {
+    let trimmed = line.trim();
+    // "  22: RtlUserThreadStart" / "at /rustc/..." / "stack backtrace:"
+    if trimmed.eq_ignore_ascii_case("stack backtrace:") {
+        return true;
+    }
+    let mut parts = trimmed.split_whitespace();
+    let Some(index) = parts.next() else {
+        return false;
+    };
+    let Some(rest) = index.strip_suffix(':') else {
+        return false;
+    };
+    rest.chars().all(|ch| ch.is_ascii_digit()) && parts.next().is_some()
+}
+
+fn looks_like_rust_location(text: &str) -> bool {
+    text.contains(".rs:") || text.contains('\\') || text.contains('/')
+}
+
+fn status_code(status: std::process::ExitStatus) -> String {
+    status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| status.to_string())
+}
+
 impl Drop for ExportJob {
     fn drop(&mut self) {
         if self
@@ -188,5 +297,44 @@ impl Drop for ExportJob {
         {
             self.cancel();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrapes_panic_message_instead_of_backtrace_tail() {
+        let stderr = r#"
+thread 'main' panicked at src\png.rs:12:5:
+WebP boom
+stack backtrace:
+  21: BaseThreadInitThunk
+  22: RtlUserThreadStart
+"#;
+        let message = friendly_export_error(stderr, None);
+        assert!(
+            message.contains("WebP boom"),
+            "unexpected message: {message}"
+        );
+        assert!(!message.contains("RtlUserThreadStart"));
+    }
+
+    #[test]
+    fn prefers_anyhow_error_line() {
+        let stderr = "Error: unknown variant `webp`, expected `pdf` or `png`\n";
+        assert_eq!(
+            friendly_export_error(stderr, None),
+            "unknown variant `webp`, expected `pdf` or `png`"
+        );
+    }
+
+    #[test]
+    fn backtrace_only_stderr_gets_friendly_fallback() {
+        let stderr = "stack backtrace:\n  22: RtlUserThreadStart\n";
+        let message = friendly_export_error(stderr, None);
+        assert!(message.contains("导出进程异常退出"));
+        assert!(!message.contains("RtlUserThreadStart"));
     }
 }

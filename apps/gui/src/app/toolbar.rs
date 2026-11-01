@@ -242,11 +242,7 @@ impl AppShell {
             self.bookmarks.note(&rel_path).is_some()
         });
 
-        let mut right = div()
-            .h_flex()
-            .items_center()
-            .gap_0p5()
-            .flex_none();
+        let mut right = div().h_flex().items_center().gap_0p5().flex_none();
         if let Some(starred) = starred {
             right = right.child(
                 Button::new("tb-bookmark")

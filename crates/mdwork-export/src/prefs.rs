@@ -11,14 +11,29 @@ use uuid::Uuid;
 
 pub const PREFS_HEADER: &str = "# 墨笺 md-work · 导出偏好（可安全删除，重新选择即可）\n";
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NotebookPrefs {
     pub last_export_pdf_dir: Option<String>,
     pub last_export_png_dir: Option<String>,
     pub last_zip_dir: Option<String>,
     pub last_import_dir: Option<String>,
+    /// Open the exported file with the OS default app after a successful export.
+    pub open_after_export: bool,
     pub export: ExportOptions,
+}
+
+impl Default for NotebookPrefs {
+    fn default() -> Self {
+        Self {
+            last_export_pdf_dir: None,
+            last_export_png_dir: None,
+            last_zip_dir: None,
+            last_import_dir: None,
+            open_after_export: true,
+            export: ExportOptions::default(),
+        }
+    }
 }
 
 impl NotebookPrefs {

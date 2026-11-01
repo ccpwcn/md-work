@@ -351,6 +351,308 @@ impl AppShell {
             .into_any_element()
     }
 
+    pub(super) fn render_move_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(picker) = self.move_picker.as_ref() else {
+            return div().into_any_element();
+        };
+        let source_notebook_id = picker.source_notebook_id;
+        let source_rel = picker.source_rel.clone();
+        let source_kind = picker.source_kind;
+        let selected = picker.selected.clone();
+        let root_expanded = picker.root_expanded.clone();
+        let expanded = picker.expanded.clone();
+        let error = picker.error.clone();
+        let can_confirm = selected.as_ref().is_some_and(|(id, folder)| {
+            self.move_destination_allowed(
+                source_notebook_id,
+                &source_rel,
+                source_kind,
+                *id,
+                folder.as_deref(),
+            )
+        });
+
+        let overlay = cx.theme().overlay;
+        let border = cx.theme().border;
+        let popover = cx.theme().popover;
+        let foreground = cx.theme().popover_foreground;
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+        let active_bg = cx.theme().list_active;
+        let hover_bg = cx.theme().list_hover;
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+        for (nb_index, entry) in self.notebooks.iter().enumerate() {
+            let notebook_id = entry.notebook.marker.id;
+            let name = entry.notebook.display_name().to_string();
+            let is_root_open = root_expanded.contains(&notebook_id);
+            let is_selected = matches!(
+                selected,
+                Some((id, None)) if id == notebook_id
+            );
+            let root_allowed = self.move_destination_allowed(
+                source_notebook_id,
+                &source_rel,
+                source_kind,
+                notebook_id,
+                None,
+            );
+            let chevron = if is_root_open { "▾" } else { "▸" };
+            let shell = cx.entity();
+            let toggle_shell = shell.clone();
+            let select_shell = shell.clone();
+            rows.push(
+                div()
+                    .id(format!("move-nb-{nb_index}"))
+                    .h(px(28.))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(if is_selected {
+                        active_bg
+                    } else {
+                        transparent_black()
+                    })
+                    .hover(move |style| {
+                        if root_allowed {
+                            style.bg(hover_bg)
+                        } else {
+                            style
+                        }
+                    })
+                    .opacity(if root_allowed { 1.0 } else { 0.45 })
+                    .on_click(move |_, _, cx| {
+                        if root_allowed {
+                            select_shell.update(cx, |this, cx| {
+                                this.select_move_destination(notebook_id, None, cx);
+                            });
+                        }
+                    })
+                    .child(
+                        div()
+                            .id(format!("move-nb-chevron-{nb_index}"))
+                            .w(px(12.))
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(muted)
+                            .cursor_pointer()
+                            .child(chevron)
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                cx.stop_propagation();
+                                toggle_shell.update(cx, |this, cx| {
+                                    this.toggle_move_picker_root(notebook_id, cx);
+                                });
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .child(Icon::new(IconName::BookOpen).xsmall().text_color(muted)),
+                    )
+                    .child(div().flex_1().min_w_0().font_bold().truncate().child(name))
+                    .into_any_element(),
+            );
+
+            if !is_root_open {
+                continue;
+            }
+            let folder_expanded = expanded.get(&notebook_id).cloned().unwrap_or_default();
+            let folder_tree: Vec<Entry> = entry
+                .tree
+                .iter()
+                .filter(|item| item.kind == EntryKind::Folder)
+                .cloned()
+                .collect();
+            let folder_rows = build_rows(&folder_tree, &folder_expanded);
+            for (row_index, row) in folder_rows.iter().enumerate() {
+                let rel_path = row.rel_path.clone();
+                let label = row.name.clone();
+                let depth = row.depth as f32;
+                let is_open = row.expanded;
+                let is_selected = matches!(
+                    &selected,
+                    Some((id, Some(folder))) if *id == notebook_id && folder == &rel_path
+                );
+                let allowed = self.move_destination_allowed(
+                    source_notebook_id,
+                    &source_rel,
+                    source_kind,
+                    notebook_id,
+                    Some(rel_path.as_str()),
+                );
+                let has_children = folder_tree.iter().any(|item| {
+                    item.rel_path
+                        .rsplit_once('/')
+                        .is_some_and(|(parent, _)| parent == rel_path)
+                });
+                let chevron = if has_children {
+                    if is_open { "▾" } else { "▸" }
+                } else {
+                    ""
+                };
+                let shell = cx.entity();
+                let toggle_shell = shell.clone();
+                let select_shell = shell;
+                let toggle_rel = rel_path.clone();
+                let select_rel = rel_path.clone();
+                rows.push(
+                    div()
+                        .id(format!("move-folder-{nb_index}-{row_index}"))
+                        .h(px(26.))
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .pl(px(10.0 + (depth + 1.0) * 14.0))
+                        .pr_2()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .bg(if is_selected {
+                            active_bg
+                        } else {
+                            transparent_black()
+                        })
+                        .hover(
+                            move |style| {
+                                if allowed { style.bg(hover_bg) } else { style }
+                            },
+                        )
+                        .opacity(if allowed { 1.0 } else { 0.45 })
+                        .on_click(move |_, _, cx| {
+                            if allowed {
+                                select_shell.update(cx, |this, cx| {
+                                    this.select_move_destination(
+                                        notebook_id,
+                                        Some(select_rel.clone()),
+                                        cx,
+                                    );
+                                });
+                            }
+                        })
+                        .child(
+                            div()
+                                .id(format!("move-folder-chevron-{nb_index}-{row_index}"))
+                                .w(px(12.))
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .when(has_children, |el| {
+                                    el.cursor_pointer().on_mouse_down(
+                                        MouseButton::Left,
+                                        move |_, _, cx| {
+                                            cx.stop_propagation();
+                                            toggle_shell.update(cx, |this, cx| {
+                                                this.toggle_move_picker_folder(
+                                                    notebook_id,
+                                                    &toggle_rel,
+                                                    cx,
+                                                );
+                                            });
+                                        },
+                                    )
+                                })
+                                .child(chevron),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .child(Icon::new(IconName::Folder).xsmall().text_color(muted)),
+                        )
+                        .child(div().flex_1().min_w_0().text_sm().truncate().child(label))
+                        .into_any_element(),
+                );
+            }
+        }
+
+        div()
+            .id("move-picker-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(overlay)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, {
+                let shell = cx.entity();
+                move |_, _, cx| {
+                    shell.update(cx, |this, cx| this.close_move_picker(cx));
+                }
+            })
+            .child(
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .w(px(480.))
+                    .max_h(px(520.))
+                    .p_4()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(border)
+                    .bg(popover)
+                    .text_color(foreground)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_base()
+                            .font_bold()
+                            .child(t!("tree.move_title").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(t!("tree.move_hint", path = source_rel.as_str()).to_string()),
+                    )
+                    .child(
+                        div()
+                            .id("move-picker-list")
+                            .flex_1()
+                            .min_h(px(240.))
+                            .max_h(px(360.))
+                            .overflow_y_scroll()
+                            .border_1()
+                            .border_color(border)
+                            .rounded_md()
+                            .p_1()
+                            .children(rows),
+                    )
+                    .children(error.map(|error| div().text_xs().text_color(danger).child(error)))
+                    .child(
+                        div()
+                            .h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("move-picker-cancel")
+                                    .ghost()
+                                    .compact()
+                                    .label(t!("common.cancel").to_string())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.close_move_picker(cx)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("move-picker-ok")
+                                    .primary()
+                                    .compact()
+                                    .disabled(!can_confirm)
+                                    .label(t!("tree.move_confirm").to_string())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.confirm_move_picker(cx)),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn render_workspace_confirm(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(confirm) = self.workspace_confirm.as_ref() else {
             return div().into_any_element();
@@ -586,12 +888,6 @@ impl AppShell {
                         }
                         this.tab_drag = None;
                         this.activate_doc(index, cx);
-                        let pos = this
-                            .visible_tabs(cx)
-                            .iter()
-                            .position(|&seen| seen == index)
-                            .unwrap_or(0);
-                        this.tab_scroll.scroll_to_item(pos);
                     }))
                     .context_menu(move |menu, _, _| {
                         let rename_shell = shell.clone();
@@ -758,12 +1054,6 @@ impl AppShell {
                                         move |_, _, cx| {
                                             shell.update(cx, |this, cx| {
                                                 this.activate_doc(index, cx);
-                                                let pos = this
-                                                    .visible_tabs(cx)
-                                                    .iter()
-                                                    .position(|&seen| seen == index)
-                                                    .unwrap_or(0);
-                                                this.tab_scroll.scroll_to_item(pos);
                                             });
                                         },
                                     ),
@@ -796,6 +1086,25 @@ impl AppShell {
             )
             .child(actions)
             .into_any_element()
+    }
+
+    /// Scrolls the tab strip so the foreground note's tab is in view.
+    ///
+    /// Safe to call before the strip has been laid out: `ScrollHandle` keeps
+    /// the request and applies it on the next paint. Callers that create or
+    /// restore many tabs at once should also schedule a deferred retry.
+    pub(super) fn ensure_active_tab_visible(&self, cx: &App) {
+        let Some(active) = self.active_doc else {
+            return;
+        };
+        let Some(pos) = self
+            .visible_tabs(cx)
+            .iter()
+            .position(|&seen| seen == active)
+        else {
+            return;
+        };
+        self.tab_scroll.scroll_to_item(pos);
     }
 
     pub(super) fn begin_tab_drag(&mut self, index: usize, x: f32, cx: &mut Context<Self>) {

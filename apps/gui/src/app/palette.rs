@@ -27,6 +27,7 @@ impl AppShell {
             item("palette.trash", "", PaletteCommand::Trash),
             item("palette.notes_panel", "", PaletteCommand::NotesPanel),
             item("palette.export_pdf", "", PaletteCommand::ExportPdf),
+            item("palette.export_webp", "", PaletteCommand::ExportWebp),
             item("palette.export_png", "", PaletteCommand::ExportPng),
             item("palette.export_zip", "", PaletteCommand::ExportNotebookZip),
             item("palette.import_zip", "", PaletteCommand::ImportNotebookZip),
@@ -184,6 +185,9 @@ impl AppShell {
             }
             PaletteCommand::ExportPng => {
                 self.open_export_dialog_with(ExportFormat::Png, window, cx)
+            }
+            PaletteCommand::ExportWebp => {
+                self.open_export_dialog_with(ExportFormat::Webp, window, cx)
             }
             PaletteCommand::ExportNotebookZip => {
                 if let Some(id) = self.active_notebook {

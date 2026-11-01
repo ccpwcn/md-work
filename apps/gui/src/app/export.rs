@@ -58,13 +58,14 @@ impl AppShell {
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let fallback = notebook_root.clone();
+            let prefer_pdf_dir = format == ExportFormat::Pdf;
             let (prefs, dir) = cx
                 .background_executor()
                 .spawn(async move {
                     let prefs = notebook_id
                         .map(|id| NotebookPrefs::load(&id))
                         .unwrap_or_default();
-                    let dir = prefs.export_dir(true).unwrap_or(fallback);
+                    let dir = prefs.export_dir(prefer_pdf_dir).unwrap_or(fallback);
                     (prefs, dir)
                 })
                 .await;
@@ -141,11 +142,13 @@ impl AppShell {
             markdown,
             format,
             options,
+            open_after_export: prefs.open_after_export,
             header_input,
             footer_input,
             output_input,
             job: None,
             busy: false,
+            confirm_overwrite: false,
             stage: None,
             progress: None,
             warnings: Vec::new(),
@@ -170,6 +173,7 @@ impl AppShell {
     ) {
         if let Some(dialog) = self.export.as_mut() {
             apply(&mut dialog.options);
+            dialog.confirm_overwrite = false;
             cx.notify();
         }
     }
@@ -187,6 +191,7 @@ impl AppShell {
             return;
         }
         dialog.format = format;
+        dialog.confirm_overwrite = false;
         let current = PathBuf::from(dialog.output_input.read(cx).value().to_string());
         let next = ensure_export_extension(current, format);
         dialog.output_input.update(cx, |state, cx| {
@@ -218,6 +223,7 @@ impl AppShell {
                     if let Some(dialog) = this.export.as_mut() {
                         let path = ensure_export_extension(path, dialog.format);
                         let display = path.display().to_string();
+                        dialog.confirm_overwrite = false;
                         dialog
                             .output_input
                             .update(cx, |state, cx| state.set_value(display, window, cx));
@@ -254,30 +260,55 @@ impl AppShell {
             cx.notify();
             return;
         }
-        let output = ensure_export_extension(raw_output, dialog.format);
+        let format = dialog.format;
+        let output = ensure_export_extension(raw_output, format);
+        let confirmed = dialog.confirm_overwrite;
+        if export_target_exists(&output) && !confirmed {
+            if let Some(dialog) = self.export.as_mut() {
+                dialog.confirm_overwrite = true;
+                dialog.error = None;
+                let display = output.display().to_string();
+                dialog
+                    .output_input
+                    .update(cx, |state, cx| state.set_value(display, window, cx));
+            }
+            cx.notify();
+            return;
+        }
         let mut options = dialog.options.clone();
         options.header = dialog.header_input.read(cx).value().to_string();
         options.footer = dialog.footer_input.read(cx).value().to_string();
-        let request = ExportRequest {
-            notebook_root: dialog.notebook_root.clone(),
-            note_rel: dialog.note_rel.clone(),
-            notebook_name: dialog.notebook_name.clone(),
-            title: dialog.title.clone(),
-            format: dialog.format,
-            output: output.clone(),
-            options: options.clone(),
-            markdown: Some(dialog.markdown.clone()),
-            temp_dir: None,
-        };
         let notebook_id = dialog.notebook_id;
+
+        // Mark busy and return quickly so the frame can paint before we clone
+        // markdown / write request.json / spawn the CLI.
+        if let Some(dialog) = self.export.as_mut() {
+            dialog.busy = true;
+            dialog.confirm_overwrite = false;
+            dialog.stage = Some("read".to_string());
+            dialog.progress = None;
+            dialog.warnings.clear();
+            dialog.error = None;
+            let display = output.display().to_string();
+            dialog
+                .output_input
+                .update(cx, |state, cx| state.set_value(display, window, cx));
+        }
+        cx.notify();
 
         if let Some(id) = notebook_id {
             let prefs_export = options.clone();
+            let open_after_export = self
+                .export
+                .as_ref()
+                .map(|dialog| dialog.open_after_export)
+                .unwrap_or(true);
             let parent = output.parent().map(Path::to_path_buf);
-            let is_pdf = dialog.format == ExportFormat::Pdf;
+            let is_pdf = format == ExportFormat::Pdf;
             disk::enqueue(move || {
                 let mut prefs = NotebookPrefs::load(&id);
                 prefs.export = prefs_export;
+                prefs.open_after_export = open_after_export;
                 if let Some(parent) = parent {
                     prefs.set_export_dir(is_pdf, &parent);
                 }
@@ -287,29 +318,64 @@ impl AppShell {
             });
         }
 
-        match ExportJob::start(&cli, &request) {
-            Ok(job) => {
-                if let Some(dialog) = self.export.as_mut() {
-                    dialog.job = Some(job);
-                    dialog.busy = true;
-                    dialog.stage = Some("read".to_string());
-                    dialog.progress = None;
-                    dialog.warnings.clear();
-                    dialog.error = None;
-                    let display = output.display().to_string();
-                    dialog
-                        .output_input
-                        .update(cx, |state, cx| state.set_value(display, window, cx));
+        cx.spawn(async move |this, cx| {
+            let prepared = this
+                .update(cx, |this, _cx| {
+                    let dialog = this.export.as_ref()?;
+                    if !dialog.busy {
+                        return None;
+                    }
+                    Some(ExportRequest {
+                        notebook_root: dialog.notebook_root.clone(),
+                        note_rel: dialog.note_rel.clone(),
+                        notebook_name: dialog.notebook_name.clone(),
+                        title: dialog.title.clone(),
+                        format,
+                        output,
+                        options,
+                        markdown: Some(dialog.markdown.clone()),
+                        temp_dir: None,
+                    })
+                })
+                .ok()
+                .flatten();
+            let Some(request) = prepared else {
+                return;
+            };
+
+            let result = cx
+                .background_executor()
+                .spawn(async move { ExportJob::start(&cli, &request) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(dialog) = this.export.as_mut() else {
+                    if let Ok(job) = result {
+                        job.cancel();
+                    }
+                    return;
+                };
+                if !dialog.busy {
+                    if let Ok(job) = result {
+                        job.cancel();
+                    }
+                    return;
                 }
-                self.spawn_export_poll(cx);
-            }
-            Err(err) => {
-                if let Some(dialog) = self.export.as_mut() {
-                    dialog.error = Some(err.to_string());
+                match result {
+                    Ok(job) => {
+                        dialog.job = Some(job);
+                        this.spawn_export_poll(cx);
+                    }
+                    Err(err) => {
+                        dialog.busy = false;
+                        dialog.job = None;
+                        dialog.stage = None;
+                        dialog.error = Some(err.to_string());
+                    }
                 }
-            }
-        }
-        cx.notify();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn spawn_export_poll(&self, cx: &mut Context<Self>) {
@@ -352,11 +418,13 @@ impl AppShell {
         }
 
         let mut close_with = None;
+        let mut open_paths = Vec::new();
         if let Some(message) = failed {
             dialog.busy = false;
             dialog.job = None;
             dialog.error = Some(message);
         } else if let Some((paths, _pages)) = done {
+            let should_open = dialog.open_after_export;
             dialog.busy = false;
             dialog.job = None;
             close_with = Some(if paths.len() == 1 {
@@ -364,6 +432,9 @@ impl AppShell {
             } else {
                 t!("export.done_count", count = paths.len()).to_string()
             });
+            if should_open {
+                open_paths = paths;
+            }
         } else if finished && dialog.job.is_some() {
             dialog.busy = false;
             dialog.job = None;
@@ -373,6 +444,9 @@ impl AppShell {
         let busy = dialog.job.is_some();
         if let Some(notice) = close_with {
             self.export = None;
+            if let Some(path) = open_paths.first() {
+                self.open_path_with_default_app(PathBuf::from(path), cx);
+            }
             self.notify_success(notice, cx);
             return false;
         }
@@ -390,19 +464,29 @@ impl AppShell {
         let overlay = cx.theme().overlay;
         let danger = cx.theme().danger;
         let label = |text: String| div().w(px(64.)).text_xs().text_color(muted).child(text);
-        let format_button =
-            |format: ExportFormat, label_key: &'static str, cx: &mut Context<Self>| {
-                let active = dialog.format == format;
-                Button::new(format!("export-format-{}", format.extension()))
-                    .ghost()
-                    .compact()
-                    .label(t!(label_key).to_string())
-                    .when(active, |button| button.primary())
-                    .disabled(dialog.busy)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_export_format(format, window, cx)
-                    }))
+        let format_button = |format: ExportFormat,
+                             label_key: &'static str,
+                             recommended: bool,
+                             cx: &mut Context<Self>| {
+            let active = dialog.format == format;
+            let label = if recommended {
+                format!("{} {}", t!(label_key), t!("export.recommended"))
+            } else {
+                t!(label_key).to_string()
             };
+            Button::new(format!("export-format-{}", format.extension()))
+                .ghost()
+                .compact()
+                .label(label)
+                .when(recommended, |button| {
+                    button.tooltip(t!("export.webp_hint").to_string())
+                })
+                .when(active, |button| button.primary())
+                .disabled(dialog.busy)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_export_format(format, window, cx)
+                }))
+        };
         let checkbox = |id: &'static str,
                         label_key: &'static str,
                         checked: bool,
@@ -416,16 +500,34 @@ impl AppShell {
                     this.set_export_option(|options| apply(options, *checked), cx)
                 }))
         };
-        let cycle = |id: &'static str,
-                     text: String,
-                     apply: fn(&mut ExportOptions),
-                     cx: &mut Context<Self>| {
+        let shell = cx.entity();
+        let option_menu = |id: &'static str,
+                           text: String,
+                           items: Vec<(String, bool, fn(&mut ExportOptions))>,
+                           shell: Entity<Self>| {
             Button::new(id)
                 .ghost()
                 .compact()
                 .label(text)
+                .dropdown_caret(true)
                 .disabled(dialog.busy)
-                .on_click(cx.listener(move |this, _, _, cx| this.set_export_option(apply, cx)))
+                .dropdown_menu(move |menu, _, _| {
+                    let mut menu = menu;
+                    for (label, selected, apply) in &items {
+                        let shell = shell.clone();
+                        let apply = *apply;
+                        menu = menu.item(
+                            PopupMenuItem::new(label.clone())
+                                .checked(*selected)
+                                .on_click(move |_, _, cx| {
+                                    shell.update(cx, |this, cx| {
+                                        this.set_export_option(apply, cx);
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                })
         };
 
         let paper_label = match dialog.options.paper {
@@ -434,6 +536,13 @@ impl AppShell {
             PaperSize::Letter => "Letter",
             PaperSize::Custom => "Custom",
         };
+        let dpi = dialog.options.png_dpi;
+        let margin_mm = dialog.options.margin_top_mm as i32;
+        let font_pt = dialog.options.font_size_pt as i32;
+        let line_height = (dialog.options.line_height * 100.0).round() as i32;
+        let toc_depth = dialog.options.toc_depth;
+        let image_pct = dialog.options.image_max_width_pct;
+        let page_format = dialog.options.page_number_format.clone();
         let status = if let Some(error) = &dialog.error {
             Some((error.clone(), danger))
         } else if dialog.busy {
@@ -452,6 +561,8 @@ impl AppShell {
                 None => stage,
             };
             Some((text, muted))
+        } else if dialog.confirm_overwrite {
+            Some((t!("export.overwrite_warning").to_string(), danger))
         } else if !dialog.warnings.is_empty() {
             Some((
                 t!("export.warnings", count = dialog.warnings.len()).to_string(),
@@ -463,6 +574,12 @@ impl AppShell {
 
         let output_value = dialog.output_input.read(cx).value().to_string();
         let can_start = !dialog.busy && !output_value.trim().is_empty();
+        let start_label = if dialog.confirm_overwrite {
+            t!("export.confirm_overwrite").to_string()
+        } else {
+            t!("export.start").to_string()
+        };
+        let is_raster = dialog.format.is_raster();
 
         div()
             .id("export-overlay")
@@ -515,61 +632,67 @@ impl AppShell {
                             .items_center()
                             .gap_2()
                             .child(label(t!("export.format").to_string()))
-                            .child(format_button(ExportFormat::Pdf, "export.pdf", cx))
-                            .child(format_button(ExportFormat::Png, "export.png", cx))
+                            .child(format_button(ExportFormat::Pdf, "export.pdf", false, cx))
+                            .child(format_button(ExportFormat::Webp, "export.webp", true, cx))
+                            .child(format_button(ExportFormat::Png, "export.png", false, cx))
                             .child(div().flex_1())
                             .child(label(t!("export.paper").to_string()))
-                            .child(
-                                Button::new("export-paper")
-                                    .ghost()
-                                    .compact()
-                                    .label(paper_label.to_string())
-                                    .disabled(dialog.busy)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_export_option(
-                                            |options| {
-                                                options.paper = match options.paper {
-                                                    PaperSize::A4 => PaperSize::A5,
-                                                    PaperSize::A5 => PaperSize::Letter,
-                                                    PaperSize::Letter | PaperSize::Custom => {
-                                                        PaperSize::A4
-                                                    }
-                                                }
-                                            },
-                                            cx,
-                                        )
-                                    })),
-                            ),
+                            .child(option_menu(
+                                "export-paper",
+                                paper_label.to_string(),
+                                vec![
+                                    (
+                                        "A4".into(),
+                                        dialog.options.paper == PaperSize::A4,
+                                        |options| options.paper = PaperSize::A4,
+                                    ),
+                                    (
+                                        "A5".into(),
+                                        dialog.options.paper == PaperSize::A5,
+                                        |options| options.paper = PaperSize::A5,
+                                    ),
+                                    (
+                                        "Letter".into(),
+                                        dialog.options.paper == PaperSize::Letter,
+                                        |options| options.paper = PaperSize::Letter,
+                                    ),
+                                ],
+                                shell.clone(),
+                            )),
                     )
                     .child(
                         div()
                             .h_flex()
                             .items_center()
                             .gap_3()
-                            .when(dialog.format == ExportFormat::Png, |row| {
-                                row.child(
-                                    Button::new("export-dpi")
-                                        .ghost()
-                                        .compact()
-                                        .label(
-                                            t!("export.dpi", dpi = dialog.options.png_dpi)
-                                                .to_string(),
-                                        )
-                                        .disabled(dialog.busy)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.set_export_option(
-                                                |options| {
-                                                    options.png_dpi = match options.png_dpi {
-                                                        0..=120 => 144,
-                                                        121..=168 => 192,
-                                                        169..=240 => 300,
-                                                        _ => 96,
-                                                    }
-                                                },
-                                                cx,
-                                            )
-                                        })),
-                                )
+                            .when(is_raster, |row| {
+                                row.child(option_menu(
+                                    "export-dpi",
+                                    t!("export.dpi", dpi = dpi).to_string(),
+                                    vec![
+                                        (
+                                            t!("export.dpi", dpi = 96).to_string(),
+                                            dpi == 96,
+                                            |options| options.png_dpi = 96,
+                                        ),
+                                        (
+                                            t!("export.dpi", dpi = 144).to_string(),
+                                            dpi == 144,
+                                            |options| options.png_dpi = 144,
+                                        ),
+                                        (
+                                            t!("export.dpi", dpi = 192).to_string(),
+                                            dpi == 192,
+                                            |options| options.png_dpi = 192,
+                                        ),
+                                        (
+                                            t!("export.dpi", dpi = 300).to_string(),
+                                            dpi == 300,
+                                            |options| options.png_dpi = 300,
+                                        ),
+                                    ],
+                                    shell.clone(),
+                                ))
                             })
                             .child(checkbox(
                                 "export-cover",
@@ -606,7 +729,7 @@ impl AppShell {
                                 |options, value| options.code_highlight = value,
                                 cx,
                             ))
-                            .when(dialog.format == ExportFormat::Png, |row| {
+                            .when(is_raster, |row| {
                                 row.child(checkbox(
                                     "export-page-files",
                                     "export.page_files",
@@ -622,113 +745,200 @@ impl AppShell {
                             .flex_wrap()
                             .items_center()
                             .gap_2()
-                            .child(cycle(
+                            .child(option_menu(
                                 "export-margin",
-                                t!("export.margin", mm = dialog.options.margin_top_mm as i32)
-                                    .to_string(),
-                                |options| {
-                                    let next = match options.margin_top_mm as i32 {
-                                        10 => 15.0,
-                                        15 => 20.0,
-                                        20 => 25.0,
-                                        25 => 30.0,
-                                        _ => 10.0,
-                                    };
-                                    options.margin_top_mm = next;
-                                    options.margin_bottom_mm = next;
-                                    options.margin_left_mm = next;
-                                    options.margin_right_mm = next;
-                                },
-                                cx,
+                                t!("export.margin", mm = margin_mm).to_string(),
+                                vec![
+                                    (
+                                        t!("export.margin", mm = 10).to_string(),
+                                        margin_mm == 10,
+                                        |options| set_uniform_margin(options, 10.0),
+                                    ),
+                                    (
+                                        t!("export.margin", mm = 15).to_string(),
+                                        margin_mm == 15,
+                                        |options| set_uniform_margin(options, 15.0),
+                                    ),
+                                    (
+                                        t!("export.margin", mm = 20).to_string(),
+                                        margin_mm == 20,
+                                        |options| set_uniform_margin(options, 20.0),
+                                    ),
+                                    (
+                                        t!("export.margin", mm = 25).to_string(),
+                                        margin_mm == 25,
+                                        |options| set_uniform_margin(options, 25.0),
+                                    ),
+                                    (
+                                        t!("export.margin", mm = 30).to_string(),
+                                        margin_mm == 30,
+                                        |options| set_uniform_margin(options, 30.0),
+                                    ),
+                                ],
+                                shell.clone(),
                             ))
-                            .child(cycle(
+                            .child(option_menu(
                                 "export-font-size",
                                 t!(
                                     "export.font_size",
                                     pt = format_pt(dialog.options.font_size_pt)
                                 )
                                 .to_string(),
-                                |options| {
-                                    options.font_size_pt = match options.font_size_pt as i32 {
-                                        9 => 10.0,
-                                        10 => 11.0,
-                                        11 => 12.0,
-                                        12 => 13.0,
-                                        13 => 14.0,
-                                        _ => 9.0,
-                                    };
-                                },
-                                cx,
+                                vec![
+                                    (
+                                        t!("export.font_size", pt = "9").to_string(),
+                                        font_pt == 9,
+                                        |options| options.font_size_pt = 9.0,
+                                    ),
+                                    (
+                                        t!("export.font_size", pt = "10").to_string(),
+                                        font_pt == 10,
+                                        |options| options.font_size_pt = 10.0,
+                                    ),
+                                    (
+                                        t!("export.font_size", pt = "11").to_string(),
+                                        font_pt == 11,
+                                        |options| options.font_size_pt = 11.0,
+                                    ),
+                                    (
+                                        t!("export.font_size", pt = "12").to_string(),
+                                        font_pt == 12,
+                                        |options| options.font_size_pt = 12.0,
+                                    ),
+                                    (
+                                        t!("export.font_size", pt = "13").to_string(),
+                                        font_pt == 13,
+                                        |options| options.font_size_pt = 13.0,
+                                    ),
+                                    (
+                                        t!("export.font_size", pt = "14").to_string(),
+                                        font_pt == 14,
+                                        |options| options.font_size_pt = 14.0,
+                                    ),
+                                ],
+                                shell.clone(),
                             ))
-                            .child(cycle(
+                            .child(option_menu(
                                 "export-line-height",
                                 t!(
                                     "export.line_height",
                                     value = format!("{:.2}", dialog.options.line_height)
                                 )
                                 .to_string(),
-                                |options| {
-                                    options.line_height =
-                                        match (options.line_height * 100.0).round() as i32 {
-                                            140 => 1.5,
-                                            150 => 1.65,
-                                            165 => 1.8,
-                                            180 => 2.0,
-                                            _ => 1.4,
-                                        };
-                                },
-                                cx,
+                                vec![
+                                    (
+                                        t!("export.line_height", value = "1.40").to_string(),
+                                        line_height == 140,
+                                        |options| options.line_height = 1.4,
+                                    ),
+                                    (
+                                        t!("export.line_height", value = "1.50").to_string(),
+                                        line_height == 150,
+                                        |options| options.line_height = 1.5,
+                                    ),
+                                    (
+                                        t!("export.line_height", value = "1.65").to_string(),
+                                        line_height == 165,
+                                        |options| options.line_height = 1.65,
+                                    ),
+                                    (
+                                        t!("export.line_height", value = "1.80").to_string(),
+                                        line_height == 180,
+                                        |options| options.line_height = 1.8,
+                                    ),
+                                    (
+                                        t!("export.line_height", value = "2.00").to_string(),
+                                        line_height == 200,
+                                        |options| options.line_height = 2.0,
+                                    ),
+                                ],
+                                shell.clone(),
                             ))
-                            .child(cycle(
+                            .child(option_menu(
                                 "export-toc-depth",
-                                t!("export.toc_depth", depth = dialog.options.toc_depth)
-                                    .to_string(),
-                                |options| {
-                                    options.toc_depth = match options.toc_depth {
-                                        1 => 2,
-                                        2 => 3,
-                                        3 => 4,
-                                        4 => 5,
-                                        _ => 1,
-                                    };
-                                },
-                                cx,
+                                t!("export.toc_depth", depth = toc_depth).to_string(),
+                                vec![
+                                    (
+                                        t!("export.toc_depth", depth = 1).to_string(),
+                                        toc_depth == 1,
+                                        |options| options.toc_depth = 1,
+                                    ),
+                                    (
+                                        t!("export.toc_depth", depth = 2).to_string(),
+                                        toc_depth == 2,
+                                        |options| options.toc_depth = 2,
+                                    ),
+                                    (
+                                        t!("export.toc_depth", depth = 3).to_string(),
+                                        toc_depth == 3,
+                                        |options| options.toc_depth = 3,
+                                    ),
+                                    (
+                                        t!("export.toc_depth", depth = 4).to_string(),
+                                        toc_depth == 4,
+                                        |options| options.toc_depth = 4,
+                                    ),
+                                    (
+                                        t!("export.toc_depth", depth = 5).to_string(),
+                                        toc_depth == 5,
+                                        |options| options.toc_depth = 5,
+                                    ),
+                                ],
+                                shell.clone(),
                             ))
-                            .child(cycle(
+                            .child(option_menu(
                                 "export-image-width",
-                                t!(
-                                    "export.image_width",
-                                    pct = dialog.options.image_max_width_pct
-                                )
-                                .to_string(),
-                                |options| {
-                                    options.image_max_width_pct = match options.image_max_width_pct
-                                    {
-                                        60 => 75,
-                                        61..=75 => 90,
-                                        76..=90 => 100,
-                                        _ => 60,
-                                    };
-                                },
-                                cx,
+                                t!("export.image_width", pct = image_pct).to_string(),
+                                vec![
+                                    (
+                                        t!("export.image_width", pct = 60).to_string(),
+                                        image_pct == 60,
+                                        |options| options.image_max_width_pct = 60,
+                                    ),
+                                    (
+                                        t!("export.image_width", pct = 75).to_string(),
+                                        image_pct == 75,
+                                        |options| options.image_max_width_pct = 75,
+                                    ),
+                                    (
+                                        t!("export.image_width", pct = 90).to_string(),
+                                        image_pct == 90,
+                                        |options| options.image_max_width_pct = 90,
+                                    ),
+                                    (
+                                        t!("export.image_width", pct = 100).to_string(),
+                                        image_pct == 100,
+                                        |options| options.image_max_width_pct = 100,
+                                    ),
+                                ],
+                                shell.clone(),
                             ))
-                            .child(cycle(
+                            .child(option_menu(
                                 "export-page-format",
-                                format!(
-                                    "{}: {}",
-                                    t!("export.page_format"),
-                                    dialog.options.page_number_format
-                                ),
-                                |options| {
-                                    options.page_number_format =
-                                        match options.page_number_format.as_str() {
-                                            "1" => "1 / 1".to_string(),
-                                            "1 / 1" => "- 1 -".to_string(),
-                                            "- 1 -" => "1 / 2".to_string(),
-                                            _ => "1".to_string(),
-                                        };
-                                },
-                                cx,
+                                format!("{}: {page_format}", t!("export.page_format")),
+                                vec![
+                                    (
+                                        format!("{}: 1", t!("export.page_format")),
+                                        page_format == "1",
+                                        |options| options.page_number_format = "1".to_string(),
+                                    ),
+                                    (
+                                        format!("{}: 1 / 1", t!("export.page_format")),
+                                        page_format == "1 / 1",
+                                        |options| options.page_number_format = "1 / 1".to_string(),
+                                    ),
+                                    (
+                                        format!("{}: - 1 -", t!("export.page_format")),
+                                        page_format == "- 1 -",
+                                        |options| options.page_number_format = "- 1 -".to_string(),
+                                    ),
+                                    (
+                                        format!("{}: 1 / 2", t!("export.page_format")),
+                                        page_format == "1 / 2",
+                                        |options| options.page_number_format = "1 / 2".to_string(),
+                                    ),
+                                ],
+                                shell.clone(),
                             ))
                             .child(checkbox(
                                 "export-justify",
@@ -756,25 +966,46 @@ impl AppShell {
                     )
                     .child(
                         div()
-                            .h_flex()
-                            .items_center()
+                            .v_flex()
                             .gap_2()
-                            .child(label(t!("export.output").to_string()))
                             .child(
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(Input::new(&dialog.output_input).w_full().small()),
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(label(t!("export.output").to_string()))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(
+                                                Input::new(&dialog.output_input).w_full().small(),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new("export-browse")
+                                            .ghost()
+                                            .compact()
+                                            .label(t!("export.browse").to_string())
+                                            .disabled(dialog.busy)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.pick_export_output(window, cx)
+                                            })),
+                                    ),
                             )
                             .child(
-                                Button::new("export-browse")
-                                    .ghost()
-                                    .compact()
-                                    .label(t!("export.browse").to_string())
-                                    .disabled(dialog.busy)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.pick_export_output(window, cx)
-                                    })),
+                                div().pl(px(72.)).child(
+                                    Checkbox::new("export-open-after")
+                                        .label(t!("export.open_after").to_string())
+                                        .checked(dialog.open_after_export)
+                                        .disabled(dialog.busy)
+                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                            if let Some(dialog) = this.export.as_mut() {
+                                                dialog.open_after_export = *checked;
+                                                cx.notify();
+                                            }
+                                        })),
+                                ),
                             ),
                     )
                     .child(
@@ -783,6 +1014,20 @@ impl AppShell {
                             .items_center()
                             .gap_2()
                             .min_h(px(24.))
+                            // Keep「取消」away from the former「开始导出」hit target so a
+                            // double-click cannot cancel. Occupy the start-button slot with a
+                            // disabled primary while busy.
+                            .when(dialog.busy, |row| {
+                                row.child(
+                                    Button::new("export-cancel")
+                                        .ghost()
+                                        .compact()
+                                        .label(t!("export.cancel").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.close_export_dialog(cx)
+                                        })),
+                                )
+                            })
                             .child(
                                 div()
                                     .flex_1()
@@ -795,13 +1040,11 @@ impl AppShell {
                             )
                             .when(dialog.busy, |row| {
                                 row.child(
-                                    Button::new("export-cancel")
-                                        .ghost()
+                                    Button::new("export-busy")
+                                        .primary()
                                         .compact()
-                                        .label(t!("export.cancel").to_string())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.close_export_dialog(cx)
-                                        })),
+                                        .label(t!("export.busy_button").to_string())
+                                        .disabled(true),
                                 )
                             })
                             .when(!dialog.busy, |row| {
@@ -818,7 +1061,7 @@ impl AppShell {
                                     Button::new("export-start")
                                         .primary()
                                         .compact()
-                                        .label(t!("export.start").to_string())
+                                        .label(start_label)
                                         .disabled(!can_start)
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.begin_export(window, cx)
@@ -829,4 +1072,41 @@ impl AppShell {
             )
             .into_any_element()
     }
+}
+
+fn set_uniform_margin(options: &mut ExportOptions, mm: f32) {
+    options.margin_top_mm = mm;
+    options.margin_bottom_mm = mm;
+    options.margin_left_mm = mm;
+    options.margin_right_mm = mm;
+}
+
+fn export_target_exists(output: &Path) -> bool {
+    if output.exists() {
+        return true;
+    }
+    let Some(parent) = output.parent() else {
+        return false;
+    };
+    let Some(stem) = output.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    let Some(extension) = output.extension().and_then(|extension| extension.to_str()) else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return false;
+    };
+    let prefix = format!("{stem}-");
+    let extension_lower = extension.to_ascii_lowercase();
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        let Some((base, ext)) = name.rsplit_once('.') else {
+            return false;
+        };
+        base.starts_with(&prefix) && ext.eq_ignore_ascii_case(&extension_lower)
+    })
 }

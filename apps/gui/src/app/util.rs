@@ -180,6 +180,41 @@ pub(super) fn titlebar_guard(element: impl IntoElement) -> AnyElement {
         .into_any_element()
 }
 
+pub(super) fn open_path_with_default_app_sync(path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            path.display().to_string(),
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // `cmd /C start "" <path>` opens with the shell association; the empty
+        // title argument is required when the path may contain spaces.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path.display().to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+    }
+}
+
 pub(super) fn ensure_export_extension(path: PathBuf, format: ExportFormat) -> PathBuf {
     let extension = format.extension();
     if path
@@ -323,8 +358,10 @@ pub(super) fn store_images(
         }
         links.push(format!("![]({url})"));
     }
+    // Blank lines keep adjacent figures as separate CommonMark paragraphs so
+    // preview promotes them to block images instead of one soft-broken paragraph.
     StoredImages {
-        markdown: links.join("\n"),
+        markdown: links.join("\n\n"),
         failed_uploads,
         error,
     }

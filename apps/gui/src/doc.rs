@@ -211,16 +211,35 @@ impl Doc {
     /// Points the buffer at a renamed/moved file without touching its contents.
     /// The caller holds saves while the rename runs, then releases them.
     pub fn rebase(&mut self, rel_path: String, path: PathBuf) {
+        self.rebase_with_notebook(None, rel_path, path);
+    }
+
+    /// Like [`Self::rebase`], optionally switching the owning notebook (cross-notebook move).
+    pub fn rebase_with_notebook(
+        &mut self,
+        notebook: Option<(Uuid, String, PathBuf)>,
+        rel_path: String,
+        path: PathBuf,
+    ) {
         let previous = std::mem::replace(&mut self.rel_path, rel_path);
+        let previous_id = self.notebook_id;
+        let previous_root = self.notebook_root.clone();
         self.path = path;
         self.conflict = None;
+        if let Some((id, name, root)) = notebook {
+            self.notebook_id = Some(id);
+            self.notebook_name = name;
+            self.notebook_root = Some(root);
+        }
         if self.dirty {
-            if let Some(notebook_id) = self.notebook_id {
-                self.registry.clear(notebook_id, &previous);
-                self.registry.mark(notebook_id, &self.rel_path);
+            if let Some(old_id) = previous_id {
+                self.registry.clear(old_id, &previous);
+            }
+            if let Some(new_id) = self.notebook_id {
+                self.registry.mark(new_id, &self.rel_path);
             }
         }
-        if let Some(root) = self.notebook_root.clone() {
+        if let Some(root) = previous_root {
             let rel_path = previous.clone();
             crate::disk::enqueue(move || {
                 let _ = notebook::remove_encoding_hint(&root, &rel_path);

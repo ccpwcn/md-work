@@ -12,6 +12,9 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use mdwork_render::html_subset::{
+    ElementAttrs, Length, RgbColor, StyleDecls, StyleSheet, resolve_img_size,
+};
 use mdwork_render::preview::{Align, Block, Inline, ListItem, PreviewIr};
 use rust_i18n::t;
 
@@ -30,11 +33,21 @@ struct InlineStyle {
     size: f32,
 }
 
+/// Resolved preview image: on-disk path plus natural pixel size (for layout).
+#[derive(Clone, Debug)]
+pub struct PreviewImage {
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+}
+
 struct RenderCtx<'a> {
     base: Option<&'a Path>,
     style: InlineStyle,
+    border: Hsla,
+    styles: &'a StyleSheet,
     math: &'a HashMap<u64, Option<PathBuf>>,
-    images: &'a HashMap<u64, Option<PathBuf>>,
+    images: &'a HashMap<u64, Option<PreviewImage>>,
     wrap_code: bool,
     body_size: f32,
 }
@@ -43,7 +56,7 @@ pub fn render(
     ir: &PreviewIr,
     base: Option<&Path>,
     math: &HashMap<u64, Option<PathBuf>>,
-    images: &HashMap<u64, Option<PathBuf>>,
+    images: &HashMap<u64, Option<PreviewImage>>,
     wrap_code: bool,
     note_font: &str,
     note_size: f32,
@@ -71,6 +84,8 @@ pub fn render(
             family: family.clone(),
             size: body_size,
         },
+        border: theme.border,
+        styles: &ir.styles,
         math,
         images,
         wrap_code,
@@ -80,10 +95,12 @@ pub fn render(
     let mut column = div()
         .v_flex()
         .w_full()
-        .gap_3()
+        .gap_1()
         .px(px(28.))
-        .py(px(20.))
-        .font_family(family);
+        .py(px(16.))
+        .font_family(family)
+        .text_size(px(body_size))
+        .line_height(relative(1.35));
     if ir.blocks.is_empty() {
         column = column.child(
             div()
@@ -125,7 +142,8 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
             let text = styled_inlines(content, &heading_style, FontWeight::BOLD);
             div()
                 .w_full()
-                .pt(px(8.))
+                .pt(px(2.))
+                .line_height(relative(1.2))
                 .child(
                     StyledText::new(text.text)
                         .with_default_highlights(&text.style, text.highlights),
@@ -215,42 +233,15 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
         Block::Table {
             head, rows, aligns, ..
         } => render_table(head, rows, aligns, style, cx),
-        Block::Image { src, alt, .. } => {
-            let label = if alt.is_empty() {
-                src.clone()
-            } else {
-                format!("{} · {src}", plain_inlines(alt))
-            };
-            let placeholder = div()
-                .w_full()
-                .rounded_md()
-                .border_1()
-                .border_color(theme.border)
-                .px_3()
-                .py_4()
-                .v_flex()
-                .gap_1()
-                .items_center()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(label),
-                );
-            match context
-                .images
-                .get(&image_key(src, context.base))
-                .and_then(|path| path.clone())
-            {
-                Some(path) => div()
-                    .w_full()
-                    .v_flex()
-                    .items_center()
-                    .child(img(path).max_w_full().rounded_md())
-                    .into_any_element(),
-                None => placeholder.into_any_element(),
-            }
-        }
+        Block::Image {
+            src,
+            alt,
+            width,
+            height,
+            attrs,
+            ..
+        } => render_image(src, alt, *width, *height, attrs, true, context),
+        Block::Div { text, attrs, .. } => render_text_box(text, attrs, true, context),
         Block::Rule { .. } => div()
             .w_full()
             .h(px(1.))
@@ -287,13 +278,6 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
                 .child(inner)
                 .into_any_element()
         }
-        Block::Html { raw, .. } => div()
-            .w_full()
-            .font_family(CODE_FAMILY)
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(raw.trim_end().to_string())
-            .into_any_element(),
     }
 }
 
@@ -323,54 +307,368 @@ fn math_placeholder(
 }
 
 fn render_paragraph(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyElement {
-    let has_inline_math = inlines
+    let has_image = inlines
         .iter()
-        .any(|inline| matches!(inline, Inline::Math { display: false, .. }));
-    if !has_inline_math {
+        .any(|inline| matches!(inline, Inline::Image { .. }));
+    // 含图片时按软换行纵向堆叠，避免横向 flex + items_center 把矮文本
+    // 与高图垂直居中，看起来像「中间空出一大截」。
+    if has_image {
+        return render_paragraph_stack(inlines, context);
+    }
+
+    let needs_split = inlines.iter().any(|inline| {
+        matches!(
+            inline,
+            Inline::Math { display: false, .. } | Inline::Span { .. }
+        )
+    });
+    if !needs_split {
         return styled_text(inlines, &context.style);
     }
 
-    // Inline equations are SVG images, so the paragraph is split into a
-    // wrapping row of text runs and equation images.
-    let mut row = div().w_full().flex().flex_wrap().items_center();
+    render_inline_embeds_row(inlines, context)
+}
+
+/// 把段落按 Soft/HardBreak 切成多行，再纵向排列；图片单独占满一行。
+fn render_paragraph_stack(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyElement {
+    let mut column = div().w_full().v_flex().gap_1();
+    let mut line: Vec<Inline> = Vec::new();
+    for inline in inlines {
+        match inline {
+            Inline::SoftBreak | Inline::HardBreak => {
+                if !line.is_empty() {
+                    column = column.child(render_paragraph_line(&line, context));
+                    line.clear();
+                }
+            }
+            other => line.push(other.clone()),
+        }
+    }
+    if !line.is_empty() {
+        column = column.child(render_paragraph_line(&line, context));
+    }
+    column.into_any_element()
+}
+
+fn render_paragraph_line(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyElement {
+    match inlines {
+        [Inline::Image {
+            src,
+            alt,
+            width,
+            height,
+            attrs,
+            ..
+        }] => render_image(src, alt, *width, *height, attrs, true, context),
+        _ if inlines
+            .iter()
+            .any(|inline| matches!(inline, Inline::Image { .. })) =>
+        {
+            // 同一软换行行内混有文字与图片：图片仍独占视觉行，纵向排。
+            let mut column = div().w_full().v_flex().gap_1();
+            let mut text_run: Vec<Inline> = Vec::new();
+            for inline in inlines {
+                match inline {
+                    Inline::Image {
+                        src,
+                        alt,
+                        width,
+                        height,
+                        attrs,
+                        ..
+                    } => {
+                        if !text_run.is_empty() {
+                            column = column.child(render_inline_embeds_row(&text_run, context));
+                            text_run.clear();
+                        }
+                        column = column.child(render_image(
+                            src, alt, *width, *height, attrs, true, context,
+                        ));
+                    }
+                    other => text_run.push(other.clone()),
+                }
+            }
+            if !text_run.is_empty() {
+                column = column.child(render_inline_embeds_row(&text_run, context));
+            }
+            column.into_any_element()
+        }
+        _ => render_inline_embeds_row(inlines, context),
+    }
+}
+
+fn render_inline_embeds_row(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyElement {
+    let needs_split = inlines.iter().any(|inline| {
+        matches!(
+            inline,
+            Inline::Math { display: false, .. } | Inline::Span { .. } | Inline::Image { .. }
+        )
+    });
+    if !needs_split {
+        return styled_text(inlines, &context.style);
+    }
+
+    let mut row = div()
+        .w_full()
+        .flex()
+        .flex_wrap()
+        .items_baseline()
+        .gap_1();
     let mut start = 0;
     let mut index = 0;
     while index < inlines.len() {
-        let tex = match &inlines[index] {
+        match &inlines[index] {
             Inline::Math {
                 tex,
                 display: false,
-            } => tex,
-            _ => {
-                index += 1;
-                continue;
+            } => {
+                if start < index {
+                    row = row.child(styled_text(&inlines[start..index], &context.style));
+                }
+                let key = math_key(
+                    tex,
+                    false,
+                    &fill_hex(context.style.foreground),
+                    MATH_SIZE_PT,
+                );
+                row = row.child(
+                    match context.math.get(&key).and_then(|path| path.as_ref()) {
+                        Some(path) => img(path.clone())
+                            .h(px(context.body_size * 1.25))
+                            .max_w_full()
+                            .into_any_element(),
+                        None => styled_text(&inlines[index..index + 1], &context.style),
+                    },
+                );
+                start = index + 1;
             }
-        };
-        if start < index {
-            row = row.child(styled_text(&inlines[start..index], &context.style));
+            Inline::Image {
+                src,
+                alt,
+                width,
+                height,
+                attrs,
+                ..
+            } => {
+                if start < index {
+                    row = row.child(styled_text(&inlines[start..index], &context.style));
+                }
+                row = row.child(render_image(
+                    src, alt, *width, *height, attrs, false, context,
+                ));
+                start = index + 1;
+            }
+            Inline::Span { text, attrs } => {
+                if start < index {
+                    row = row.child(styled_text(&inlines[start..index], &context.style));
+                }
+                row = row.child(render_text_box(text, attrs, false, context));
+                start = index + 1;
+            }
+            _ => {}
         }
-        let key = math_key(
-            tex,
-            false,
-            &fill_hex(context.style.foreground),
-            MATH_SIZE_PT,
-        );
-        row = row.child(
-            match context.math.get(&key).and_then(|path| path.as_ref()) {
-                Some(path) => img(path.clone())
-                    .h(px(context.body_size * 1.25))
-                    .max_w_full()
-                    .into_any_element(),
-                None => styled_text(&inlines[index..index + 1], &context.style),
-            },
-        );
-        start = index + 1;
         index += 1;
     }
     if start < inlines.len() {
         row = row.child(styled_text(&inlines[start..], &context.style));
     }
     row.into_any_element()
+}
+
+fn render_image(
+    src: &str,
+    alt: &[Inline],
+    width: Option<Length>,
+    height: Option<Length>,
+    attrs: &ElementAttrs,
+    _block: bool,
+    context: &RenderCtx<'_>,
+) -> AnyElement {
+    let img_tag = mdwork_render::html_subset::ImgTag {
+        src: src.to_string(),
+        alt: plain_inlines(alt),
+        title: None,
+        width,
+        height,
+        attrs: attrs.clone(),
+    };
+    let (_, width, height) = resolve_img_size(context.styles, &img_tag);
+    let label = if alt.is_empty() {
+        src.to_string()
+    } else {
+        format!("{} · {src}", plain_inlines(alt))
+    };
+    let placeholder = div()
+        .rounded_md()
+        .border_1()
+        .border_color(context.border)
+        .px_3()
+        .py_2()
+        .text_sm()
+        .text_color(context.style.muted)
+        .child(label);
+    match context
+        .images
+        .get(&image_key(src, context.base))
+        .and_then(|image| image.clone())
+    {
+        Some(resolved) => {
+            let natural = (resolved.width > 0 && resolved.height > 0)
+                .then_some((resolved.width as f32, resolved.height as f32));
+            sized_image(
+                img(resolved.path.clone()).rounded_md(),
+                width,
+                height,
+                natural,
+            )
+        }
+        None => sized_box(placeholder, width, height),
+    }
+}
+
+/// 左对齐。
+///
+/// GPUI `Img` 在宽/高为 `Auto` 时会写成**原图像素绝对尺寸**；之后即便有
+/// `max_w` / `Contain`，高度仍按原图像素占位，看起来就是大片空白。
+/// 有自然尺寸时：外层 `div` 负责宽约束 + `aspect_ratio`，内层 `Img` 用
+/// `w_full().h_full()` 填满（Relative 不会被改写成原图像素）。
+fn sized_image(
+    image: Img,
+    width: Option<Length>,
+    height: Option<Length>,
+    natural: Option<(f32, f32)>,
+) -> AnyElement {
+    let image = image.object_fit(ObjectFit::Contain);
+    let ratio = natural.and_then(|(w, h)| (w > 0.0 && h > 0.0).then_some(w / h));
+
+    match (width, height, ratio) {
+        (Some(Length::Px(w)), Some(Length::Px(h)), _) => image
+            .w(gpui_kit::px(w as f32))
+            .h(gpui_kit::px(h as f32))
+            .max_w_full()
+            .into_any_element(),
+        // 绝对宽度：Img 只在绝对宽度时才会按比例推算高度
+        (Some(Length::Px(w)), _, _) => image
+            .w(gpui_kit::px(w as f32))
+            .max_w_full()
+            .into_any_element(),
+        (Some(Length::PercentCents(cents)), Some(Length::Px(h)), Some(ratio)) => div()
+            .w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
+            .h(gpui_kit::px(h as f32))
+            .aspect_ratio(ratio)
+            .child(image.w_full().h_full())
+            .into_any_element(),
+        (Some(Length::PercentCents(cents)), _, Some(ratio)) => div()
+            .w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
+            .aspect_ratio(ratio)
+            .child(image.w_full().h_full())
+            .into_any_element(),
+        (None, Some(Length::Px(h)), Some(ratio)) => div()
+            .h(gpui_kit::px(h as f32))
+            .max_w_full()
+            .aspect_ratio(ratio)
+            .child(image.w_full().h_full())
+            .into_any_element(),
+        (None, Some(Length::PercentCents(cents)), Some(ratio)) => div()
+            .max_h(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
+            .max_w_full()
+            .aspect_ratio(ratio)
+            .child(image.w_full().h_full())
+            .into_any_element(),
+        // 未指定尺寸：按原图宽，但不超过父级；高度由 aspect_ratio 随 used width 缩放
+        (None, None, Some(ratio)) => div()
+            .w(gpui_kit::px(natural.map(|(w, _)| w).unwrap_or(1.0)))
+            .max_w_full()
+            .aspect_ratio(ratio)
+            .child(image.w_full().h_full())
+            .into_any_element(),
+        // 尚无自然尺寸时的降级（加载中 / SVG 等）
+        (Some(Length::PercentCents(cents)), Some(Length::Px(h)), None) => image
+            .max_w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
+            .h(gpui_kit::px(h as f32))
+            .into_any_element(),
+        (Some(Length::PercentCents(cents)), _, None) => image
+            .max_w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
+            .into_any_element(),
+        (None, Some(Length::Px(h)), None) => image
+            .h(gpui_kit::px(h as f32))
+            .max_w_full()
+            .into_any_element(),
+        (None, Some(Length::PercentCents(cents)), None) => image
+            .max_h(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
+            .max_w_full()
+            .into_any_element(),
+        (None, None, None) => image.max_w_full().into_any_element(),
+    }
+}
+
+fn sized_box(el: Div, width: Option<Length>, height: Option<Length>) -> AnyElement {
+    apply_box_length(el, width, height).into_any_element()
+}
+
+fn render_text_box(
+    text: &str,
+    attrs: &ElementAttrs,
+    block: bool,
+    context: &RenderCtx<'_>,
+) -> AnyElement {
+    let style = context
+        .styles
+        .resolve(attrs.id.as_deref(), &attrs.class, &attrs.style);
+    let mut el = div().child(text.to_string());
+    if block {
+        el = el.w_full();
+    }
+    el = apply_text_style(el, &style, context);
+    el = apply_box_length(el, style.width, style.height);
+    el.into_any_element()
+}
+
+fn apply_text_style<E: Styled>(mut el: E, style: &StyleDecls, context: &RenderCtx<'_>) -> E {
+    if let Some(color) = style.color {
+        el = el.text_color(rgb_to_hsla(color));
+    } else {
+        el = el.text_color(context.style.foreground);
+    }
+    if let Some(bg) = style.background_color {
+        el = el.bg(rgb_to_hsla(bg)).rounded_md().px_1();
+    }
+    match style.font_size {
+        Some(Length::Px(px)) => el = el.text_size(gpui_kit::px(px as f32)),
+        Some(Length::PercentCents(cents)) => {
+            let size = context.body_size * (cents as f32 / 10_000.0);
+            el = el.text_size(gpui_kit::px(size.max(1.0)));
+        }
+        None => {}
+    }
+    el
+}
+
+fn apply_box_length<E: Styled>(mut el: E, width: Option<Length>, height: Option<Length>) -> E {
+    match width {
+        Some(Length::Px(px)) => el = el.w(gpui_kit::px(px as f32)).max_w_full(),
+        Some(Length::PercentCents(cents)) => {
+            el = el
+                .w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
+                .max_w_full();
+        }
+        None => {}
+    }
+    match height {
+        Some(Length::Px(px)) => el = el.h(gpui_kit::px(px as f32)),
+        Some(Length::PercentCents(cents)) => {
+            el = el.h(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)));
+        }
+        None => {}
+    }
+    el
+}
+
+fn rgb_to_hsla(color: RgbColor) -> Hsla {
+    gpui_kit::rgb(
+        ((color.r as u32) << 16) | ((color.g as u32) << 8) | (color.b as u32),
+    )
+    .into()
 }
 
 fn styled_text(inlines: &[Inline], style: &InlineStyle) -> AnyElement {
@@ -515,6 +813,7 @@ fn styled_inlines(inlines: &[Inline], style: &InlineStyle, weight: FontWeight) -
     text_style.color = style.foreground;
     text_style.font_family = style.family.clone();
     text_style.font_size = px(style.size).into();
+    text_style.line_height = relative(1.35).into();
     text_style.font_weight = weight;
     // Nested inlines (bold+code, link+emphasis, …) emit overlapping ranges;
     // GPUI's StyledText::with_default_highlights requires a non-overlapping
@@ -653,6 +952,10 @@ fn append_inlines(
                 ));
                 continue;
             }
+            Inline::Span { text, .. } => {
+                out.push_str(text);
+                continue;
+            }
             Inline::SoftBreak => out.push(' '),
             Inline::HardBreak => out.push('\n'),
             Inline::FootnoteRef(name) => {
@@ -720,6 +1023,7 @@ fn plain_inlines(inlines: &[Inline]) -> String {
                 let alt = plain_inlines(alt);
                 out.push_str(if alt.is_empty() { src } else { &alt });
             }
+            Inline::Span { text, .. } => out.push_str(text),
             Inline::SoftBreak => out.push(' '),
             Inline::HardBreak => out.push('\n'),
             Inline::FootnoteRef(name) => out.push_str(&format!("[^{name}]")),
@@ -759,6 +1063,23 @@ pub fn resolve_image_path(src: &str, base: Option<&Path>) -> Option<PathBuf> {
     } else {
         base.map(|base| base.join(path))
     }
+}
+
+/// Resolves path + natural pixel size on a background thread.
+///
+/// Dimension probe failure (e.g. SVG) still yields a usable path with `0×0`,
+/// so the image can paint; layout then falls back without aspect-ratio.
+pub fn resolve_preview_image(src: &str, base: Option<&Path>) -> Option<PreviewImage> {
+    let path = resolve_image_path(src, base).filter(|path| path.is_file())?;
+    let (width, height) = imagesize::size(&path)
+        .ok()
+        .map(|size| (size.width as u32, size.height as u32))
+        .unwrap_or((0, 0));
+    Some(PreviewImage {
+        path,
+        width,
+        height,
+    })
 }
 
 /// Cache key that distinguishes the same relative `src` in different folders.
@@ -869,11 +1190,32 @@ pub fn collect_math(ir: &PreviewIr, visit: &mut impl FnMut(&str, bool)) {
 }
 
 /// Visits every image source in the document so paths can be resolved off the
-/// render thread.
+/// render thread. Includes both standalone figures and images nested inside
+/// paragraphs, headings, and table cells (CommonMark keeps adjacent image
+/// lines in one paragraph when text precedes them).
 pub fn collect_images(ir: &PreviewIr, visit: &mut impl FnMut(&str)) {
+    fn walk_inline(inlines: &[Inline], visit: &mut impl FnMut(&str)) {
+        for inline in inlines {
+            match inline {
+                Inline::Image { src, alt, .. } => {
+                    visit(src);
+                    walk_inline(alt, visit);
+                }
+                Inline::Emphasis(children)
+                | Inline::Strong(children)
+                | Inline::Strike(children)
+                | Inline::Link { children, .. } => walk_inline(children, visit),
+                _ => {}
+            }
+        }
+    }
+
     fn walk_block(block: &Block, visit: &mut impl FnMut(&str)) {
         match block {
             Block::Image { src, .. } => visit(src),
+            Block::Heading { content, .. } | Block::Paragraph { content, .. } => {
+                walk_inline(content, visit);
+            }
             Block::List { items, .. } => {
                 for item in items {
                     for block in &item.blocks {
@@ -884,6 +1226,16 @@ pub fn collect_images(ir: &PreviewIr, visit: &mut impl FnMut(&str)) {
             Block::Quote { blocks, .. } | Block::FootnoteDefinition { blocks, .. } => {
                 for block in blocks {
                     walk_block(block, visit);
+                }
+            }
+            Block::Table { head, rows, .. } => {
+                for cell in head {
+                    walk_inline(cell, visit);
+                }
+                for row in rows {
+                    for cell in row {
+                        walk_inline(cell, visit);
+                    }
                 }
             }
             _ => {}

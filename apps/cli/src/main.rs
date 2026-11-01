@@ -229,31 +229,67 @@ fn run(cli: Cli) -> anyhow::Result<()> {
 }
 
 fn run_export(path: &PathBuf) -> anyhow::Result<()> {
-    let bytes = std::fs::read(path)?;
-    let request: ExportRequest = serde_json::from_slice(&bytes)?;
-    let mut stdout = std::io::stdout().lock();
-    let result = mdwork_export::run(&request, &mut |event| {
-        let _ = writeln!(
-            stdout,
-            "{}",
-            serde_json::to_string(&event).unwrap_or_default()
-        );
-        let _ = stdout.flush();
-    });
-    match result {
-        Ok(_) => Ok(()),
+    let bytes = std::fs::read(path).map_err(|err| {
+        emit_export_error(&format!("无法读取导出请求：{err}"));
+        err
+    })?;
+    let request: ExportRequest = match serde_json::from_slice(&bytes) {
+        Ok(request) => request,
         Err(err) => {
+            let message = format!(
+                "导出请求无效（{err}）。若刚升级过墨笺，请确认 md-work-cli.exe 与主程序版本一致。"
+            );
+            emit_export_error(&message);
+            return Err(anyhow::anyhow!(message));
+        }
+    };
+    // Keep panics inside the export crate from becoming raw OS backtraces in the GUI.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut stdout = std::io::stdout().lock();
+        mdwork_export::run(&request, &mut |event| {
             let _ = writeln!(
                 stdout,
                 "{}",
-                serde_json::to_string(&ExportEvent::Error {
-                    message: err.to_string()
-                })
-                .unwrap_or_default()
+                serde_json::to_string(&event).unwrap_or_default()
             );
             let _ = stdout.flush();
+        })
+    }));
+    match result {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(err)) => {
+            emit_export_error(&err.to_string());
             Err(err)
         }
+        Err(payload) => {
+            let message = panic_payload_message(payload);
+            let text = format!("导出过程异常中断：{message}");
+            emit_export_error(&text);
+            Err(anyhow::anyhow!(text))
+        }
+    }
+}
+
+fn emit_export_error(message: &str) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(
+        stdout,
+        "{}",
+        serde_json::to_string(&ExportEvent::Error {
+            message: message.to_string()
+        })
+        .unwrap_or_default()
+    );
+    let _ = stdout.flush();
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "未知错误".to_string()
     }
 }
 

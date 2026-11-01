@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::html_subset::{ElementAttrs, Length, RgbColor, StyleDecls, StyleSheet};
 use crate::preview::{Align, Block, Inline, PreviewIr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,7 +208,18 @@ pub fn convert(
     meta: &DocMeta,
     notebook_root: &Path,
 ) -> TypstDoc {
-    let mut emitter = Emitter::new(options, meta, notebook_root);
+    convert_with(ir, options, meta, notebook_root, false)
+}
+
+/// Like [`convert`], with `continuous_page` forcing `height: auto` for long raster exports.
+pub fn convert_with(
+    ir: &PreviewIr,
+    options: &ExportOptions,
+    meta: &DocMeta,
+    notebook_root: &Path,
+    continuous_page: bool,
+) -> TypstDoc {
+    let mut emitter = Emitter::new(options, meta, notebook_root, &ir.styles, continuous_page);
     emitter.preamble(ir);
     emitter.body(ir);
     emitter.finish()
@@ -217,6 +229,8 @@ struct Emitter<'a> {
     options: &'a ExportOptions,
     meta: &'a DocMeta,
     root: &'a Path,
+    styles: &'a StyleSheet,
+    continuous_page: bool,
     out: String,
     line: usize,
     line_map: Vec<(usize, usize)>,
@@ -228,11 +242,19 @@ struct Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
-    fn new(options: &'a ExportOptions, meta: &'a DocMeta, root: &'a Path) -> Self {
+    fn new(
+        options: &'a ExportOptions,
+        meta: &'a DocMeta,
+        root: &'a Path,
+        styles: &'a StyleSheet,
+        continuous_page: bool,
+    ) -> Self {
         Self {
             options,
             meta,
             root,
+            styles,
+            continuous_page,
             out: String::new(),
             line: 0,
             line_map: Vec::new(),
@@ -287,15 +309,20 @@ impl<'a> Emitter<'a> {
             ));
         }
 
-        let paper = match options.paper {
-            PaperSize::A4 => "paper: \"a4\"".to_string(),
-            PaperSize::A5 => "paper: \"a5\"".to_string(),
-            PaperSize::Letter => "paper: \"us-letter\"".to_string(),
-            PaperSize::Custom => format!(
-                "width: {}mm, height: {}mm",
-                options.paper.width_mm(options),
-                options.paper.height_mm(options)
-            ),
+        let paper = if self.continuous_page {
+            // Long PNG/WebP: one continuous page at paper width (no A4 pagination).
+            format!("width: {}mm, height: auto", options.paper.width_mm(options))
+        } else {
+            match options.paper {
+                PaperSize::A4 => "paper: \"a4\"".to_string(),
+                PaperSize::A5 => "paper: \"a5\"".to_string(),
+                PaperSize::Letter => "paper: \"us-letter\"".to_string(),
+                PaperSize::Custom => format!(
+                    "width: {}mm, height: {}mm",
+                    options.paper.width_mm(options),
+                    options.paper.height_mm(options)
+                ),
+            }
         };
         let numbering = if options.page_numbers {
             let format = if options.page_number_format.trim().is_empty() {
@@ -461,14 +488,18 @@ impl<'a> Emitter<'a> {
                 head, rows, aligns, ..
             } => self.table(head, rows, aligns),
             Block::Image {
-                src, title, alt, ..
-            } => self.block_image(src, title.as_deref(), alt),
+                src,
+                title,
+                alt,
+                width,
+                height,
+                attrs,
+                ..
+            } => self.block_image(src, title.as_deref(), alt, *width, *height, attrs),
+            Block::Div { text, attrs, .. } => self.styled_text_box(text, attrs, true),
             Block::Rule { .. } => "#line(length: 100%, stroke: 0.5pt + luma(185))".to_string(),
             Block::Math { tex, .. } => self.math(tex, true),
             Block::FootnoteDefinition { .. } => String::new(),
-            Block::Html { raw, .. } => {
-                format!("#raw({}, block: true)", quote_str(raw.trim_end()))
-            }
         }
     }
 
@@ -560,21 +591,31 @@ impl<'a> Emitter<'a> {
         )
     }
 
-    fn block_image(&mut self, src: &str, title: Option<&str>, alt: &[Inline]) -> String {
+    fn block_image(
+        &mut self,
+        src: &str,
+        title: Option<&str>,
+        alt: &[Inline],
+        width: Option<Length>,
+        height: Option<Length>,
+        attrs: &ElementAttrs,
+    ) -> String {
+        let resolved = self
+            .styles
+            .resolve(attrs.id.as_deref(), &attrs.class, &attrs.style);
+        let width = width.or(resolved.width);
+        let height = height.or(resolved.height);
         match self.image_asset(src) {
             Some((name, _)) => {
-                let width = self.options.image_max_width_pct.clamp(10, 100);
+                let width_arg = typst_image_width(width, height, self.options);
                 let caption = title.map(str::trim).filter(|title| !title.is_empty());
                 match caption {
                     Some(caption) => format!(
-                        "#figure(image({}, width: {width}%), caption: [{}])",
+                        "#figure(image({}, {width_arg}), caption: [{}])",
                         quote_str(&name),
                         escape_text(caption)
                     ),
-                    None => format!(
-                        "#align(center)[#image({}, width: {width}%)]",
-                        quote_str(&name)
-                    ),
+                    None => format!("#align(center)[#image({}, {width_arg})]", quote_str(&name)),
                 }
             }
             None => {
@@ -589,6 +630,13 @@ impl<'a> Emitter<'a> {
                 )
             }
         }
+    }
+
+    fn styled_text_box(&self, text: &str, attrs: &ElementAttrs, block: bool) -> String {
+        let style = self
+            .styles
+            .resolve(attrs.id.as_deref(), &attrs.class, &attrs.style);
+        wrap_styled_typst(&escape_text(text), &style, block)
     }
 
     fn image_asset(&mut self, src: &str) -> Option<(String, ())> {
@@ -713,27 +761,49 @@ impl<'a> Emitter<'a> {
                 };
                 format!("#link({})[{}]", quote_str(url), text)
             }
-            Inline::Image { src, alt, title } => match self.image_asset(src) {
-                Some((name, ())) => format!("#image({}, height: 1.1em)", quote_str(&name)),
-                None => {
-                    let label = if !alt.is_empty() {
-                        plain_inlines(alt)
-                    } else {
-                        src.clone()
-                    };
-                    let tooltip = title
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|title| !title.is_empty())
-                        .map(|title| format!("（{title}）"))
-                        .unwrap_or_default();
-                    format!(
-                        "#text(fill: luma(120))[图片缺失:{}{}]",
-                        escape_text(&label),
-                        escape_text(&tooltip)
-                    )
+            Inline::Image {
+                src,
+                alt,
+                title,
+                width,
+                height,
+                attrs,
+            } => {
+                let resolved = self
+                    .styles
+                    .resolve(attrs.id.as_deref(), &attrs.class, &attrs.style);
+                let width = width.or(resolved.width);
+                let height = height.or(resolved.height);
+                match self.image_asset(src) {
+                    Some((name, ())) => {
+                        if width.is_some() || height.is_some() {
+                            let width_arg = typst_image_width(width, height, self.options);
+                            format!("#image({}, {width_arg})", quote_str(&name))
+                        } else {
+                            format!("#image({}, height: 1.1em)", quote_str(&name))
+                        }
+                    }
+                    None => {
+                        let label = if !alt.is_empty() {
+                            plain_inlines(alt)
+                        } else {
+                            src.clone()
+                        };
+                        let tooltip = title
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|title| !title.is_empty())
+                            .map(|title| format!("（{title}）"))
+                            .unwrap_or_default();
+                        format!(
+                            "#text(fill: luma(120))[图片缺失:{}{}]",
+                            escape_text(&label),
+                            escape_text(&tooltip)
+                        )
+                    }
                 }
-            },
+            }
+            Inline::Span { text, attrs } => self.styled_text_box(text, attrs, false),
             Inline::SoftBreak => " ".to_string(),
             Inline::HardBreak => " \\\n".to_string(),
             Inline::FootnoteRef(label) => {
@@ -769,11 +839,83 @@ fn block_line(block: &Block) -> usize {
         | Block::Quote { line, .. }
         | Block::Table { line, .. }
         | Block::Image { line, .. }
+        | Block::Div { line, .. }
         | Block::Rule { line }
         | Block::Math { line, .. }
-        | Block::FootnoteDefinition { line, .. }
-        | Block::Html { line, .. } => *line,
+        | Block::FootnoteDefinition { line, .. } => *line,
     }
+}
+
+fn typst_image_width(
+    width: Option<Length>,
+    height: Option<Length>,
+    options: &ExportOptions,
+) -> String {
+    match (width, height) {
+        (Some(Length::Px(px)), _) => {
+            // 导出按 96dpi 近似：1px ≈ 0.75pt
+            format!("width: {}pt", (px as f32) * 0.75)
+        }
+        (Some(Length::PercentCents(cents)), _) => {
+            let pct = (cents as f32 / 100.0).clamp(1.0, 100.0);
+            format!("width: {pct}%")
+        }
+        (None, Some(Length::Px(px))) => format!("height: {}pt", (px as f32) * 0.75),
+        (None, Some(Length::PercentCents(cents))) => {
+            let pct = (cents as f32 / 100.0).clamp(1.0, 100.0);
+            format!("height: {pct}%")
+        }
+        (None, None) => {
+            let width = options.image_max_width_pct.clamp(10, 100);
+            format!("width: {width}%")
+        }
+    }
+}
+
+fn wrap_styled_typst(content: &str, style: &StyleDecls, block: bool) -> String {
+    let mut inner = content.to_string();
+    if let Some(color) = style.color {
+        inner = format!("#text(fill: {})[{inner}]", typst_rgb(color));
+    }
+    if let Some(Length::Px(px)) = style.font_size {
+        inner = format!("#text(size: {px}pt)[{inner}]");
+    } else if let Some(Length::PercentCents(cents)) = style.font_size {
+        let em = (cents as f32 / 10_000.0).clamp(0.1, 10.0);
+        inner = format!("#text(size: {em}em)[{inner}]");
+    }
+    let mut box_args = Vec::new();
+    if let Some(width) = style.width {
+        box_args.push(typst_length_arg("width", width));
+    }
+    if let Some(height) = style.height {
+        box_args.push(typst_length_arg("height", height));
+    }
+    if let Some(bg) = style.background_color {
+        box_args.push(format!("fill: {}", typst_rgb(bg)));
+        box_args.push("inset: 4pt".to_string());
+        box_args.push("radius: 2pt".to_string());
+    }
+    if !box_args.is_empty() {
+        let kind = if block { "block" } else { "box" };
+        inner = format!("#{kind}({}, [{inner}])", box_args.join(", "));
+    } else if block {
+        inner = format!("#block[{inner}]");
+    }
+    inner
+}
+
+fn typst_length_arg(name: &str, length: Length) -> String {
+    match length {
+        Length::Px(px) => format!("{name}: {}pt", (px as f32) * 0.75),
+        Length::PercentCents(cents) => {
+            let pct = (cents as f32 / 100.0).clamp(0.0, 100.0);
+            format!("{name}: {pct}%")
+        }
+    }
+}
+
+fn typst_rgb(color: RgbColor) -> String {
+    format!("rgb(\"#{:02x}{:02x}{:02x}\")", color.r, color.g, color.b)
 }
 
 fn collect_footnotes(ir: &PreviewIr, out: &mut HashMap<String, Vec<Block>>) {
@@ -911,6 +1053,7 @@ fn plain_inlines(inlines: &[Inline]) -> String {
                     out.push_str(&plain_inlines(alt));
                 }
             }
+            Inline::Span { text, .. } => out.push_str(text),
             Inline::SoftBreak => out.push(' '),
             Inline::HardBreak => out.push(' '),
             Inline::FootnoteRef(label) => out.push_str(label),
@@ -1111,7 +1254,49 @@ mod tests {
         assert!(doc.source.contains("#strong[加粗]"));
         assert!(doc.source.contains("#raw(\"代码\")"));
         assert!(doc.source.contains("#set page("));
+        assert!(!doc.source.contains("height: auto"));
+    }
+
+    #[test]
+    fn continuous_page_uses_auto_height() {
+        let ir = PreviewIr::from_markdown("# 标题\n\n正文");
+        let doc = convert_with(
+            &ir,
+            &ExportOptions::default(),
+            &meta(),
+            Path::new("."),
+            true,
+        );
+        assert!(
+            doc.source.contains("height: auto"),
+            "continuous raster export should use auto page height"
+        );
         assert!(!doc.line_map.is_empty());
+    }
+
+    #[test]
+    fn exports_html_subset_styles_without_style_block() {
+        let ir = PreviewIr::from_markdown(
+            r#"
+<style>
+#t { color: #c00; }
+.w { width: 40%; }
+</style>
+<div id="t" class="w">纯文本</div>
+
+前文 <span style="color:#06c">蓝</span> 后文
+"#,
+        );
+        let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
+        assert!(!doc.source.contains("<style"), "{}", doc.source);
+        assert!(doc.source.contains("纯文本"), "{}", doc.source);
+        assert!(doc.source.contains("蓝"), "{}", doc.source);
+        assert!(
+            doc.source.contains("rgb(\"#cc0000\")") || doc.source.contains("rgb(\"#0066cc\")"),
+            "{}",
+            doc.source
+        );
+        assert!(doc.source.contains("40%"), "{}", doc.source);
     }
 
     #[test]

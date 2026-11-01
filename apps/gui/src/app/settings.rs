@@ -159,6 +159,26 @@ impl AppShell {
         .detach();
     }
 
+    pub(super) fn open_path_with_default_app(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let receiver = disk::submit(move || open_path_with_default_app_sync(&path));
+        cx.spawn(async move |this, cx| {
+            let result = match receiver.await {
+                Ok(result) => result,
+                Err(_) => return,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Err(err) = result {
+                    this.notify_error(
+                        format!("{}: {err}", t!("export.open_after_failed")),
+                        cx,
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_typography(window, cx);
         self.apply_workspace_name(cx);

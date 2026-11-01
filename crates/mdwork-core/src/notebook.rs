@@ -248,9 +248,84 @@ impl Notebook {
         &self.marker.name
     }
 
+    /// Renames the notebook: folder on disk first, then the marker display name.
+    ///
+    /// Disk rename happens before any software-side update so a locked/busy
+    /// folder fails cleanly without needing to roll back the in-app name.
+    /// If the marker write fails after a successful folder rename, the folder
+    /// is renamed back to keep both sides consistent.
     pub fn rename_display_name(&mut self, name: &str) -> Result<()> {
-        self.marker.name = sanitize_display_name(name);
-        self.persist_marker()
+        let display = sanitize_display_name(name);
+        let previous_root = self.root.clone();
+        let folder_renamed = self.rename_root_folder(&display)?;
+
+        self.marker.name = display;
+        if let Err(err) = self.persist_marker() {
+            if folder_renamed {
+                if let Err(rollback) = fs::rename(&self.root, &previous_root) {
+                    tracing::error!(
+                        from = %self.root.display(),
+                        to = %previous_root.display(),
+                        error = %rollback,
+                        "笔记本目录已改名，但写入标识失败且无法回滚目录"
+                    );
+                } else {
+                    self.root = previous_root;
+                }
+            }
+            return Err(err);
+        }
+        tracing::info!(
+            notebook = %self.marker.name,
+            id = %self.marker.id,
+            root = %self.root.display(),
+            "重命名笔记本"
+        );
+        Ok(())
+    }
+
+    /// Renames `self.root` so its basename matches `display` (with a unique
+    /// suffix on conflict). Returns whether the directory was moved.
+    fn rename_root_folder(&mut self, display: &str) -> Result<bool> {
+        let Some(parent) = self.root.parent() else {
+            return Ok(false);
+        };
+        let current_name = self
+            .root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let base = sanitize_notebook_folder_name(display);
+        if current_name == base {
+            return Ok(false);
+        }
+
+        let target_name = unique_sibling_folder_name(parent, &base, &self.root);
+        let target = parent.join(&target_name);
+        if paths_equal_ignore_case(&self.root, &target) {
+            if current_name == target_name {
+                return Ok(false);
+            }
+            // Case-only rename on case-insensitive volumes needs a temp hop.
+            let temp_name = unique_sibling_folder_name(
+                parent,
+                &format!("{target_name}.rename-tmp"),
+                &self.root,
+            );
+            let temp = parent.join(&temp_name);
+            fs::rename(&self.root, &temp)?;
+            if let Err(err) = fs::rename(&temp, &target) {
+                let _ = fs::rename(&temp, &self.root);
+                return Err(err.into());
+            }
+        } else {
+            if target.exists() {
+                return Err(Error::Exists(target.display().to_string()));
+            }
+            fs::rename(&self.root, &target)?;
+        }
+        self.root = target;
+        Ok(true)
     }
 
     pub fn persist_marker(&self) -> Result<()> {
@@ -421,7 +496,18 @@ impl Notebook {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
+        let hint = if is_dir {
+            None
+        } else {
+            self.encoding_hint(&self.normalize_rel(from)?)
+        };
         fs::rename(&source, &target)?;
+        if let Some(hint) = hint {
+            let _ = self.remember_encoding(&target_rel, hint);
+            let _ = self.forget_encoding(from);
+        } else if is_dir {
+            let _ = self.rekey_encodings_under(from, &target_rel);
+        }
         tracing::info!(
             notebook = %self.display_name(),
             from = %from,
@@ -429,6 +515,165 @@ impl Notebook {
             "重命名条目"
         );
         Ok(target_rel)
+    }
+
+    /// Same-notebook copy into `to_parent` (`None` = notebook root).
+    /// When `unique` is true, conflicts get a ` 副本` suffix; otherwise `Exists`.
+    pub fn copy_entry(&self, from: &str, to_parent: Option<&str>, unique: bool) -> Result<String> {
+        self.copy_entry_to(self, from, to_parent, unique)
+    }
+
+    /// Copy a note or folder tree into `target` under `to_parent`.
+    /// Skips `.mdwork/` and `assets/`. Clones encoding hints for copied notes.
+    pub fn copy_entry_to(
+        &self,
+        target: &Notebook,
+        from: &str,
+        to_parent: Option<&str>,
+        unique: bool,
+    ) -> Result<String> {
+        let source_rel = self.normalize_rel(from)?;
+        let source = self.to_path(&source_rel)?;
+        if !source.exists() {
+            return Err(Error::NotFound(source_rel));
+        }
+        let is_dir = source.is_dir();
+        let basename = source_rel
+            .rsplit('/')
+            .next()
+            .unwrap_or(source_rel.as_str())
+            .to_string();
+        let desired = match to_parent {
+            Some(parent) => {
+                let parent = target.normalize_rel(parent)?;
+                format!("{parent}/{basename}")
+            }
+            None => basename,
+        };
+        let dest_rel = if unique {
+            target.unique_copy_rel(&desired, is_dir)?
+        } else if is_dir {
+            let rel = target.normalize_rel(&desired)?;
+            if target.to_path(&rel)?.exists() {
+                return Err(Error::Exists(rel));
+            }
+            rel
+        } else {
+            let rel = target.normalize_note_rel(&desired)?;
+            if target.to_path(&rel)?.exists() {
+                return Err(Error::Exists(rel));
+            }
+            rel
+        };
+
+        if is_dir {
+            let same_root = self.root == target.root;
+            if same_root
+                && (dest_rel == source_rel || dest_rel.starts_with(&format!("{source_rel}/")))
+            {
+                return Err(Error::InvalidPath(dest_rel));
+            }
+            let dest = target.to_path(&dest_rel)?;
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            copy_dir_recursive(&source, &dest)?;
+            self.clone_encodings_under(target, &source_rel, &dest_rel)?;
+        } else {
+            let dest = target.to_path(&dest_rel)?;
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&source, &dest)?;
+            if let Some(hint) = self.encoding_hint(&source_rel) {
+                target.remember_encoding(&dest_rel, hint)?;
+            }
+        }
+
+        tracing::info!(
+            from_notebook = %self.display_name(),
+            to_notebook = %target.display_name(),
+            from = %source_rel,
+            to = %dest_rel,
+            "复制条目"
+        );
+        Ok(dest_rel)
+    }
+
+    /// Relative path that does not yet exist: prefer `desired`, else `stem 副本.ext`.
+    pub fn unique_copy_rel(&self, desired: &str, is_dir: bool) -> Result<String> {
+        let desired = if is_dir {
+            self.normalize_rel(desired)?
+        } else {
+            self.normalize_note_rel(desired)?
+        };
+        if !self.to_path(&desired)?.exists() {
+            return Ok(desired);
+        }
+        let (stem, ext) = split_extension(&desired);
+        for n in 1..1000 {
+            let suffix = if n == 1 {
+                " 副本".to_string()
+            } else {
+                format!(" 副本 {n}")
+            };
+            let candidate = format!("{stem}{suffix}{ext}");
+            let candidate = if is_dir {
+                self.normalize_rel(&candidate)?
+            } else {
+                self.normalize_note_rel(&candidate)?
+            };
+            if !self.to_path(&candidate)?.exists() {
+                return Ok(candidate);
+            }
+        }
+        Err(Error::Exists(desired))
+    }
+
+    fn clone_encodings_under(&self, target: &Notebook, from: &str, to: &str) -> Result<()> {
+        let from_prefix = format!("{from}/");
+        let from_key = encoding_key(from);
+        let map = load_encoding_map(&self.root);
+        for (key, hint) in map {
+            let new_rel = if key == from_key {
+                Some(to.to_string())
+            } else if let Some(rest) = key_strip_prefix(&key, &encoding_key(&from_prefix)) {
+                Some(join_rel(to, rest))
+            } else {
+                None
+            };
+            if let Some(new_rel) = new_rel {
+                target.remember_encoding(&new_rel, hint)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn rekey_encodings_under(&self, from: &str, to: &str) -> Result<()> {
+        let from_prefix = format!("{from}/");
+        let from_key = encoding_key(from);
+        let mut map = load_encoding_map(&self.root);
+        let mut updates = Vec::new();
+        map.retain(|key, hint| {
+            if *key == from_key {
+                updates.push((to.to_string(), *hint));
+                false
+            } else if let Some(rest) = key_strip_prefix(key, &encoding_key(&from_prefix)) {
+                updates.push((join_rel(to, rest), *hint));
+                false
+            } else {
+                true
+            }
+        });
+        for (rel, hint) in updates {
+            let key = encoding_key(&rel);
+            if hint.is_default() {
+                map.remove(&key);
+            } else {
+                map.insert(key, hint);
+            }
+        }
+        save_encoding_map(&self.root, map)
     }
 
     pub fn delete_entry(&self, rel_path: &str) -> Result<TrashItem> {
@@ -701,6 +946,40 @@ fn split_extension(rel: &str) -> (String, String) {
     }
 }
 
+fn join_rel(parent: &str, rest: &str) -> String {
+    if rest.is_empty() {
+        parent.to_string()
+    } else {
+        format!("{parent}/{rest}")
+    }
+}
+
+fn key_strip_prefix<'a>(key: &'a str, prefix: &str) -> Option<&'a str> {
+    key.strip_prefix(prefix)
+}
+
+/// Recursively copies a folder tree. Nested `.mdwork` / `assets` segments are skipped.
+fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.eq_ignore_ascii_case(META_DIR) || name_str.eq_ignore_ascii_case(ASSETS_DIR) {
+            continue;
+        }
+        let from = entry.path();
+        let to = dest.join(&name);
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if file_type.is_file() {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
 fn sanitize_display_name(name: &str) -> String {
     let cleaned: String = name
         .trim()
@@ -721,6 +1000,34 @@ fn sanitize_display_name(name: &str) -> String {
 
 pub fn sanitize_notebook_folder_name(name: &str) -> String {
     sanitize_display_name(name)
+}
+
+fn paths_equal_ignore_case(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase()
+        == b.to_string_lossy()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_lowercase()
+}
+
+/// Picks a free sibling folder name under `parent`, treating `current` as ours
+/// so a case-only rename can reuse the same basename.
+fn unique_sibling_folder_name(parent: &Path, base: &str, current: &Path) -> String {
+    let candidate = parent.join(base);
+    if !candidate.exists() || paths_equal_ignore_case(&candidate, current) {
+        return base.to_string();
+    }
+    for n in 2..10_000 {
+        let name = format!("{base} ({n})");
+        let path = parent.join(&name);
+        if !path.exists() || paths_equal_ignore_case(&path, current) {
+            return name;
+        }
+    }
+    format!("{base} ({})", Uuid::new_v4())
 }
 
 fn now_unix() -> u64 {
@@ -768,6 +1075,59 @@ mod tests {
         assert_eq!(entries[0].rel_path, "工作/第一篇.md");
         assert!(!root.join(ASSETS_DIR).join("x").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rename_display_name_renames_folder_first() {
+        let parent = std::env::temp_dir().join(format!("mdwork-rename-{}", Uuid::new_v4()));
+        fs::create_dir_all(&parent).unwrap();
+        let mut notebook = Notebook::create(&parent.join("旧名称"), "旧名称").unwrap();
+        notebook.create_note("笔记.md", "内容\n").unwrap();
+
+        notebook.rename_display_name("新名称").unwrap();
+
+        assert_eq!(notebook.display_name(), "新名称");
+        assert_eq!(
+            notebook
+                .root
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned()),
+            Some("新名称".to_string())
+        );
+        assert!(!parent.join("旧名称").exists());
+        assert!(
+            parent
+                .join("新名称")
+                .join(META_DIR)
+                .join(NOTEBOOK_FILE)
+                .is_file()
+        );
+        assert!(parent.join("新名称").join("笔记.md").is_file());
+        let reopened = Notebook::open(&notebook.root).unwrap();
+        assert_eq!(reopened.display_name(), "新名称");
+        fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[test]
+    fn rename_display_name_avoids_sibling_collision() {
+        let parent = std::env::temp_dir().join(format!("mdwork-rename-coll-{}", Uuid::new_v4()));
+        fs::create_dir_all(&parent).unwrap();
+        let _taken = Notebook::create(&parent.join("目标"), "目标").unwrap();
+        let mut notebook = Notebook::create(&parent.join("来源"), "来源").unwrap();
+
+        notebook.rename_display_name("目标").unwrap();
+
+        assert_eq!(notebook.display_name(), "目标");
+        assert_eq!(
+            notebook
+                .root
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned()),
+            Some("目标 (2)".to_string())
+        );
+        assert!(parent.join("目标").is_dir());
+        assert!(parent.join("目标 (2)").is_dir());
+        fs::remove_dir_all(parent).unwrap();
     }
 
     #[test]
@@ -880,5 +1240,72 @@ mod tests {
         assert_eq!(decoded.encoding, TextEncoding::Gb18030);
         assert_eq!(decoded.eol, Eol::Crlf);
         assert_eq!(decoded.text, "第一行\n第二行");
+    }
+
+    #[test]
+    fn copy_note_and_folder_with_unique_suffix() {
+        let (root, notebook) = temp_notebook();
+        notebook.create_note("工作/设计.md", "# 设计").unwrap();
+        let copied = notebook
+            .copy_entry("工作/设计.md", Some("工作"), true)
+            .unwrap();
+        assert_eq!(copied, "工作/设计 副本.md");
+        assert_eq!(
+            fs::read_to_string(notebook.note_path(&copied).unwrap()).unwrap(),
+            "# 设计"
+        );
+
+        notebook.create_folder("归档").unwrap();
+        notebook.create_note("归档/a.md", "a").unwrap();
+        notebook.create_note("归档/子/b.md", "b").unwrap();
+        let folder_copy = notebook.copy_entry("归档", None, true).unwrap();
+        assert_eq!(folder_copy, "归档 副本");
+        assert!(notebook.note_path("归档 副本/a.md").unwrap().exists());
+        assert!(notebook.note_path("归档 副本/子/b.md").unwrap().exists());
+        // Original intact.
+        assert!(notebook.note_path("归档/a.md").unwrap().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_rejects_folder_into_itself() {
+        let (root, notebook) = temp_notebook();
+        notebook.create_folder("a/b").unwrap();
+        let err = notebook.copy_entry("a", Some("a/b"), false).unwrap_err();
+        assert!(matches!(err, Error::InvalidPath(_)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copy_to_other_notebook_clones_encoding() {
+        let (root_a, source) = temp_notebook();
+        let root_b = std::env::temp_dir().join(format!("mdwork-test-{}", Uuid::new_v4()));
+        let target = Notebook::create(&root_b, "目标").unwrap();
+        source.create_note("笔记.md", "内容").unwrap();
+        let hint = EncodingHint {
+            encoding: TextEncoding::Gb18030,
+            bom: false,
+            eol: Eol::Crlf,
+        };
+        source.remember_encoding("笔记.md", hint).unwrap();
+        let copied = source
+            .copy_entry_to(&target, "笔记.md", None, false)
+            .unwrap();
+        assert_eq!(copied, "笔记.md");
+        assert_eq!(target.encoding_hint("笔记.md"), Some(hint));
+        assert!(source.note_path("笔记.md").unwrap().exists());
+        fs::remove_dir_all(root_a).unwrap();
+        fs::remove_dir_all(root_b).unwrap();
+    }
+
+    #[test]
+    fn copy_without_unique_errors_on_conflict() {
+        let (root, notebook) = temp_notebook();
+        notebook.create_note("a.md", "1").unwrap();
+        notebook.create_folder("箱").unwrap();
+        notebook.create_note("箱/a.md", "2").unwrap();
+        let err = notebook.copy_entry("a.md", Some("箱"), false).unwrap_err();
+        assert!(matches!(err, Error::Exists(_)));
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,4 +1,4 @@
-//! Typst-backed PDF/PNG export.
+//! Typst-backed PDF / PNG / WebP export.
 
 pub mod exporter;
 pub mod math;

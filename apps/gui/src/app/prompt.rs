@@ -160,9 +160,6 @@ impl AppShell {
             return;
         }
         match prompt.kind.clone() {
-            PromptKind::MoveEntry { notebook_id, from } => {
-                self.begin_move_entry(notebook_id, from, value, cx);
-            }
             PromptKind::OpenNotebook => {
                 let path = PathBuf::from(&value);
                 let Some(workspace) = self.workspace.clone() else {

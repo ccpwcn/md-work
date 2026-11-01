@@ -134,6 +134,76 @@ fn exports_page_files_and_split_names() {
     cleanup(&dir);
 }
 
+#[test]
+fn long_png_is_taller_than_one_a4_page() {
+    let dir = workspace("long-png");
+    let mut markdown = String::from("# 长图\n\n");
+    for index in 0..40 {
+        markdown.push_str(&format!(
+            "## 节 {index}\n\n这是第 {index} 段正文，用来撑开连续长图。重复句子保证内容足够长。\n\n"
+        ));
+    }
+    let request = ExportRequest {
+        notebook_root: dir.clone(),
+        note_rel: "长图.md".to_string(),
+        notebook_name: String::new(),
+        title: "长图".to_string(),
+        format: ExportFormat::Png,
+        output: dir.join("长图.png"),
+        options: ExportOptions {
+            png_dpi: 72,
+            png_page_files: false,
+            page_numbers: false,
+            ..Default::default()
+        },
+        markdown: Some(markdown),
+        temp_dir: Some(dir.join("tmp")),
+    };
+    let outcome = run(&request, &mut |_| {}).expect("long png");
+    assert_eq!(outcome.paths.len(), 1);
+    let bytes = fs::read(&outcome.paths[0]).unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    // A4 @ 72dpi is ~842px tall; a continuous long image must exceed that.
+    assert!(
+        image.height() > 900,
+        "expected a tall continuous image, got {}x{}",
+        image.width(),
+        image.height()
+    );
+    cleanup(&dir);
+}
+
+#[test]
+fn exports_webp_and_can_overwrite() {
+    let dir = workspace("webp");
+    let request = ExportRequest {
+        notebook_root: dir.clone(),
+        note_rel: "图.md".to_string(),
+        notebook_name: String::new(),
+        title: "图".to_string(),
+        format: ExportFormat::Webp,
+        output: dir.join("out.webp"),
+        options: ExportOptions {
+            png_dpi: 72,
+            png_page_files: false,
+            ..Default::default()
+        },
+        markdown: Some("# WebP\n\n正文。\n".to_string()),
+        temp_dir: Some(dir.join("tmp1")),
+    };
+    let outcome = run(&request, &mut |_| {}).expect("webp export");
+    let bytes = fs::read(&outcome.paths[0]).unwrap();
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WEBP");
+
+    let again = ExportRequest {
+        temp_dir: Some(dir.join("tmp2")),
+        ..request
+    };
+    run(&again, &mut |_| {}).expect("webp overwrite");
+    cleanup(&dir);
+}
+
 fn cleanup(dir: &Path) {
     let _ = fs::remove_dir_all(dir);
 }

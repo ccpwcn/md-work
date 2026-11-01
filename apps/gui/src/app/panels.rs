@@ -1220,6 +1220,7 @@ impl AppShell {
                             let rename_label = t!("sidebar.rename_notebook").to_string();
                             let new_note_label = t!("sidebar.new_note").to_string();
                             let new_folder_label = t!("sidebar.new_folder").to_string();
+                            let paste_label = t!("tree.paste").to_string();
                             let more_label = t!("tree.more").to_string();
                             let child_note_label = t!("tree.new_child_note").to_string();
                             let toggle_shell = shell.clone();
@@ -1234,64 +1235,88 @@ impl AppShell {
                                 let create_shell = create_shell.clone();
                                 let new_note_label = new_note_label.clone();
                                 let new_folder_label = new_folder_label.clone();
+                                let paste_label = paste_label.clone();
                                 let rename_label = rename_label.clone();
                                 let export_label = export_label.clone();
                                 let import_label = import_label.clone();
-                                move |menu: gpui_kit::component::menu::PopupMenu| {
+                                move |menu: gpui_kit::component::menu::PopupMenu, cx: &App| {
                                     let export_shell = export_shell.clone();
                                     let import_shell = import_shell.clone();
                                     let rename_shell = rename_shell.clone();
                                     let create_shell = create_shell.clone();
                                     let note_shell = create_shell.clone();
-                                    menu.item(PopupMenuItem::new(new_note_label.clone()).on_click(
-                                        move |_, window, cx| {
-                                            note_shell.update(cx, |this, cx| {
-                                                this.new_note_in(notebook_id, None, window, cx)
-                                            });
-                                        },
-                                    ))
-                                    .item(PopupMenuItem::new(new_folder_label.clone()).on_click(
-                                        move |_, window, cx| {
-                                            create_shell.update(cx, |this, cx| {
-                                                this.new_folder_in(notebook_id, None, window, cx)
-                                            });
-                                        },
-                                    ))
-                                    .separator()
-                                    .item(PopupMenuItem::new(rename_label.clone()).on_click(
-                                        move |_, window, cx| {
-                                            rename_shell.update(cx, |this, cx| {
-                                                let name = this
-                                                    .notebooks
-                                                    .iter()
-                                                    .find(|e| e.notebook.marker.id == notebook_id)
-                                                    .map(|e| e.notebook.display_name().to_string())
-                                                    .unwrap_or_default();
-                                                this.begin_notebook_rename(
-                                                    notebook_id,
-                                                    &name,
-                                                    window,
-                                                    cx,
-                                                );
-                                            });
-                                        },
-                                    ))
-                                    .item(PopupMenuItem::new(export_label.clone()).on_click(
-                                        move |_, window, cx| {
-                                            export_shell.update(cx, |this, cx| {
-                                                this.open_zip_export(notebook_id, window, cx)
-                                            });
-                                        },
-                                    ))
-                                    .item(
-                                        PopupMenuItem::new(import_label.clone()).on_click(
+                                    let can_paste = create_shell.read(cx).tree_clipboard.is_some();
+                                    let menu = menu
+                                        .item(PopupMenuItem::new(new_note_label.clone()).on_click(
+                                            move |_, window, cx| {
+                                                note_shell.update(cx, |this, cx| {
+                                                    this.new_note_in(notebook_id, None, window, cx)
+                                                });
+                                            },
+                                        ))
+                                        .item(
+                                            PopupMenuItem::new(new_folder_label.clone()).on_click(
+                                                move |_, window, cx| {
+                                                    create_shell.update(cx, |this, cx| {
+                                                        this.new_folder_in(
+                                                            notebook_id,
+                                                            None,
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    });
+                                                },
+                                            ),
+                                        );
+                                    let menu = if can_paste {
+                                        let paste_shell = export_shell.clone();
+                                        menu.item(PopupMenuItem::new(paste_label.clone()).on_click(
+                                            move |_, _, cx| {
+                                                paste_shell.update(cx, |this, cx| {
+                                                    this.paste_tree_clipboard(notebook_id, None, cx)
+                                                });
+                                            },
+                                        ))
+                                    } else {
+                                        menu
+                                    };
+                                    menu.separator()
+                                        .item(PopupMenuItem::new(rename_label.clone()).on_click(
+                                            move |_, window, cx| {
+                                                rename_shell.update(cx, |this, cx| {
+                                                    let name = this
+                                                        .notebooks
+                                                        .iter()
+                                                        .find(|e| {
+                                                            e.notebook.marker.id == notebook_id
+                                                        })
+                                                        .map(|e| {
+                                                            e.notebook.display_name().to_string()
+                                                        })
+                                                        .unwrap_or_default();
+                                                    this.begin_notebook_rename(
+                                                        notebook_id,
+                                                        &name,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            },
+                                        ))
+                                        .item(PopupMenuItem::new(export_label.clone()).on_click(
+                                            move |_, window, cx| {
+                                                export_shell.update(cx, |this, cx| {
+                                                    this.open_zip_export(notebook_id, window, cx)
+                                                });
+                                            },
+                                        ))
+                                        .item(PopupMenuItem::new(import_label.clone()).on_click(
                                             move |_, window, cx| {
                                                 import_shell.update(cx, |this, cx| {
                                                     this.open_zip_import(window, cx)
                                                 });
                                             },
-                                        ),
-                                    )
+                                        ))
                                 }
                             });
 
@@ -1325,7 +1350,7 @@ impl AppShell {
                                 })
                                 .context_menu({
                                     let build_notebook_menu = build_notebook_menu.clone();
-                                    move |menu, _, _| (build_notebook_menu)(menu)
+                                    move |menu, _, cx| (build_notebook_menu)(menu, cx)
                                 })
                                 .child(
                                     div()
@@ -1466,6 +1491,9 @@ impl AppShell {
                             let rename_label = t!("tree.rename").to_string();
                             let delete_label = t!("tree.delete").to_string();
                             let move_label = t!("tree.move").to_string();
+                            let copy_label = t!("tree.copy").to_string();
+                            let duplicate_label = t!("tree.duplicate").to_string();
+                            let paste_label = t!("tree.paste").to_string();
                             let new_note_label = t!("tree.new_note").to_string();
                             let new_subfolder_label = t!("tree.new_subfolder").to_string();
                             let more_label = t!("tree.more").to_string();
@@ -1475,7 +1503,6 @@ impl AppShell {
                             let tooltip_count = row.note_count;
                             let tooltip_created = row.created;
                             let tooltip_modified = row.modified;
-
                             let build_entry_menu = Rc::new({
                                 let rename_shell = rename_shell.clone();
                                 let delete_shell = delete_shell.clone();
@@ -1488,9 +1515,12 @@ impl AppShell {
                                 let rename_label = rename_label.clone();
                                 let delete_label = delete_label.clone();
                                 let move_label = move_label.clone();
+                                let copy_label = copy_label.clone();
+                                let duplicate_label = duplicate_label.clone();
+                                let paste_label = paste_label.clone();
                                 let new_note_label = new_note_label.clone();
                                 let new_subfolder_label = new_subfolder_label.clone();
-                                move |menu: gpui_kit::component::menu::PopupMenu| {
+                                move |menu: gpui_kit::component::menu::PopupMenu, cx: &App| {
                                     let rename_shell = rename_shell.clone();
                                     let delete_shell = delete_shell.clone();
                                     let move_shell = move_shell.clone();
@@ -1499,9 +1529,13 @@ impl AppShell {
                                     let delete_rel = delete_rel.clone();
                                     let move_rel = move_rel.clone();
                                     let create_rel = create_rel.clone();
+                                    let can_paste =
+                                        is_folder && move_shell.read(cx).tree_clipboard.is_some();
                                     let menu = if is_folder {
                                         let note_shell = create_shell.clone();
                                         let note_rel = create_rel.clone();
+                                        let folder_shell = create_shell.clone();
+                                        let folder_rel = create_rel.clone();
                                         menu.item(
                                             PopupMenuItem::new(new_note_label.clone()).on_click(
                                                 move |_, window, cx| {
@@ -1519,10 +1553,10 @@ impl AppShell {
                                         .item(
                                             PopupMenuItem::new(new_subfolder_label.clone())
                                                 .on_click(move |_, window, cx| {
-                                                    create_shell.update(cx, |this, cx| {
+                                                    folder_shell.update(cx, |this, cx| {
                                                         this.new_folder_in(
                                                             notebook_id,
-                                                            Some(create_rel.clone()),
+                                                            Some(folder_rel.clone()),
                                                             window,
                                                             cx,
                                                         )
@@ -1530,6 +1564,48 @@ impl AppShell {
                                                 }),
                                         )
                                         .separator()
+                                    } else {
+                                        menu
+                                    };
+                                    let copy_shell = move_shell.clone();
+                                    let copy_rel = move_rel.clone();
+                                    let dup_shell = move_shell.clone();
+                                    let dup_rel = move_rel.clone();
+                                    let menu = menu
+                                        .item(PopupMenuItem::new(copy_label.clone()).on_click(
+                                            move |_, _, cx| {
+                                                copy_shell.update(cx, |this, cx| {
+                                                    this.copy_tree_entry(notebook_id, &copy_rel, cx)
+                                                });
+                                            },
+                                        ))
+                                        .item(
+                                            PopupMenuItem::new(duplicate_label.clone()).on_click(
+                                                move |_, _, cx| {
+                                                    dup_shell.update(cx, |this, cx| {
+                                                        this.duplicate_tree_entry(
+                                                            notebook_id,
+                                                            &dup_rel,
+                                                            cx,
+                                                        )
+                                                    });
+                                                },
+                                            ),
+                                        );
+                                    let menu = if can_paste {
+                                        let paste_shell = move_shell.clone();
+                                        let paste_rel = create_rel.clone();
+                                        menu.item(PopupMenuItem::new(paste_label.clone()).on_click(
+                                            move |_, _, cx| {
+                                                paste_shell.update(cx, |this, cx| {
+                                                    this.paste_tree_clipboard(
+                                                        notebook_id,
+                                                        Some(paste_rel.clone()),
+                                                        cx,
+                                                    )
+                                                });
+                                            },
+                                        ))
                                     } else {
                                         menu
                                     };
@@ -1659,7 +1735,7 @@ impl AppShell {
                                 })
                                 .context_menu({
                                     let build_entry_menu = build_entry_menu.clone();
-                                    move |menu, _, _| (build_entry_menu)(menu)
+                                    move |menu, _, cx| (build_entry_menu)(menu, cx)
                                 })
                                 .child({
                                     let toggle_shell = shell.clone();
@@ -1740,7 +1816,7 @@ fn sidebar_row_trailing(
     notebook_id: Uuid,
     parent: Option<String>,
     build_menu: Rc<
-        dyn Fn(gpui_kit::component::menu::PopupMenu) -> gpui_kit::component::menu::PopupMenu,
+        dyn Fn(gpui_kit::component::menu::PopupMenu, &App) -> gpui_kit::component::menu::PopupMenu,
     >,
 ) -> AnyElement {
     let more = Button::new(format!("tree-more-{index}"))
@@ -1750,7 +1826,7 @@ fn sidebar_row_trailing(
         .tooltip(more_label)
         .dropdown_menu_with_anchor(Anchor::TopRight, {
             let build_menu = build_menu.clone();
-            move |menu, _, _| (build_menu)(menu)
+            move |menu, _, cx| (build_menu)(menu, cx)
         })
         .on_open_change(move |open, _, cx| {
             menu_shell.update(cx, |this, cx| {

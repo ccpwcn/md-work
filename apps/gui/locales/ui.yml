@@ -536,6 +536,15 @@ export.pdf:
 export.png:
   en: "PNG"
   zh-CN: "PNG"
+export.webp:
+  en: "WebP"
+  zh-CN: "WebP"
+export.recommended:
+  en: "rec."
+  zh-CN: "荐"
+export.webp_hint:
+  en: "Usually much smaller than PNG, with similar quality"
+  zh-CN: "体积通常比 PNG 更小，画质接近"
 export.paper:
   en: "Paper"
   zh-CN: "纸张"
@@ -599,16 +608,31 @@ export.output:
 export.browse:
   en: "Browse…"
   zh-CN: "选择…"
+export.open_after:
+  en: "Open with the system default app when export finishes"
+  zh-CN: "导出成功后使用系统默认应用程序打开"
+export.open_after_failed:
+  en: "Could not open the exported file"
+  zh-CN: "无法打开导出的文件"
 export.start:
   en: "Export"
   zh-CN: "开始导出"
+export.confirm_overwrite:
+  en: "Overwrite"
+  zh-CN: "确认覆盖"
+export.overwrite_warning:
+  en: "The output file already exists. Export again to overwrite."
+  zh-CN: "目标文件已存在，再次点击将覆盖。"
 export.cancel:
-  en: "Cancel"
-  zh-CN: "取消"
+  en: "Cancel export"
+  zh-CN: "取消导出"
 export.close:
   en: "Close"
   zh-CN: "关闭"
 export.busy:
+  en: "Exporting…"
+  zh-CN: "正在导出…"
+export.busy_button:
   en: "Exporting…"
   zh-CN: "正在导出…"
 export.stage.read:
@@ -621,8 +645,8 @@ export.stage.write:
   en: "Writing PDF…"
   zh-CN: "正在写入 PDF…"
 export.stage.render:
-  en: "Rendering PNG…"
-  zh-CN: "正在渲染 PNG…"
+  en: "Rendering image…"
+  zh-CN: "正在渲染图片…"
 export.page:
   en: "Page %{page} / %{pages}"
   zh-CN: "第 %{page} / %{pages} 页"
@@ -1097,6 +1121,36 @@ sidebar.scan_issues:
 tree.move:
   en: "Move to…"
   zh-CN: "移动到…"
+tree.move_title:
+  en: "Move to"
+  zh-CN: "移动到"
+tree.move_hint:
+  en: "Choose a notebook or folder for “%{path}”."
+  zh-CN: "为「%{path}」选择目标笔记本或文件夹。"
+tree.move_confirm:
+  en: "Move"
+  zh-CN: "移动"
+tree.move_failed:
+  en: "Move failed: %{error}"
+  zh-CN: "移动失败：%{error}"
+tree.copy:
+  en: "Copy"
+  zh-CN: "复制"
+tree.paste:
+  en: "Paste"
+  zh-CN: "粘贴"
+tree.duplicate:
+  en: "Duplicate"
+  zh-CN: "创建副本"
+tree.copied:
+  en: "Copied"
+  zh-CN: "已复制"
+tree.pasted:
+  en: "Pasted as %{path}"
+  zh-CN: "已粘贴为 %{path}"
+tree.copy_failed:
+  en: "Copy failed: %{error}"
+  zh-CN: "复制失败：%{error}"
 tree.new_note:
   en: "New note here"
   zh-CN: "新建笔记"
@@ -1244,12 +1298,6 @@ prompt.new_folder:
 prompt.new_folder_hint:
   en: "Relative to the notebook root; nested paths with / are allowed."
   zh-CN: "相对于笔记本根目录，可用 / 表示多级目录。"
-prompt.move:
-  en: "Move or rename"
-  zh-CN: "移动或重命名"
-prompt.move_hint:
-  en: "Enter the new path relative to the notebook root. Missing folders are created."
-  zh-CN: "输入相对于笔记本根目录的新路径，缺失的文件夹会自动创建。"
 prompt.open_notebook:
   en: "Open notebook"
   zh-CN: "打开笔记本"
@@ -1328,6 +1376,9 @@ palette.export_pdf:
 palette.export_png:
   en: "Export note as PNG…"
   zh-CN: "导出笔记为 PNG…"
+palette.export_webp:
+  en: "Export note as WebP…"
+  zh-CN: "导出笔记为 WebP…"
 palette.export_zip:
   en: "Export notebook as zip…"
   zh-CN: "导出整本笔记本为 zip…"
@@ -1335,8 +1386,8 @@ palette.import_zip:
   en: "Import notebook from zip…"
   zh-CN: "从 zip 导入笔记本…"
 palette.move_note:
-  en: "Move or rename current note…"
-  zh-CN: "移动或重命名当前笔记…"
+  en: "Move current note…"
+  zh-CN: "移动当前笔记…"
 palette.theme_system:
   en: "Theme: follow system"
   zh-CN: "主题：跟随系统"

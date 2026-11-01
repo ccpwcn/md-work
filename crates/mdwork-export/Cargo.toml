@@ -22,3 +22,6 @@ typst-kit = { workspace = true, features = ["scan-fonts", "embedded-fonts"] }
 typst-svg.workspace = true
 mitex.workspace = true
 image.workspace = true
+
+[dev-dependencies]
+image.workspace = true

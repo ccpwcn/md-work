@@ -113,6 +113,7 @@ impl AppShell {
         }) {
             self.active_doc = Some(index);
             self.persist_session(cx);
+            self.reveal_active(cx);
             cx.notify();
             return;
         }
@@ -470,6 +471,7 @@ impl AppShell {
         }
         self.drop_doc_at(index);
         self.persist_session(cx);
+        self.ensure_active_tab_visible(cx);
         cx.notify();
     }
 

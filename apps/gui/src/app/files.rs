@@ -106,6 +106,20 @@ impl AppShell {
     }
 
     pub(super) fn reveal_active(&mut self, cx: &mut Context<Self>) {
+        // Tab strip first: works for notebook notes and external tabs alike.
+        // A deferred retry covers session restore / bulk open, when the strip
+        // has not been measured yet on the first call.
+        self.ensure_active_tab_visible(cx);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            let _ = this.update(cx, |this, _cx| {
+                this.ensure_active_tab_visible(_cx);
+            });
+        })
+        .detach();
+
         let Some(active) = self.active_doc.and_then(|index| self.docs.get(index)) else {
             return;
         };
@@ -233,20 +247,35 @@ impl AppShell {
             return;
         }
         let notebook = entry.notebook.clone();
+        let affected: Vec<EntityId> = self
+            .docs
+            .iter()
+            .filter(|doc| doc.read(cx).notebook_id == Some(notebook_id))
+            .map(|doc| doc.entity_id())
+            .collect();
+        for doc in &self.docs {
+            if affected.contains(&doc.entity_id()) {
+                doc.update(cx, |doc, _cx| doc.hold_saves());
+            }
+        }
         let receiver = disk::submit(move || -> mdwork_core::Result<Notebook> {
             let mut nb = notebook;
+            // Disk folder first, then marker — see Notebook::rename_display_name.
             nb.rename_display_name(&value)?;
             Ok(nb)
         });
         let workspace = self.workspace.clone();
         cx.spawn(async move |this, cx| {
-            let result = match receiver.await {
-                Ok(result) => result,
-                Err(_) => return,
-            };
+            let result = receiver.await;
             let _ = this.update(cx, |this, cx| {
+                for id in &affected {
+                    if let Some(doc) = this.docs.iter().find(|doc| doc.entity_id() == *id).cloned()
+                    {
+                        doc.update(cx, |doc, cx| doc.release_saves(cx));
+                    }
+                }
                 match result {
-                    Ok(updated) => {
+                    Ok(Ok(updated)) => {
                         if let Some(entry) = this
                             .notebooks
                             .iter_mut()
@@ -254,6 +283,7 @@ impl AppShell {
                         {
                             entry.notebook = updated.clone();
                         }
+                        this.retarget_docs_after_notebook_rename(&updated, cx);
                         this.rebuild_sidebar_rows();
                         if let Some(ws) = &workspace {
                             let notebooks: Vec<Notebook> =
@@ -267,12 +297,42 @@ impl AppShell {
                         }
                         this.persist_session(cx);
                     }
-                    Err(err) => this.notify_error(format!("重命名笔记本失败：{err}"), cx),
+                    Ok(Err(err)) => this.notify_error(format!("重命名笔记本失败：{err}"), cx),
+                    Err(_) => {}
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Keeps open buffers pointed at the notebook after its root folder moved.
+    pub(super) fn retarget_docs_after_notebook_rename(
+        &mut self,
+        notebook: &Notebook,
+        cx: &mut Context<Self>,
+    ) {
+        let notebook_id = notebook.marker.id;
+        let name = notebook.display_name().to_string();
+        let root = notebook.root.clone();
+        for doc in &self.docs {
+            let rel_path = {
+                let doc = doc.read(cx);
+                if doc.notebook_id != Some(notebook_id) {
+                    continue;
+                }
+                doc.rel_path.clone()
+            };
+            let Ok(path) = notebook.to_path(&rel_path) else {
+                continue;
+            };
+            doc.update(cx, |doc, cx| {
+                doc.notebook_name = name.clone();
+                doc.notebook_root = Some(root.clone());
+                doc.path = path;
+                cx.notify();
+            });
+        }
     }
 
     pub(super) fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -344,35 +404,434 @@ impl AppShell {
         &mut self,
         notebook_id: Uuid,
         from: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(from.to_string())
-                .clean_on_escape()
-        });
-        input.update(cx, |state, cx| {
-            state.focus(window, cx);
-            state.select_all(window, cx);
-        });
-        cx.subscribe(&input, move |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                this.submit_prompt(cx);
-            }
-        })
-        .detach();
-        self.prompt = Some(PromptDialog {
-            kind: PromptKind::MoveEntry {
-                notebook_id,
-                from: from.to_string(),
-            },
-            title: t!("prompt.move").to_string(),
-            hint: t!("prompt.move_hint").to_string(),
-            input,
+        let Some(entry) = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == notebook_id)
+        else {
+            return;
+        };
+        let Some(kind) = entry
+            .tree
+            .iter()
+            .find(|item| item.rel_path == from)
+            .map(|item| item.kind)
+        else {
+            return;
+        };
+        let mut root_expanded = HashSet::new();
+        root_expanded.insert(notebook_id);
+        let mut expanded = HashMap::new();
+        expanded.insert(notebook_id, entry.expanded.clone());
+        self.move_picker = Some(MovePickerDialog {
+            source_notebook_id: notebook_id,
+            source_rel: from.to_string(),
+            source_kind: kind,
+            selected: None,
+            root_expanded,
+            expanded,
             error: None,
         });
+        self.prompt = None;
         cx.notify();
+    }
+
+    pub(super) fn close_move_picker(&mut self, cx: &mut Context<Self>) {
+        if self.move_picker.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_move_picker_root(&mut self, notebook_id: Uuid, cx: &mut Context<Self>) {
+        let Some(picker) = self.move_picker.as_mut() else {
+            return;
+        };
+        if !picker.root_expanded.remove(&notebook_id) {
+            picker.root_expanded.insert(notebook_id);
+            picker.expanded.entry(notebook_id).or_default();
+        }
+        cx.notify();
+    }
+
+    pub(super) fn toggle_move_picker_folder(
+        &mut self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(picker) = self.move_picker.as_mut() else {
+            return;
+        };
+        let set = picker.expanded.entry(notebook_id).or_default();
+        if !set.remove(rel_path) {
+            set.insert(rel_path.to_string());
+        }
+        cx.notify();
+    }
+
+    pub(super) fn select_move_destination(
+        &mut self,
+        notebook_id: Uuid,
+        folder_rel: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(picker) = self.move_picker.as_ref() else {
+            return;
+        };
+        if !self.move_destination_allowed(
+            picker.source_notebook_id,
+            &picker.source_rel,
+            picker.source_kind,
+            notebook_id,
+            folder_rel.as_deref(),
+        ) {
+            return;
+        }
+        let Some(picker) = self.move_picker.as_mut() else {
+            return;
+        };
+        picker.selected = Some((notebook_id, folder_rel));
+        picker.error = None;
+        cx.notify();
+    }
+
+    pub(super) fn move_destination_allowed(
+        &self,
+        source_notebook_id: Uuid,
+        source_rel: &str,
+        source_kind: EntryKind,
+        dest_notebook_id: Uuid,
+        dest_folder: Option<&str>,
+    ) -> bool {
+        let current_parent = source_rel.rfind('/').map(|i| &source_rel[..i]);
+        if dest_notebook_id == source_notebook_id {
+            match (dest_folder, current_parent) {
+                (None, None) => return false,
+                (Some(folder), Some(parent)) if folder == parent => return false,
+                (None, Some(_)) | (Some(_), None) => {}
+                (Some(_), Some(_)) => {}
+            }
+            if source_kind == EntryKind::Folder {
+                if dest_folder.is_some_and(|folder| {
+                    folder == source_rel || folder.starts_with(&format!("{source_rel}/"))
+                }) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    pub(super) fn confirm_move_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(picker) = self.move_picker.as_ref() else {
+            return;
+        };
+        let Some((dest_notebook_id, dest_folder)) = picker.selected.clone() else {
+            return;
+        };
+        if !self.move_destination_allowed(
+            picker.source_notebook_id,
+            &picker.source_rel,
+            picker.source_kind,
+            dest_notebook_id,
+            dest_folder.as_deref(),
+        ) {
+            return;
+        }
+        let source_notebook_id = picker.source_notebook_id;
+        let source_rel = picker.source_rel.clone();
+        let basename = source_rel
+            .rsplit('/')
+            .next()
+            .unwrap_or(source_rel.as_str())
+            .to_string();
+        let dest_rel = match &dest_folder {
+            Some(parent) => format!("{parent}/{basename}"),
+            None => basename,
+        };
+        self.move_picker = None;
+        if dest_notebook_id == source_notebook_id {
+            self.begin_move_entry(source_notebook_id, source_rel, dest_rel, cx);
+        } else {
+            self.begin_cross_notebook_move(
+                source_notebook_id,
+                source_rel,
+                dest_notebook_id,
+                dest_folder,
+                false,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// Copy (unique names) or move (exact name, then trash source) across notebooks.
+    pub(super) fn begin_cross_notebook_move(
+        &mut self,
+        source_notebook_id: Uuid,
+        source_rel: String,
+        dest_notebook_id: Uuid,
+        dest_folder: Option<String>,
+        unique: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == source_notebook_id)
+            .map(|entry| entry.notebook.clone())
+        else {
+            return;
+        };
+        let Some(target) = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == dest_notebook_id)
+            .map(|entry| entry.notebook.clone())
+        else {
+            return;
+        };
+        let target_name = target.display_name().to_string();
+        let target_root = target.root.clone();
+        let affected: Vec<EntityId> = self
+            .docs
+            .iter()
+            .filter(|doc| {
+                let doc = doc.read(cx);
+                doc.notebook_id == Some(source_notebook_id)
+                    && path_under(&doc.rel_path, &source_rel)
+            })
+            .map(|doc| doc.entity_id())
+            .collect();
+        for doc in &self.docs {
+            if affected.contains(&doc.entity_id()) {
+                doc.update(cx, |doc, _cx| doc.hold_saves());
+            }
+        }
+        let delete_source = !unique;
+        let source_rel_for_disk = source_rel.clone();
+        let receiver = disk::submit(move || -> mdwork_core::Result<String> {
+            let copied = source.copy_entry_to(
+                &target,
+                &source_rel_for_disk,
+                dest_folder.as_deref(),
+                unique,
+            )?;
+            if delete_source {
+                let _ = source.delete_entry(&source_rel_for_disk);
+            }
+            Ok(copied)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update(cx, |this, cx| {
+                for id in &affected {
+                    if let Some(doc) = this.docs.iter().find(|doc| doc.entity_id() == *id).cloned()
+                    {
+                        doc.update(cx, |doc, cx| doc.release_saves(cx));
+                    }
+                }
+                match result {
+                    Ok(Ok(new_rel)) => {
+                        if delete_source {
+                            this.update_docs_after_cross_move(
+                                source_notebook_id,
+                                &source_rel,
+                                dest_notebook_id,
+                                &target_name,
+                                target_root.clone(),
+                                &new_rel,
+                                cx,
+                            );
+                            if this.bookmarks_notebook == Some(source_notebook_id) {
+                                this.bookmarks
+                                    .entries
+                                    .retain(|entry| !path_under(&entry.rel_path, &source_rel));
+                                this.save_bookmarks(cx);
+                            }
+                            if this.trash_notebook == Some(source_notebook_id) {
+                                this.trash_notebook = None;
+                            }
+                        }
+                        this.reload_entries(cx);
+                        this.persist_session(cx);
+                        this.expand_to(dest_notebook_id, &new_rel);
+                        this.reveal_active(cx);
+                    }
+                    Ok(Err(err)) => {
+                        this.notify_error(
+                            t!("tree.move_failed", error = err.to_string()).to_string(),
+                            cx,
+                        );
+                    }
+                    Err(_) => {
+                        this.notify_error(
+                            t!("tree.move_failed", error = "写入任务已停止").to_string(),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn update_docs_after_cross_move(
+        &mut self,
+        source_notebook_id: Uuid,
+        from: &str,
+        dest_notebook_id: Uuid,
+        dest_name: &str,
+        dest_root: PathBuf,
+        to: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(notebook) = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == dest_notebook_id)
+            .map(|entry| entry.notebook.clone())
+        else {
+            return;
+        };
+        let from_prefix = format!("{from}/");
+        for doc in &self.docs {
+            let rel_path = {
+                let doc = doc.read(cx);
+                if doc.notebook_id != Some(source_notebook_id) {
+                    continue;
+                }
+                doc.rel_path.clone()
+            };
+            let new_rel = if rel_path == from {
+                to.to_string()
+            } else if let Some(rest) = rel_path.strip_prefix(&from_prefix) {
+                format!("{to}/{rest}")
+            } else {
+                continue;
+            };
+            let Ok(path) = notebook.to_path(&new_rel) else {
+                continue;
+            };
+            let notebook_meta = (dest_notebook_id, dest_name.to_string(), dest_root.clone());
+            doc.update(cx, |doc, cx| {
+                doc.rebase_with_notebook(Some(notebook_meta), new_rel, path);
+                cx.notify();
+            });
+        }
+    }
+
+    pub(super) fn copy_tree_entry(
+        &mut self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.tree_clipboard = Some(TreeClipboard {
+            notebook_id,
+            rel_path: rel_path.to_string(),
+        });
+        self.notify_success(t!("tree.copied").to_string(), cx);
+        cx.notify();
+    }
+
+    pub(super) fn duplicate_tree_entry(
+        &mut self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let parent = rel_path.rfind('/').map(|i| rel_path[..i].to_string());
+        self.begin_paste_entry(
+            notebook_id,
+            rel_path.to_string(),
+            notebook_id,
+            parent,
+            true,
+            cx,
+        );
+    }
+
+    pub(super) fn paste_tree_clipboard(
+        &mut self,
+        dest_notebook_id: Uuid,
+        dest_folder: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(clip) = self.tree_clipboard.clone() else {
+            return;
+        };
+        self.begin_paste_entry(
+            clip.notebook_id,
+            clip.rel_path,
+            dest_notebook_id,
+            dest_folder,
+            true,
+            cx,
+        );
+    }
+
+    pub(super) fn begin_paste_entry(
+        &mut self,
+        source_notebook_id: Uuid,
+        source_rel: String,
+        dest_notebook_id: Uuid,
+        dest_folder: Option<String>,
+        unique: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == source_notebook_id)
+            .map(|entry| entry.notebook.clone())
+        else {
+            return;
+        };
+        let Some(target) = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == dest_notebook_id)
+            .map(|entry| entry.notebook.clone())
+        else {
+            return;
+        };
+        let receiver = disk::submit(move || {
+            source.copy_entry_to(&target, &source_rel, dest_folder.as_deref(), unique)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(new_rel)) => {
+                        this.reload_entries(cx);
+                        this.expand_to(dest_notebook_id, &new_rel);
+                        this.notify_success(
+                            t!("tree.pasted", path = new_rel.as_str()).to_string(),
+                            cx,
+                        );
+                    }
+                    Ok(Err(err)) => {
+                        this.notify_error(
+                            t!("tree.copy_failed", error = err.to_string()).to_string(),
+                            cx,
+                        );
+                    }
+                    Err(_) => {
+                        this.notify_error(
+                            t!("tree.copy_failed", error = "写入任务已停止").to_string(),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn begin_rename(

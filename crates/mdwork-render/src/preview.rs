@@ -6,9 +6,15 @@
 use comrak::nodes::{AstNode, ListType, NodeList, NodeTable, NodeValue, TableAlignment};
 use comrak::{Arena, Options, parse_document};
 
+use crate::html_subset::{
+    self, ElementAttrs, ImgTag, Length, LiftedHtml, StyleSheet, TextBoxTag, lift_html_fragment,
+};
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PreviewIr {
     pub blocks: Vec<Block>,
+    /// 文档内 `<style>` 汇总；预览/导出应用规则，不渲染该块本身。
+    pub styles: StyleSheet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +54,15 @@ pub enum Block {
         src: String,
         title: Option<String>,
         alt: Vec<Inline>,
+        width: Option<Length>,
+        height: Option<Length>,
+        attrs: ElementAttrs,
+        line: usize,
+    },
+    /// 受控 `<div>`：内容为纯文本。
+    Div {
+        text: String,
+        attrs: ElementAttrs,
         line: usize,
     },
     Rule {
@@ -61,10 +76,6 @@ pub enum Block {
     FootnoteDefinition {
         label: String,
         blocks: Vec<Block>,
-        line: usize,
-    },
-    Html {
-        raw: String,
         line: usize,
     },
 }
@@ -100,6 +111,14 @@ pub enum Inline {
         src: String,
         alt: Vec<Inline>,
         title: Option<String>,
+        width: Option<Length>,
+        height: Option<Length>,
+        attrs: ElementAttrs,
+    },
+    /// 受控 `<span>`：内容为纯文本。
+    Span {
+        text: String,
+        attrs: ElementAttrs,
     },
     SoftBreak,
     HardBreak,
@@ -123,8 +142,10 @@ impl PreviewIr {
         let arena = Arena::new();
         let root = parse_document(&arena, markdown, &options());
         let mut blocks = Vec::new();
-        collect_blocks(root, &mut blocks);
-        Self { blocks }
+        let mut styles = StyleSheet::default();
+        collect_blocks(root, &mut blocks, &mut styles);
+        let blocks = expand_softbroken_images(blocks);
+        Self { blocks, styles }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -163,11 +184,9 @@ fn options() -> Options<'static> {
     options
 }
 
-fn collect_blocks<'a>(node: &'a AstNode<'a>, out: &mut Vec<Block>) {
+fn collect_blocks<'a>(node: &'a AstNode<'a>, out: &mut Vec<Block>, styles: &mut StyleSheet) {
     for child in node.children() {
-        if let Some(block) = block_from_node(child) {
-            out.push(block);
-        }
+        out.extend(blocks_from_node(child, styles));
     }
 }
 
@@ -196,23 +215,23 @@ fn collect_outline(blocks: &[Block], out: &mut Vec<OutlineItem>) {
     }
 }
 
-fn block_from_node<'a>(node: &'a AstNode<'a>) -> Option<Block> {
+fn blocks_from_node<'a>(node: &'a AstNode<'a>, styles: &mut StyleSheet) -> Vec<Block> {
     let line = node.data().sourcepos.start.line;
     match &node.data().value {
-        NodeValue::Heading(heading) => Some(Block::Heading {
+        NodeValue::Heading(heading) => vec![Block::Heading {
             level: heading.level,
             content: inlines(node),
             line,
-        }),
+        }],
         NodeValue::Paragraph => {
             let content = inlines(node);
-            if let Some(image) = standalone_image(&content, line) {
-                return Some(image);
+            if let Some(images) = image_only_blocks(&content, line) {
+                return images;
             }
             if let Some(math) = standalone_math(&content, line) {
-                return Some(math);
+                return vec![math];
             }
-            Some(Block::Paragraph { content, line })
+            vec![Block::Paragraph { content, line }]
         }
         NodeValue::CodeBlock(code) => {
             let language = code
@@ -221,60 +240,203 @@ fn block_from_node<'a>(node: &'a AstNode<'a>) -> Option<Block> {
                 .next()
                 .filter(|info| !info.is_empty())
                 .map(str::to_string);
-            Some(Block::CodeBlock {
+            vec![Block::CodeBlock {
                 language,
                 text: code.literal.clone(),
                 line,
-            })
+            }]
         }
-        NodeValue::List(list) => Some(block_list(node, list, line)),
+        NodeValue::List(list) => vec![block_list(node, list, line, styles)],
         NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => {
             let mut blocks = Vec::new();
-            collect_blocks(node, &mut blocks);
-            Some(Block::Quote { blocks, line })
+            collect_blocks(node, &mut blocks, styles);
+            vec![Block::Quote { blocks, line }]
         }
-        NodeValue::ThematicBreak => Some(Block::Rule { line }),
-        NodeValue::Table(table) => Some(block_table(node, table, line)),
-        NodeValue::Math(math) => Some(Block::Math {
+        NodeValue::ThematicBreak => vec![Block::Rule { line }],
+        NodeValue::Table(table) => vec![block_table(node, table, line)],
+        NodeValue::Math(math) => vec![Block::Math {
             tex: math.literal.clone(),
             display: math.display_math,
             line,
-        }),
+        }],
         NodeValue::FootnoteDefinition(footnote) => {
             let mut blocks = Vec::new();
-            collect_blocks(node, &mut blocks);
-            Some(Block::FootnoteDefinition {
+            collect_blocks(node, &mut blocks, styles);
+            vec![Block::FootnoteDefinition {
                 label: footnote.name.clone(),
                 blocks,
                 line,
-            })
+            }]
         }
-        NodeValue::HtmlBlock(html) => Some(Block::Html {
-            raw: html.literal.clone(),
-            line,
-        }),
-        _ => None,
+        NodeValue::HtmlBlock(html) => match lift_html_fragment(&html.literal) {
+            LiftedHtml::Style(sheet) => {
+                styles.extend(sheet);
+                Vec::new()
+            }
+            LiftedHtml::Img(img) => vec![block_from_img(img, line)],
+            LiftedHtml::Div(box_) => vec![block_from_div(box_, line)],
+            LiftedHtml::Span(box_) => vec![Block::Paragraph {
+                content: vec![inline_from_span(box_)],
+                line,
+            }],
+            LiftedHtml::Ignored => Vec::new(),
+        },
+        _ => Vec::new(),
     }
 }
 
-fn standalone_image(content: &[Inline], line: usize) -> Option<Block> {
-    let mut image = None;
+fn block_from_img(img: ImgTag, line: usize) -> Block {
+    let alt = if img.alt.is_empty() {
+        Vec::new()
+    } else {
+        vec![Inline::Text(img.alt)]
+    };
+    Block::Image {
+        src: img.src,
+        title: img.title,
+        alt,
+        width: img.width,
+        height: img.height,
+        attrs: img.attrs,
+        line,
+    }
+}
+
+fn block_from_div(box_: TextBoxTag, line: usize) -> Block {
+    Block::Div {
+        text: box_.text,
+        attrs: box_.attrs,
+        line,
+    }
+}
+
+fn inline_from_span(box_: TextBoxTag) -> Inline {
+    Inline::Span {
+        text: box_.text,
+        attrs: box_.attrs,
+    }
+}
+
+fn inline_from_img_tag(img: ImgTag) -> Inline {
+    let alt = if img.alt.is_empty() {
+        Vec::new()
+    } else {
+        vec![Inline::Text(img.alt)]
+    };
+    Inline::Image {
+        src: img.src,
+        alt,
+        title: img.title,
+        width: img.width,
+        height: img.height,
+        attrs: img.attrs,
+    }
+}
+
+/// 软换行分隔的图片行提升为独立 `Block::Image`，避免预览把多图塞进同一 flex 段落。
+fn expand_softbroken_images(blocks: Vec<Block>) -> Vec<Block> {
+    let mut out = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            Block::Paragraph { content, line }
+                if content.iter().any(|i| matches!(i, Inline::Image { .. })) =>
+            {
+                out.extend(split_paragraph_images(content, line));
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn split_paragraph_images(content: Vec<Inline>, line: usize) -> Vec<Block> {
+    let mut out = Vec::new();
+    let mut line_inlines: Vec<Inline> = Vec::new();
+    let flush = |line_inlines: &mut Vec<Inline>, out: &mut Vec<Block>, line: usize| {
+        if line_inlines.is_empty() {
+            return;
+        }
+        let only_ws = line_inlines
+            .iter()
+            .all(|inline| matches!(inline, Inline::Text(text) if text.trim().is_empty()));
+        if only_ws {
+            line_inlines.clear();
+            return;
+        }
+        if let [
+            Inline::Image {
+                src,
+                alt,
+                title,
+                width,
+                height,
+                attrs,
+            },
+        ] = line_inlines.as_slice()
+        {
+            out.push(Block::Image {
+                src: src.clone(),
+                title: title.clone(),
+                alt: alt.clone(),
+                width: *width,
+                height: *height,
+                attrs: attrs.clone(),
+                line,
+            });
+        } else {
+            out.push(Block::Paragraph {
+                content: std::mem::take(line_inlines),
+                line,
+            });
+            return;
+        }
+        line_inlines.clear();
+    };
     for inline in content {
         match inline {
-            Inline::Image { src, alt, title } if image.is_none() => {
-                image = Some((src.clone(), alt.clone(), title.clone()));
+            Inline::SoftBreak | Inline::HardBreak => flush(&mut line_inlines, &mut out, line),
+            other => line_inlines.push(other),
+        }
+    }
+    flush(&mut line_inlines, &mut out, line);
+    out
+}
+
+/// CommonMark keeps adjacent image lines in one paragraph (soft breaks). Promote
+/// an image-only paragraph into one block per image so preview/export treat them
+/// like standalone figures.
+fn image_only_blocks(content: &[Inline], line: usize) -> Option<Vec<Block>> {
+    let mut images = Vec::new();
+    for inline in content {
+        match inline {
+            Inline::Image {
+                src,
+                alt,
+                title,
+                width,
+                height,
+                attrs,
+            } => {
+                images.push(Block::Image {
+                    src: src.clone(),
+                    title: title.clone(),
+                    alt: alt.clone(),
+                    width: *width,
+                    height: *height,
+                    attrs: attrs.clone(),
+                    line,
+                });
             }
             Inline::Text(text) if text.trim().is_empty() => {}
             Inline::SoftBreak | Inline::HardBreak => {}
             _ => return None,
         }
     }
-    image.map(|(src, alt, title)| Block::Image {
-        src,
-        title,
-        alt,
-        line,
-    })
+    if images.is_empty() {
+        None
+    } else {
+        Some(images)
+    }
 }
 
 fn standalone_math(content: &[Inline], line: usize) -> Option<Block> {
@@ -288,11 +450,14 @@ fn standalone_math(content: &[Inline], line: usize) -> Option<Block> {
     }
 }
 
-fn block_list<'a>(node: &'a AstNode<'a>, list: &NodeList, line: usize) -> Block {
+fn block_list<'a>(
+    node: &'a AstNode<'a>,
+    list: &NodeList,
+    line: usize,
+    styles: &mut StyleSheet,
+) -> Block {
     let mut items = Vec::new();
     for item in node.children() {
-        // With the tasklist extension, checked items sit directly under the
-        // list as `TaskItem` while regular items are wrapped in `Item`.
         let task = match &item.data().value {
             NodeValue::TaskItem(marker) => Some(marker.symbol.is_some()),
             NodeValue::Item(_) => None,
@@ -300,7 +465,7 @@ fn block_list<'a>(node: &'a AstNode<'a>, list: &NodeList, line: usize) -> Block 
         };
         items.push(ListItem {
             task,
-            blocks: item_blocks(item),
+            blocks: item_blocks(item, styles),
         });
     }
     Block::List {
@@ -312,26 +477,29 @@ fn block_list<'a>(node: &'a AstNode<'a>, list: &NodeList, line: usize) -> Block 
     }
 }
 
-fn item_blocks<'a>(item: &'a AstNode<'a>) -> Vec<Block> {
+fn item_blocks<'a>(item: &'a AstNode<'a>, styles: &mut StyleSheet) -> Vec<Block> {
     let item_line = item.data().sourcepos.start.line;
     let mut blocks = Vec::new();
     let mut pending: Vec<Inline> = Vec::new();
     for child in item.children() {
-        if let Some(block) = block_from_node(child) {
+        let child_blocks = blocks_from_node(child, styles);
+        if !child_blocks.is_empty() {
             if !pending.is_empty() {
                 blocks.push(Block::Paragraph {
                     content: std::mem::take(&mut pending),
                     line: item_line,
                 });
             }
-            blocks.push(block);
+            blocks.extend(child_blocks);
         } else if let Some(inline) = inline_from_node(child) {
             pending.push(inline);
         }
     }
     if !pending.is_empty() {
+        // 列表项里也可能夹杂拆开的 HTML 行内标签
+        let coalesced = coalesce_inline_list(pending);
         blocks.push(Block::Paragraph {
-            content: pending,
+            content: coalesced,
             line: item_line,
         });
     }
@@ -371,7 +539,131 @@ fn block_table<'a>(node: &'a AstNode<'a>, table: &NodeTable, line: usize) -> Blo
 }
 
 fn inlines<'a>(node: &'a AstNode<'a>) -> Vec<Inline> {
-    node.children().filter_map(inline_from_node).collect()
+    let children: Vec<_> = node.children().collect();
+    coalesce_html_inlines(&children)
+}
+
+fn coalesce_html_inlines<'a>(nodes: &[&'a AstNode<'a>]) -> Vec<Inline> {
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < nodes.len() {
+        let node = nodes[index];
+        match &node.data().value {
+            NodeValue::HtmlInline(html) => {
+                if let Some((name, attrs_map, self_closing)) = html_subset::parse_open_tag(html) {
+                    if name == "img" {
+                        let img = img_tag_from_attr_map(attrs_map);
+                        out.push(inline_from_img_tag(img));
+                        index += 1;
+                        continue;
+                    }
+                    if (name == "span" || name == "div") && !self_closing {
+                        let attrs = element_attrs_from_open_map(attrs_map);
+                        let mut text = String::new();
+                        index += 1;
+                        while index < nodes.len() {
+                            match &nodes[index].data().value {
+                                NodeValue::HtmlInline(close)
+                                    if html_subset::is_close_tag(close, &name) =>
+                                {
+                                    index += 1;
+                                    break;
+                                }
+                                NodeValue::HtmlInline(other) => {
+                                    text.push_str(&html_subset::plain_text_from_htmlish(other));
+                                    index += 1;
+                                }
+                                NodeValue::Text(chunk) => {
+                                    text.push_str(chunk);
+                                    index += 1;
+                                }
+                                NodeValue::SoftBreak => {
+                                    text.push(' ');
+                                    index += 1;
+                                }
+                                NodeValue::LineBreak => {
+                                    text.push('\n');
+                                    index += 1;
+                                }
+                                _ => {
+                                    if let Some(inline) = inline_from_node(nodes[index]) {
+                                        text.push_str(&inline_plain_text(&[inline]));
+                                    }
+                                    index += 1;
+                                }
+                            }
+                        }
+                        out.push(Inline::Span { text, attrs });
+                        continue;
+                    }
+                }
+                match lift_html_fragment(html) {
+                    LiftedHtml::Img(img) => out.push(inline_from_img_tag(img)),
+                    LiftedHtml::Span(box_) | LiftedHtml::Div(box_) => {
+                        out.push(inline_from_span(box_));
+                    }
+                    LiftedHtml::Style(_) | LiftedHtml::Ignored => {}
+                }
+                index += 1;
+            }
+            _ => {
+                if let Some(inline) = inline_from_node(node) {
+                    out.push(inline);
+                }
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
+fn coalesce_inline_list(pending: Vec<Inline>) -> Vec<Inline> {
+    // 列表项路径已经拆过节点；此处仅作占位，保持顺序。
+    pending
+}
+
+fn img_tag_from_attr_map(attrs: std::collections::BTreeMap<String, String>) -> ImgTag {
+    let width = attrs
+        .get("width")
+        .and_then(|v| html_subset::parse_length(v));
+    let height = attrs
+        .get("height")
+        .and_then(|v| html_subset::parse_length(v));
+    let mut element = element_attrs_from_open_map(attrs.clone());
+    element.style.width = None;
+    element.style.height = None;
+    ImgTag {
+        src: attrs.get("src").cloned().unwrap_or_default(),
+        alt: attrs.get("alt").cloned().unwrap_or_default(),
+        title: attrs.get("title").cloned().filter(|s| !s.is_empty()),
+        width,
+        height,
+        attrs: element,
+    }
+}
+
+fn element_attrs_from_open_map(attrs: std::collections::BTreeMap<String, String>) -> ElementAttrs {
+    let class = attrs
+        .get("class")
+        .map(|value| {
+            value
+                .split_whitespace()
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let style = attrs
+        .get("style")
+        .map(|value| html_subset::parse_style_decls(value))
+        .unwrap_or_default();
+    ElementAttrs {
+        id: attrs.get("id").cloned().filter(|s| !s.is_empty()),
+        name: attrs.get("name").cloned().filter(|s| !s.is_empty()),
+        class,
+        title: attrs.get("title").cloned().filter(|s| !s.is_empty()),
+        style,
+    }
 }
 
 fn inline_from_node<'a>(node: &'a AstNode<'a>) -> Option<Inline> {
@@ -390,6 +682,9 @@ fn inline_from_node<'a>(node: &'a AstNode<'a>) -> Option<Inline> {
             src: link.url.clone(),
             alt: inlines(node),
             title: title(&link.title),
+            width: None,
+            height: None,
+            attrs: ElementAttrs::default(),
         }),
         NodeValue::SoftBreak => Some(Inline::SoftBreak),
         NodeValue::LineBreak => Some(Inline::HardBreak),
@@ -400,7 +695,7 @@ fn inline_from_node<'a>(node: &'a AstNode<'a>) -> Option<Inline> {
             tex: math.literal.clone(),
             display: math.display_math,
         }),
-        NodeValue::HtmlInline(html) => Some(Inline::Text(html.clone())),
+        NodeValue::HtmlInline(_) => None,
         NodeValue::Raw(raw) => Some(Inline::Text(raw.clone())),
         _ => None,
     }
@@ -489,6 +784,7 @@ fn block_plain_text(block: &Block) -> String {
             let alt = inline_plain_text(alt);
             if alt.is_empty() { src.clone() } else { alt }
         }
+        Block::Div { text, .. } => text.clone(),
         Block::Rule { .. } => "---".to_string(),
         Block::Math { tex, display, .. } => {
             if *display {
@@ -506,7 +802,6 @@ fn block_plain_text(block: &Block) -> String {
                 .join("\n");
             format!("[^{label}]: {body}")
         }
-        Block::Html { raw, .. } => raw.trim_end().to_string(),
     }
 }
 
@@ -538,6 +833,7 @@ fn inline_plain_text(inlines: &[Inline]) -> String {
                     out.push_str(&alt);
                 }
             }
+            Inline::Span { text, .. } => out.push_str(text),
             Inline::SoftBreak => out.push(' '),
             Inline::HardBreak => out.push('\n'),
             Inline::FootnoteRef(name) => {
@@ -564,6 +860,7 @@ fn inline_plain_text(inlines: &[Inline]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::html_subset::{Length, RgbColor};
 
     #[test]
     fn parses_headings_paragraphs_and_code() {
@@ -645,6 +942,42 @@ mod tests {
     }
 
     #[test]
+    fn splits_adjacent_image_lines_into_blocks() {
+        let ir = PreviewIr::from_markdown("![one](../assets/a.jpg)\n![two](../assets/b.jpg)\n");
+        assert_eq!(ir.blocks.len(), 2);
+        assert!(matches!(
+            &ir.blocks[0],
+            Block::Image { src, .. } if src == "../assets/a.jpg"
+        ));
+        assert!(matches!(
+            &ir.blocks[1],
+            Block::Image { src, .. } if src == "../assets/b.jpg"
+        ));
+    }
+
+    #[test]
+    fn splits_softbroken_images_from_text_paragraph() {
+        let ir = PreviewIr::from_markdown(
+            "what? one.\n![one](../assets/a.jpg)\n<img src=\"../assets/b.jpg\" width=\"30%\">\n",
+        );
+        assert!(matches!(
+            &ir.blocks[0],
+            Block::Paragraph { content, .. }
+                if content.iter().any(|item| matches!(item, Inline::Text(_)))
+                    && !content.iter().any(|item| matches!(item, Inline::Image { .. }))
+        ));
+        assert!(matches!(
+            &ir.blocks[1],
+            Block::Image { src, .. } if src == "../assets/a.jpg"
+        ));
+        assert!(matches!(
+            &ir.blocks[2],
+            Block::Image { src, width: Some(Length::PercentCents(3000)), .. }
+                if src == "../assets/b.jpg"
+        ));
+    }
+
+    #[test]
     fn outline_lists_headings_with_lines() {
         let ir = PreviewIr::from_markdown("# 一\n\n正文\n\n## 二 **加粗**\n\n> ### 三\n");
         let outline = ir.outline();
@@ -667,5 +1000,44 @@ mod tests {
         );
         assert_eq!(outline[2].title, "三");
         assert_eq!(outline[2].line, 7);
+    }
+
+    #[test]
+    fn lifts_html_img_div_span_and_style() {
+        let markdown = r#"
+<style>
+.narrow { width: 40%; }
+#warn { color: #c00; }
+</style>
+
+<img src="assets/a.jpg" alt="a" width="300px" />
+
+<div id="warn" class="narrow">**不是粗体**<b>x</b></div>
+
+hello <span style="color:#06c">蓝</span>
+"#;
+        let ir = PreviewIr::from_markdown(markdown);
+        assert_eq!(ir.styles.rules.len(), 2);
+        assert!(ir.blocks.iter().any(|block| matches!(
+            block,
+            Block::Image { src, width: Some(Length::Px(300)), .. } if src == "assets/a.jpg"
+        )));
+        assert!(ir.blocks.iter().any(|block| matches!(
+            block,
+            Block::Div { text, attrs, .. }
+                if text == "**不是粗体**x" && attrs.id.as_deref() == Some("warn")
+        )));
+        let has_span = ir.blocks.iter().any(|block| match block {
+            Block::Paragraph { content, .. } => content.iter().any(|inline| {
+                matches!(
+                    inline,
+                    Inline::Span { text, attrs, .. }
+                        if text == "蓝" && attrs.style.color == Some(RgbColor { r: 0, g: 0x66, b: 0xcc })
+                )
+            }),
+            _ => false,
+        });
+        assert!(has_span);
+        assert!(!ir.to_plain_text().contains("<style"));
     }
 }

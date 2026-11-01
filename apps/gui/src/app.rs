@@ -262,11 +262,13 @@ struct ExportDialog {
     markdown: String,
     format: ExportFormat,
     options: ExportOptions,
+    open_after_export: bool,
     header_input: Entity<InputState>,
     footer_input: Entity<InputState>,
     output_input: Entity<InputState>,
     job: Option<ExportJob>,
     busy: bool,
+    confirm_overwrite: bool,
     stage: Option<String>,
     progress: Option<(usize, usize)>,
     warnings: Vec<String>,
@@ -336,7 +338,6 @@ struct SettingsDialog {
 
 #[derive(Clone)]
 enum PromptKind {
-    MoveEntry { notebook_id: Uuid, from: String },
     OpenNotebook,
 }
 
@@ -346,6 +347,25 @@ struct PromptDialog {
     hint: String,
     input: Entity<InputState>,
     error: Option<String>,
+}
+
+/// Destination picker for "Move to…": notebooks + folders only.
+struct MovePickerDialog {
+    source_notebook_id: Uuid,
+    source_rel: String,
+    source_kind: EntryKind,
+    /// `(notebook_id, folder_rel)` — `folder_rel` is `None` for the notebook root.
+    selected: Option<(Uuid, Option<String>)>,
+    root_expanded: HashSet<Uuid>,
+    expanded: HashMap<Uuid, HashSet<String>>,
+    error: Option<String>,
+}
+
+/// App-internal clipboard for tree copy/paste (not the OS clipboard).
+#[derive(Clone)]
+struct TreeClipboard {
+    notebook_id: Uuid,
+    rel_path: String,
 }
 
 struct RecoveryDialog {
@@ -396,6 +416,7 @@ enum PaletteCommand {
     NotesPanel,
     ExportPdf,
     ExportPng,
+    ExportWebp,
     ExportNotebookZip,
     ImportNotebookZip,
     MoveEntry,
@@ -495,7 +516,7 @@ pub struct AppShell {
     preview_cache: Option<PreviewCache>,
     math: HashMap<u64, Option<PathBuf>>,
     math_pending: HashSet<u64>,
-    image_paths: HashMap<u64, Option<PathBuf>>,
+    image_paths: HashMap<u64, Option<preview::PreviewImage>>,
     images_pending: HashSet<u64>,
     copied: bool,
     /// Active panel of the left sidebar (only panels docked left are shown).
@@ -528,6 +549,8 @@ pub struct AppShell {
     mcp_settings: Option<McpSettingsDialog>,
     settings: Option<SettingsDialog>,
     prompt: Option<PromptDialog>,
+    move_picker: Option<MovePickerDialog>,
+    tree_clipboard: Option<TreeClipboard>,
     workspace_confirm: Option<WorkspaceConfirm>,
     palette: Option<Palette>,
     recovery: Option<RecoveryDialog>,
@@ -779,6 +802,8 @@ impl AppShell {
             mcp_settings: None,
             settings: None,
             prompt: None,
+            move_picker: None,
+            tree_clipboard: None,
             workspace_confirm: None,
             palette: None,
             recovery: None,
@@ -911,20 +936,22 @@ impl Render for AppShell {
             // Input Escape propagates when clean_on_escape is off; cancel
             // in-place rename / notebook rename instead of leaving focus stuck.
             .on_action(cx.listener(|this, _: &InputEscape, _window, cx| {
-                if this.renaming.is_some() {
+                if this.move_picker.is_some() {
+                    this.close_move_picker(cx);
+                } else if this.renaming.is_some() {
                     this.cancel_rename(cx);
                 } else if this.renaming_notebook.is_some() {
                     this.cancel_notebook_rename(cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::SaveDoc, _window, cx| {
-                if this.palette.is_some() || this.prompt.is_some() {
+                if this.palette.is_some() || this.prompt.is_some() || this.move_picker.is_some() {
                     return;
                 }
                 this.save_active(cx)
             }))
             .on_action(cx.listener(|this, _: &crate::TogglePreview, window, cx| {
-                if this.palette.is_some() || this.prompt.is_some() {
+                if this.palette.is_some() || this.prompt.is_some() || this.move_picker.is_some() {
                     return;
                 }
                 this.toggle_preview(window, cx)
@@ -1000,6 +1027,9 @@ impl Render for AppShell {
         }
         if self.prompt.is_some() {
             root = root.child(self.render_prompt(cx));
+        }
+        if self.move_picker.is_some() {
+            root = root.child(self.render_move_picker(cx));
         }
         if self.workspace_confirm.is_some() {
             root = root.child(self.render_workspace_confirm(cx));

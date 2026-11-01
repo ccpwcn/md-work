@@ -11,13 +11,14 @@ use mdwork_render::typst::{self, DocMeta, ExportOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::pdf;
-use crate::png::{self, MAX_PNG_HEIGHT, Stitcher};
+use crate::png::{self, Stitcher, max_raster_height};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExportFormat {
     Pdf,
     Png,
+    Webp,
 }
 
 impl ExportFormat {
@@ -25,7 +26,12 @@ impl ExportFormat {
         match self {
             ExportFormat::Pdf => "pdf",
             ExportFormat::Png => "png",
+            ExportFormat::Webp => "webp",
         }
+    }
+
+    pub fn is_raster(self) -> bool {
+        matches!(self, ExportFormat::Png | ExportFormat::Webp)
     }
 }
 
@@ -141,7 +147,10 @@ fn run_inner(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Resu
     emit(ExportEvent::Stage {
         stage: "compile".to_string(),
     });
-    let document = typst::convert(&ir, &request.options, &meta, &root);
+    // Long raster exports use height: auto so the note becomes one continuous
+    // image instead of a single clipped A4 page.
+    let continuous = request.format.is_raster() && !request.options.png_page_files;
+    let document = typst::convert_with(&ir, &request.options, &meta, &root, continuous);
     for warning in &document.warnings {
         emit(ExportEvent::Warning {
             message: warning.clone(),
@@ -176,7 +185,7 @@ fn run_inner(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Resu
             let staged = temp.path().join("out.pdf");
             fs::write(&staged, &bytes)?;
             let output = ensure_parent(&request.output)?;
-            fs::rename(&staged, &output)?;
+            replace_file(&staged, &output)?;
             emit(ExportEvent::Page { page: pages, pages });
             emit(ExportEvent::Done {
                 paths: vec![output.display().to_string()],
@@ -184,19 +193,22 @@ fn run_inner(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Resu
             });
             vec![output]
         }
-        ExportFormat::Png => {
+        format @ (ExportFormat::Png | ExportFormat::Webp) => {
             emit(ExportEvent::Stage {
                 stage: "render".to_string(),
             });
             let dpi = request.options.png_dpi.clamp(36, 600);
             let gap = ((12.0 * f64::from(dpi) / 72.0).round() as u32).max(1);
-            let output = ensure_png_extension(&ensure_parent(&request.output)?);
+            let max_height = max_raster_height(format);
+            let output = ensure_raster_extension(&ensure_parent(&request.output)?, format);
             if request.options.png_page_files {
                 let mut staged = Vec::new();
                 for (index, page) in compiled.pages().iter().enumerate() {
                     let image = png::render_page(page, dpi);
-                    let file = temp.path().join(format!("page-{:03}.png", index + 1));
-                    fs::write(&file, png::encode_png(&image)?)?;
+                    let file = temp
+                        .path()
+                        .join(format!("page-{:03}.{}", index + 1, format.extension()));
+                    fs::write(&file, png::encode_page(&image, format)?)?;
                     staged.push(file);
                     emit(ExportEvent::Page {
                         page: index + 1,
@@ -218,16 +230,20 @@ fn run_inner(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Resu
                 });
             }
 
-            let mut stitcher = Stitcher::new(MAX_PNG_HEIGHT, gap);
+            let mut stitcher = Stitcher::new(max_height, gap);
             let mut staged = Vec::new();
             for (index, page) in compiled.pages().iter().enumerate() {
                 let image = png::render_page(page, dpi);
-                if let Some(chunk) = stitcher.push(image) {
-                    let file = temp
-                        .path()
-                        .join(format!("chunk-{:03}.png", staged.len() + 1));
-                    fs::write(&file, png::encode_png(&chunk)?)?;
-                    staged.push(file);
+                for band in png::split_tall(image, max_height) {
+                    if let Some(chunk) = stitcher.push(band) {
+                        let file = temp.path().join(format!(
+                            "chunk-{:03}.{}",
+                            staged.len() + 1,
+                            format.extension()
+                        ));
+                        fs::write(&file, png::encode_page(&chunk, format)?)?;
+                        staged.push(file);
+                    }
                 }
                 emit(ExportEvent::Page {
                     page: index + 1,
@@ -235,10 +251,12 @@ fn run_inner(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Resu
                 });
             }
             if let Some(chunk) = stitcher.finish() {
-                let file = temp
-                    .path()
-                    .join(format!("chunk-{:03}.png", staged.len() + 1));
-                fs::write(&file, png::encode_png(&chunk)?)?;
+                let file = temp.path().join(format!(
+                    "chunk-{:03}.{}",
+                    staged.len() + 1,
+                    format.extension()
+                ));
+                fs::write(&file, png::encode_page(&chunk, format)?)?;
                 staged.push(file);
             }
             if staged.is_empty() {
@@ -281,15 +299,16 @@ fn ensure_parent(path: &Path) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
-fn ensure_png_extension(path: &Path) -> PathBuf {
+fn ensure_raster_extension(path: &Path, format: ExportFormat) -> PathBuf {
+    let extension = format.extension();
     if path
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+        .is_some_and(|current| current.eq_ignore_ascii_case(extension))
     {
         path.to_path_buf()
     } else {
-        path.with_extension("png")
+        path.with_extension(extension)
     }
 }
 
@@ -301,9 +320,13 @@ fn numbered_targets(output: &Path, count: usize, always_numbered: bool) -> Vec<P
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| "export".to_string());
+    let extension = output
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("png");
     let parent = output.parent().unwrap_or_else(|| Path::new(""));
     (1..=count.max(1))
-        .map(|index| parent.join(format!("{stem}-{index:03}.png")))
+        .map(|index| parent.join(format!("{stem}-{index:03}.{extension}")))
         .collect()
 }
 
@@ -312,7 +335,15 @@ fn move_files(staged: &[PathBuf], targets: &[PathBuf]) -> Result<()> {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::rename(source, target).with_context(|| format!("无法写入 {}", target.display()))?;
+        replace_file(source, target)?;
     }
     Ok(())
+}
+
+/// Atomically replace `target` with `source` (Windows `rename` cannot overwrite).
+fn replace_file(source: &Path, target: &Path) -> Result<()> {
+    if target.exists() {
+        fs::remove_file(target).with_context(|| format!("无法覆盖 {}", target.display()))?;
+    }
+    fs::rename(source, target).with_context(|| format!("无法写入 {}", target.display()))
 }

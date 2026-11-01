@@ -148,16 +148,13 @@ impl AppShell {
         for (key, src) in pending {
             let base = base.clone();
             cx.spawn(async move |this, cx| {
-                let path = cx
+                let resolved = cx
                     .background_executor()
-                    .spawn(async move {
-                        preview::resolve_image_path(&src, base.as_deref())
-                            .filter(|path| path.is_file())
-                    })
+                    .spawn(async move { preview::resolve_preview_image(&src, base.as_deref()) })
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     this.images_pending.remove(&key);
-                    this.image_paths.insert(key, path);
+                    this.image_paths.insert(key, resolved);
                     cx.notify();
                 });
             })

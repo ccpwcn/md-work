@@ -1,10 +1,10 @@
-﻿; Per-user installer for 墨笺 (md-work).
+; Per-user installer for 墨笺 (md-work).
 ;
 ; Build with:
 ;   cargo run -p xtask -- package
 ;   cargo run -p xtask -- installer
 ; or manually:
-;   makensis /DVERSION=1.1.1 /DDIST=<workspace>\dist\md-work-1.1.1-win64 md-work.nsi
+;   makensis /DVERSION=1.2.0 /DDIST=<workspace>\dist\md-work-1.2.0-win64 md-work.nsi
 ;
 ; Only HKCU is written and nothing is installed machine-wide, so no elevation
 ; is required. The app's own "用墨笺打开" verb (HKCU\Software\Classes) is left
@@ -21,7 +21,7 @@ Var WORKSPACE_DIR
 Var WORKSPACE_DIR_FIELD
 
 !ifndef VERSION
-  !define VERSION "1.1.1"
+  !define VERSION "1.2.0"
 !endif
 !ifndef DIST
   !error "Pass /DDIST=<path to dist\md-work-<ver>-win64>"

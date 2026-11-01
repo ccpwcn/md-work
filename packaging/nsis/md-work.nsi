@@ -1,4 +1,4 @@
-; Per-user installer for 墨笺 (md-work).
+﻿; Per-user installer for 墨笺 (md-work).
 ;
 ; Build with:
 ;   cargo run -p xtask -- package

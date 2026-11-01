@@ -137,13 +137,27 @@ function Get-NextVersion {
     throw "必须指定 Version，或使用 -Major / -Minor / -Patch"
 }
 
+function Read-Utf8File([string] $Path) {
+    # Explicit UTF-8: default system encoding on Chinese Windows is GBK and
+    # would corrupt .nsi / README when rewriting.
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    return [System.IO.File]::ReadAllText($Path, $utf8)
+}
+
 function Set-Utf8NoBomFile([string] $Path, [string] $Content) {
     $utf8 = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($Path, $Content, $utf8)
 }
 
+function Set-Utf8BomFile([string] $Path, [string] $Content) {
+    # NSIS Unicode scripts need a UTF-8 BOM; without it makensis reports
+    # "Bad text encoding" on the first non-ASCII LangString.
+    $utf8 = New-Object System.Text.UTF8Encoding $true
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8)
+}
+
 function Update-CargoToml([string] $Path, [string] $Old, [string] $New) {
-    $text = Get-Content -LiteralPath $Path -Raw
+    $text = Read-Utf8File $Path
     $pattern = '(?ms)(\[workspace\.package\].*?^\s*version\s*=\s*")' + [regex]::Escape($Old) + '(")'
     $replacement = '${1}' + $New + '${2}'
     $updated = [regex]::Replace($text, $pattern, $replacement, 1)
@@ -154,7 +168,7 @@ function Update-CargoToml([string] $Path, [string] $Old, [string] $New) {
 }
 
 function Update-Nsis([string] $Path, [string] $Old, [string] $New) {
-    $text = Get-Content -LiteralPath $Path -Raw
+    $text = Read-Utf8File $Path
     $updated = $text.Replace($Old, $New)
     if ($updated -eq $text) {
         throw "NSIS 脚本中未出现旧版本 $Old：$Path"
@@ -163,7 +177,7 @@ function Update-Nsis([string] $Path, [string] $Old, [string] $New) {
 }
 
 function Update-Readme([string] $Path, [string] $Old, [string] $New) {
-    $text = Get-Content -LiteralPath $Path -Raw
+    $text = Read-Utf8File $Path
     $marker = [char]0x5F53 + [char]0x524D + [char]0x7248 + [char]0x672C + [char]0xFF1A  # 当前版本：
     $updated = $text
     $updated = $updated.Replace("**$marker$Old**", "**$marker$New**")
@@ -175,7 +189,7 @@ function Update-Readme([string] $Path, [string] $Old, [string] $New) {
 }
 
 function Update-Checklist([string] $Path, [string] $Old, [string] $New) {
-    $text = Get-Content -LiteralPath $Path -Raw
+    $text = Read-Utf8File $Path
     $updated = $text.Replace($Old, $New)
     if ($updated -eq $text) {
         throw "验收清单中未出现旧版本 $Old：$Path"
@@ -252,7 +266,12 @@ if ($DryRun) {
 }
 
 foreach ($entry in $pending) {
-    Set-Utf8NoBomFile -Path $entry.Path -Content $entry.Text
+    if ($entry.Rel -eq 'packaging\nsis\md-work.nsi') {
+        Set-Utf8BomFile -Path $entry.Path -Content $entry.Text
+    }
+    else {
+        Set-Utf8NoBomFile -Path $entry.Path -Content $entry.Text
+    }
     Write-Host "已写入: $($entry.Rel)" -ForegroundColor Cyan
 }
 

@@ -28,7 +28,7 @@
 | 文件 | 改什么 |
 | --- | --- |
 | `Cargo.toml` | `[workspace.package].version` |
-| `packaging/nsis/md-work.nsi` | 注释中的示例路径、`!ifndef VERSION` 下的回退 `!define VERSION` |
+| `packaging/nsis/md-work.nsi` | 注释中的示例路径、`!ifndef VERSION` 下的回退 `!define VERSION`（须以 **UTF-8 BOM** 写回；`Unicode true` 下无 BOM 会导致 makensis「Bad text encoding」） |
 | `README.md` | 「当前版本：…」与示例产物路径中的版本段 |
 | `tests/e2e/windows-checklist.md` | 标题与清单内硬编码版本 |
 | `Cargo.lock` | 经 `cargo check --workspace` 刷新工作区成员版本 |

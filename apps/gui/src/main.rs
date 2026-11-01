@@ -86,12 +86,7 @@ fn main() {
         });
     }
 
-    let bounds = Bounds {
-        origin: point(px(90.), px(70.)),
-        size: size(px(1360.), px(900.)),
-    };
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(900.), px(600.))),
         app_id: Some("md-work".to_string()),
         ..gpui_kit::component::TitleBar::window_options()
@@ -113,6 +108,13 @@ fn main() {
             ]);
 
             let mut startup = Some(startup);
+            let mut options = options;
+            if let Some(placement) = startup
+                .as_ref()
+                .and_then(|startup| startup.window_placement())
+            {
+                app::restore_window(&mut options, placement, cx);
+            }
             gpui_kit::open_window(options, cx, move |window, cx| {
                 let pending = pending.clone();
                 let startup = startup.take().unwrap_or_else(app::Startup::load);

@@ -205,9 +205,9 @@ fn run_inner(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Resu
                 let mut staged = Vec::new();
                 for (index, page) in compiled.pages().iter().enumerate() {
                     let image = png::render_page(page, dpi);
-                    let file = temp
-                        .path()
-                        .join(format!("page-{:03}.{}", index + 1, format.extension()));
+                    let file =
+                        temp.path()
+                            .join(format!("page-{:03}.{}", index + 1, format.extension()));
                     fs::write(&file, png::encode_page(&image, format)?)?;
                     staged.push(file);
                     emit(ExportEvent::Page {

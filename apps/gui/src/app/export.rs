@@ -975,12 +975,9 @@ impl AppShell {
                                     .gap_2()
                                     .child(label(t!("export.output").to_string()))
                                     .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .child(
-                                                Input::new(&dialog.output_input).w_full().small(),
-                                            ),
+                                        div().flex_1().min_w_0().child(
+                                            Input::new(&dialog.output_input).w_full().small(),
+                                        ),
                                     )
                                     .child(
                                         Button::new("export-browse")

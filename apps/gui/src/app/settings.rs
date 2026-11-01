@@ -168,10 +168,7 @@ impl AppShell {
             };
             let _ = this.update(cx, |this, cx| {
                 if let Err(err) = result {
-                    this.notify_error(
-                        format!("{}: {err}", t!("export.open_after_failed")),
-                        cx,
-                    );
+                    this.notify_error(format!("{}: {err}", t!("export.open_after_failed")), cx);
                 }
                 cx.notify();
             });

@@ -59,10 +59,12 @@ mod searcher;
 mod settings;
 mod toolbar;
 mod util;
+mod window_place;
 mod workspace;
 mod zip;
 
 use util::*;
+pub(crate) use window_place::restore_window;
 
 const PANEL_MIN_WIDTH: f32 = 240.0;
 const PANEL_MAX_WIDTH: f32 = 560.0;
@@ -564,6 +566,8 @@ pub struct AppShell {
     entries_generation: u64,
     trash_generation: u64,
     switch_generation: u64,
+    /// Bumps on each placement change so a slower save does not overwrite a newer one.
+    window_save_generation: u64,
     opening: HashSet<PathBuf>,
     pending_close: HashSet<EntityId>,
     pending_delete: Option<(Uuid, String)>,
@@ -598,6 +602,10 @@ pub struct Startup {
 }
 
 impl Startup {
+    pub(crate) fn window_placement(&self) -> Option<mdwork_core::config::WindowPlacement> {
+        self.config.window
+    }
+
     pub fn load() -> Self {
         let config_existed = mdwork_core::paths::config_path().is_file();
         let mut config = AppConfig::load_or_default();
@@ -817,6 +825,7 @@ impl AppShell {
             entries_generation: 0,
             trash_generation: 0,
             switch_generation: 0,
+            window_save_generation: 0,
             opening: HashSet::new(),
             pending_close: HashSet::new(),
             pending_delete: None,
@@ -864,10 +873,18 @@ impl AppShell {
                 });
             }));
 
+        cx.observe_window_bounds(window, |this, window, cx| {
+            this.remember_window_placement(window, cx);
+        })
+        .detach();
+
         let weak = cx.entity().downgrade();
         cx.on_window_closed(move |app, _| {
             if let Some(this) = weak.upgrade() {
-                this.update(app, |this, cx| this.persist_session(cx));
+                this.update(app, |this, cx| {
+                    this.persist_session(cx);
+                    this.save_config(cx);
+                });
             }
         })
         .detach();

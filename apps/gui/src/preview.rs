@@ -352,14 +352,16 @@ fn render_paragraph_stack(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyEle
 
 fn render_paragraph_line(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyElement {
     match inlines {
-        [Inline::Image {
-            src,
-            alt,
-            width,
-            height,
-            attrs,
-            ..
-        }] => render_image(src, alt, *width, *height, attrs, true, context),
+        [
+            Inline::Image {
+                src,
+                alt,
+                width,
+                height,
+                attrs,
+                ..
+            },
+        ] => render_image(src, alt, *width, *height, attrs, true, context),
         _ if inlines
             .iter()
             .any(|inline| matches!(inline, Inline::Image { .. })) =>
@@ -408,12 +410,7 @@ fn render_inline_embeds_row(inlines: &[Inline], context: &RenderCtx<'_>) -> AnyE
         return styled_text(inlines, &context.style);
     }
 
-    let mut row = div()
-        .w_full()
-        .flex()
-        .flex_wrap()
-        .items_baseline()
-        .gap_1();
+    let mut row = div().w_full().flex().flex_wrap().items_baseline().gap_1();
     let mut start = 0;
     let mut index = 0;
     while index < inlines.len() {
@@ -665,10 +662,7 @@ fn apply_box_length<E: Styled>(mut el: E, width: Option<Length>, height: Option<
 }
 
 fn rgb_to_hsla(color: RgbColor) -> Hsla {
-    gpui_kit::rgb(
-        ((color.r as u32) << 16) | ((color.g as u32) << 8) | (color.b as u32),
-    )
-    .into()
+    gpui_kit::rgb(((color.r as u32) << 16) | ((color.g as u32) << 8) | (color.b as u32)).into()
 }
 
 fn styled_text(inlines: &[Inline], style: &InlineStyle) -> AnyElement {

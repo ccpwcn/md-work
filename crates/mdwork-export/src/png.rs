@@ -59,9 +59,7 @@ pub fn encode_page(page: &PageImage, format: ExportFormat) -> Result<Vec<u8>> {
     if page.width == 0 || page.height == 0 {
         return Err(anyhow!("图片尺寸无效（{}×{}）", page.width, page.height));
     }
-    if format == ExportFormat::Webp
-        && (page.width > MAX_WEBP_EDGE || page.height > MAX_WEBP_EDGE)
-    {
+    if format == ExportFormat::Webp && (page.width > MAX_WEBP_EDGE || page.height > MAX_WEBP_EDGE) {
         return Err(anyhow!(
             "WebP 单张图片不能超过 {MAX_WEBP_EDGE} 像素（当前 {}×{}），请勾选「每页一个文件」或改用 PNG",
             page.width,
@@ -89,12 +87,7 @@ fn encode_rgba(image: &RgbaImage, format: ExportFormat) -> Result<Vec<u8>> {
             let encoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut buffer = Cursor::new(Vec::new());
                 let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut buffer);
-                encoder.write_image(
-                    &pixels,
-                    width,
-                    height,
-                    image::ExtendedColorType::Rgba8,
-                )?;
+                encoder.write_image(&pixels, width, height, image::ExtendedColorType::Rgba8)?;
                 Ok::<Vec<u8>, image::ImageError>(buffer.into_inner())
             }));
             match encoded {
@@ -286,7 +279,9 @@ mod tests {
     fn widened_page_flushes_previous_chunk() {
         let mut stitcher = Stitcher::new(200, 0);
         assert!(stitcher.push(page(10, 40, 1)).is_none());
-        let flushed = stitcher.push(page(20, 40, 2)).expect("flushed narrow pages");
+        let flushed = stitcher
+            .push(page(20, 40, 2))
+            .expect("flushed narrow pages");
         assert_eq!(flushed.width, 10);
         assert_eq!(flushed.height, 40);
         let last = stitcher.finish().expect("wide page");

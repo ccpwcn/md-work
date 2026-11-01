@@ -38,6 +38,10 @@ const PANEL_WIDTH_MIN: f32 = 200.0;
 const PANEL_WIDTH_MAX: f32 = 800.0;
 const FONT_SIZE_MIN: f32 = 8.0;
 const FONT_SIZE_MAX: f32 = 48.0;
+const WINDOW_AXIS_MIN: f32 = -32_768.0;
+const WINDOW_AXIS_MAX: f32 = 32_768.0;
+const WINDOW_EXTENT_MIN: f32 = 1.0;
+const WINDOW_EXTENT_MAX: f32 = 16_384.0;
 
 const CORE_HEADER: &str = "\
 # =====================================================================
@@ -138,6 +142,57 @@ impl PanelArrangement {
             PanelArrangement::Horizontal => "horizontal",
             PanelArrangement::Vertical => "vertical",
         }
+    }
+}
+
+/// Whether the main window is restored or maximized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowMode {
+    #[default]
+    Windowed,
+    Maximized,
+}
+
+impl WindowMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WindowMode::Windowed => "windowed",
+            WindowMode::Maximized => "maximized",
+        }
+    }
+}
+
+/// Normal-window rectangle plus maximized state.
+///
+/// `x`, `y`, `width` and `height` are logical pixels of the restored window.
+/// While maximized they are the rectangle the window returns to, not the
+/// screen-sized frame.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowPlacement {
+    pub state: WindowMode,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl WindowPlacement {
+    /// Rounds to whole logical pixels. Returns `None` when a value is
+    /// non-finite or outside the range persisted in `runtime.toml`.
+    pub fn new(state: WindowMode, x: f32, y: f32, width: f32, height: f32) -> Option<Self> {
+        let placement = Self {
+            state,
+            x: x.round(),
+            y: y.round(),
+            width: width.round(),
+            height: height.round(),
+        };
+        let axis = (WINDOW_AXIS_MIN..=WINDOW_AXIS_MAX).contains(&placement.x)
+            && (WINDOW_AXIS_MIN..=WINDOW_AXIS_MAX).contains(&placement.y);
+        let extent = (WINDOW_EXTENT_MIN..=WINDOW_EXTENT_MAX).contains(&placement.width)
+            && (WINDOW_EXTENT_MIN..=WINDOW_EXTENT_MAX).contains(&placement.height);
+        (axis && extent).then_some(placement)
     }
 }
 
@@ -418,6 +473,8 @@ pub struct AppConfig {
     pub mcp_port: u16,
     pub crash_report: CrashReportConfig,
     pub theme_colors: ThemeColors,
+    /// Last main-window placement. `None` leaves size and state to the toolkit.
+    pub window: Option<WindowPlacement>,
     /// Problems found while loading; skipped when saving.
     #[serde(skip)]
     pub issues: Vec<ConfigIssue>,
@@ -447,6 +504,7 @@ impl Default for AppConfig {
             mcp_port: 11026,
             crash_report: CrashReportConfig::default(),
             theme_colors: ThemeColors::default(),
+            window: None,
             issues: Vec::new(),
         }
     }
@@ -723,6 +781,7 @@ impl AppConfig {
             loader.boolean(general, "general", "code_wrap", &mut config.code_wrap);
             loader.boolean(general, "general", "mcp_http", &mut config.mcp_http);
         }
+        apply_window(&mut loader, &root, config);
         match loader.table(&root, "panels") {
             Some(panels) => {
                 loader.parsed(
@@ -874,6 +933,20 @@ impl AppConfig {
         out.push_str("# 应用运行期间保持本地 MCP 服务。\n");
         out.push_str(&format!("mcp_http = {}\n", self.mcp_http));
 
+        if let Some(window) = self.window {
+            out.push_str("\n[window]\n");
+            out.push_str("# 主窗口形态，程序在窗口变化后写回；删除本节则下次启动使用默认窗口。\n");
+            out.push_str("# state：windowed（普通）| maximized（最大化）\n");
+            out.push_str(
+                "# x、y、width、height 是普通状态下的位置和大小（逻辑像素）。最大化时这是还原后的矩形。\n",
+            );
+            out.push_str(&format!("state = \"{}\"\n", window.state.as_str()));
+            out.push_str(&format!("x = {}\n", f32_literal(window.x)));
+            out.push_str(&format!("y = {}\n", f32_literal(window.y)));
+            out.push_str(&format!("width = {}\n", f32_literal(window.width)));
+            out.push_str(&format!("height = {}\n", f32_literal(window.height)));
+        }
+
         out.push_str("\n[panels]\n");
         out.push_str("# 侧边栏排布：horizontal（横向）| vertical（纵向）\n");
         out.push_str(&format!(
@@ -974,6 +1047,36 @@ impl AppConfig {
             }
         }
         out
+    }
+}
+
+fn apply_window(loader: &mut Loader<'_>, root: &toml::Table, config: &mut AppConfig) {
+    let Some(window) = loader.table(root, "window") else {
+        return;
+    };
+    let before = loader.issues.len();
+    if !window.contains_key("state") {
+        loader.issue("window.state", "缺少窗口状态");
+    }
+    let mut state = WindowMode::Windowed;
+    loader.parsed(window, "window", "state", &mut state);
+    let mut x = f32::NAN;
+    let mut y = f32::NAN;
+    let mut width = f32::NAN;
+    let mut height = f32::NAN;
+    for (key, slot, min, max) in [
+        ("x", &mut x, WINDOW_AXIS_MIN, WINDOW_AXIS_MAX),
+        ("y", &mut y, WINDOW_AXIS_MIN, WINDOW_AXIS_MAX),
+        ("width", &mut width, WINDOW_EXTENT_MIN, WINDOW_EXTENT_MAX),
+        ("height", &mut height, WINDOW_EXTENT_MIN, WINDOW_EXTENT_MAX),
+    ] {
+        if !window.contains_key(key) {
+            loader.issue(format!("window.{key}"), "缺少窗口位置或大小");
+        }
+        loader.f32(window, "window", key, min, max, slot);
+    }
+    if loader.issues.len() == before {
+        config.window = WindowPlacement::new(state, x, y, width, height);
     }
 }
 
@@ -1391,6 +1494,51 @@ mod tests {
         assert!(runtime.contains("dock = \"left\""));
         assert!(theme.contains("[appearance]"));
         assert!(theme.contains("[colors.light]"));
+        assert!(!runtime.contains("[window]"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn window_placement_round_trip() {
+        let dir = temp_dir();
+        let path = dir.join("runtime.toml");
+        let mut config = AppConfig::default();
+        config.window = WindowPlacement::new(WindowMode::Maximized, 120.4, 80.6, 1280.0, 800.0);
+        config.save_to(&path).unwrap();
+        let loaded = AppConfig::load_from(&path).unwrap();
+        assert_eq!(
+            loaded.window,
+            Some(WindowPlacement {
+                state: WindowMode::Maximized,
+                x: 120.0,
+                y: 81.0,
+                width: 1280.0,
+                height: 800.0,
+            })
+        );
+        assert!(loaded.issues.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn broken_window_keeps_the_default_frame() {
+        let dir = temp_dir();
+        let path = dir.join("runtime.toml");
+        fs::write(
+            &path,
+            "[general]\nautosave = false\n\n[window]\nstate = \"huge\"\nwidth = 10\n",
+        )
+        .unwrap();
+        let config = AppConfig::load_from(&path).unwrap();
+        assert!(!config.autosave);
+        assert!(config.window.is_none());
+        let keys: Vec<&str> = config
+            .issues
+            .iter()
+            .map(|issue| issue.key.as_str())
+            .collect();
+        assert!(keys.contains(&"window.state"));
+        assert!(keys.contains(&"window.x"));
         fs::remove_dir_all(dir).unwrap();
     }
 

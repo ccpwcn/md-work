@@ -2,6 +2,37 @@ use super::util::*;
 use super::*;
 
 impl AppShell {
+    /// Remembers the normal rectangle and maximized state after the frame settles.
+    ///
+    /// Resize and move notifications arrive continuously; the write waits until
+    /// they pause so a drag does not rewrite `runtime.toml` on every pixel.
+    /// Closing the window flushes whatever is already in memory.
+    pub(super) fn remember_window_placement(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if !window.is_visible() {
+            return;
+        }
+        let Some(placement) = super::window_place::capture(window) else {
+            return;
+        };
+        if self.config.window == Some(placement) {
+            return;
+        }
+        self.config.window = Some(placement);
+        self.window_save_generation = self.window_save_generation.wrapping_add(1);
+        let generation = self.window_save_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(200))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.window_save_generation == generation {
+                    this.save_config(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn save_config(&self, _cx: &mut Context<Self>) {
         let config = self.config.clone();
         disk::enqueue(move || {

@@ -216,7 +216,7 @@ cargo test --workspace
 也可分步调用 xtask：
 
 ```powershell
-cargo run -p xtask -- icon        # 由 assets/icon.svg 生成 assets/icon.ico
+cargo run -p xtask -- icon        # 由 SVG 生成软件图标和安装包图标
 cargo run -p xtask -- package     # release 构建 → dist/md-work-1.2.2-win64/ 与 .zip
 cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.2.2-setup.exe
 ```

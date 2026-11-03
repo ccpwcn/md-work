@@ -51,7 +51,8 @@ VIAddVersionKey /LANG=2052 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright © 2026 ${APP_PUBLISHER}. MIT License."
 
 !define MUI_ABORTWARNING
-!define MUI_ICON "..\..\assets\icon.ico"
+; setup.exe 用纸箱图标；卸载程序仍用软件图标。
+!define MUI_ICON "..\..\assets\installer-icon.ico"
 !define MUI_UNICON "..\..\assets\icon.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "启动${APP_NAME}"

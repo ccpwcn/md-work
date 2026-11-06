@@ -4,7 +4,7 @@
 ;   cargo run -p xtask -- package
 ;   cargo run -p xtask -- installer
 ; or manually:
-;   makensis /DVERSION=1.2.2 /DDIST=<workspace>\dist\md-work-1.2.2-win64 md-work.nsi
+;   makensis /DVERSION=1.2.3 /DDIST=<workspace>\dist\md-work-1.2.3-win64 md-work.nsi
 ;
 ; Only HKCU is written and nothing is installed machine-wide, so no elevation
 ; is required. The app's own "用墨笺打开" verb (HKCU\Software\Classes) is left
@@ -21,7 +21,7 @@ Var WORKSPACE_DIR
 Var WORKSPACE_DIR_FIELD
 
 !ifndef VERSION
-  !define VERSION "1.2.2"
+  !define VERSION "1.2.3"
 !endif
 !ifndef DIST
   !error "Pass /DDIST=<path to dist\md-work-<ver>-win64>"
@@ -51,9 +51,8 @@ VIAddVersionKey /LANG=2052 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright © 2026 ${APP_PUBLISHER}. MIT License."
 
 !define MUI_ABORTWARNING
-; setup.exe 用纸箱图标；卸载程序仍用软件图标。
+; setup.exe 用纸箱图标；卸载程序使用NSIS的默认图标。
 !define MUI_ICON "..\..\assets\installer-icon.ico"
-!define MUI_UNICON "..\..\assets\icon.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "启动${APP_NAME}"
 

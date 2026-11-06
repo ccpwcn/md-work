@@ -1,6 +1,9 @@
 use super::util::*;
 use super::*;
 
+/// 导出选项下拉项：显示文本、是否勾选、应用函数。
+type ExportOptionItem = (String, bool, fn(&mut ExportOptions));
+
 impl AppShell {
     pub(super) fn open_export_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_export_dialog_with(ExportFormat::Pdf, window, cx);
@@ -90,7 +93,10 @@ impl AppShell {
         .detach();
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "导出对话框需要一次性带上格式、笔记本、笔记与导出选项等独立参数"
+    )]
     pub(super) fn open_export_dialog_ready(
         &mut self,
         format: ExportFormat,
@@ -158,10 +164,10 @@ impl AppShell {
     }
 
     pub(super) fn close_export_dialog(&mut self, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.export.take() {
-            if let Some(job) = dialog.job {
-                job.cancel();
-            }
+        if let Some(dialog) = self.export.take()
+            && let Some(job) = dialog.job
+        {
+            job.cancel();
         }
         cx.notify();
     }
@@ -508,7 +514,7 @@ impl AppShell {
         let shell = cx.entity();
         let option_menu = |id: &'static str,
                            text: String,
-                           items: Vec<(String, bool, fn(&mut ExportOptions))>,
+                           items: Vec<ExportOptionItem>,
                            shell: Entity<Self>,
                            disabled: bool| {
             Button::new(id)

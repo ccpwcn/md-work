@@ -5,6 +5,8 @@ description: 在软件开发中全局使用此技能。
 
 # 权威规则
 - 无论是开发过程中的提示语、交互搞，还是最终写入软件项目中的各类文档，尽可能的使用简体中文。
+- 代码中的注释，尽可能的使用简体中文。
+- 执行代码审查时，生成一份代码审查报告，放到doc/cr_report目录中，列出代码审查执行的基本信息，以及发现了哪些问题，修复了哪些问题，结论如何等等，具体模板见 [references/cr_report.md](references/cr_report.md)。代码审查报告的文件名上带上日期时间，能用写法 `cr_YYYY-MM-DD_HH-MM-SS.md` 。
 
 # 版本号
 - 唯一权威来源：根目录 `Cargo.toml` 的 `[workspace.package].version`（`X.Y.Z`）。

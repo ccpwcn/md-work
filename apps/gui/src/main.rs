@@ -10,6 +10,7 @@ mod highlight;
 mod install_hint;
 mod mcp_server;
 mod preview;
+mod preview_selection;
 mod print;
 mod single_instance;
 mod theme;
@@ -59,11 +60,11 @@ fn main() {
 
     let initial_path = std::env::args().skip(1).find(|arg| !arg.starts_with('-'));
 
-    if let Some(path) = &initial_path {
-        if single_instance::try_forward(path) {
-            tracing::info!(path = %path, "已转发到正在运行的实例，本进程退出");
-            return;
-        }
+    if let Some(path) = &initial_path
+        && single_instance::try_forward(path)
+    {
+        tracing::info!(path = %path, "已转发到正在运行的实例，本进程退出");
+        return;
     }
 
     if let Err(err) = file_assoc::ensure_registered() {

@@ -39,5 +39,11 @@ two-face = { version = "0.4.5", default-features = false, features = [
     "syntect-fancy",
 ] }
 
+[dev-dependencies]
+# 无界面测试入口通过上游 crate 别名引入；
+# 若启用 gpui-kit 的 `test-support` 特性，会连带引入可选的
+# fast 后端，其 macOS 依赖与当前锁定版本冲突。
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+
 [build-dependencies]
 winresource = "0.1.34"

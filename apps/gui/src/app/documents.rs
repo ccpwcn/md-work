@@ -1,7 +1,31 @@
 use super::util::*;
 use super::*;
 
+/// 批量打开任务：打开请求及其对应的磁盘读取结果。
+type OpenedPair = (
+    OpenRequest,
+    mdwork_core::Result<(PathBuf, mdwork_core::doc::DecodedDoc, String)>,
+);
+
 impl AppShell {
+    /// 查找已打开或仍在保存的文档，使标签关闭后才到达的
+    /// 磁盘操作仍能释放该文档占用的保存锁。
+    pub(super) fn doc_by_id(&self, id: EntityId) -> Option<Entity<Doc>> {
+        self.docs
+            .iter()
+            .chain(self.closing_docs.values())
+            .find(|doc| doc.entity_id() == id)
+            .cloned()
+    }
+
+    /// 最后一次保存尚未完成的标签仍占用此路径，此时重新打开
+    /// 会读到保存前的磁盘内容。
+    fn is_closing(&self, path: &Path, cx: &App) -> bool {
+        self.closing_docs
+            .values()
+            .any(|doc| doc.read(cx).path == path)
+    }
+
     pub(super) fn open_path(&mut self, raw: &str, window: &mut Window, cx: &mut Context<Self>) {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -30,13 +54,13 @@ impl AppShell {
             .filter(|entry| entry.notebook.contains_path(&path))
             .max_by_key(|entry| entry.notebook.root.as_os_str().len())
             .map(|entry| entry.notebook.clone());
-        if let Some(notebook) = notebook {
-            if let Ok(rel) = path.strip_prefix(&notebook.root) {
-                let rel = rel.to_string_lossy().replace('\\', "/");
-                self.active_notebook = Some(notebook.marker.id);
-                self.open_note(&notebook, &rel, window, cx);
-                return;
-            }
+        if let Some(notebook) = notebook
+            && let Ok(rel) = path.strip_prefix(&notebook.root)
+        {
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            self.active_notebook = Some(notebook.marker.id);
+            self.open_note(&notebook, &rel, window, cx);
+            return;
         }
         self.open_external(&path, window, cx);
     }
@@ -52,7 +76,7 @@ impl AppShell {
             .cloned()
         {
             doc.update(cx, |doc, cx| {
-                doc.set_cursor(line.saturating_sub(1) as u32, 0, window, cx)
+                doc.set_cursor(line.saturating_sub(1), 0, window, cx)
             });
         }
     }
@@ -64,17 +88,22 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Ok(path) = notebook.note_path(rel_path)
+            && self.is_closing(&path, cx)
+        {
+            return;
+        }
         self.select_tree_entry(notebook.marker.id, rel_path, EntryKind::Note, cx);
-        if let Ok(path) = notebook.note_path(rel_path) {
-            if let Some(index) = self.docs.iter().position(|doc| doc.read(cx).path == path) {
-                self.active_doc = Some(index);
-                self.active_notebook = Some(notebook.marker.id);
-                self.persist_session(cx);
-                self.reveal_active(cx);
-                self.apply_pending_jump(window, cx);
-                cx.notify();
-                return;
-            }
+        if let Ok(path) = notebook.note_path(rel_path)
+            && let Some(index) = self.docs.iter().position(|doc| doc.read(cx).path == path)
+        {
+            self.active_doc = Some(index);
+            self.active_notebook = Some(notebook.marker.id);
+            self.persist_session(cx);
+            self.reveal_active(cx);
+            self.apply_pending_jump(window, cx);
+            cx.notify();
+            return;
         }
         let request = OpenRequest::Notebook {
             notebook: notebook.clone(),
@@ -107,6 +136,9 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.is_closing(path, cx) {
+            return;
+        }
         if let Some(index) = self.docs.iter().position(|doc| {
             let doc = doc.read(cx);
             doc.notebook_id.is_none() && doc.path == path
@@ -136,7 +168,11 @@ impl AppShell {
             if self.opening.contains(&path) {
                 return false;
             }
-            !self.docs.iter().any(|doc| doc.read(cx).path == path)
+            !self
+                .docs
+                .iter()
+                .chain(self.closing_docs.values())
+                .any(|doc| doc.read(cx).path == path)
         });
         if requests.is_empty() {
             return;
@@ -168,10 +204,7 @@ impl AppShell {
 
     pub(super) fn apply_opened(
         &mut self,
-        pairs: Vec<(
-            OpenRequest,
-            mdwork_core::Result<(PathBuf, mdwork_core::doc::DecodedDoc, String)>,
-        )>,
+        pairs: Vec<OpenedPair>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -194,39 +227,36 @@ impl AppShell {
                 }
             }
         }
-        if let Some((path, _)) = &self.pending_jump {
-            if self.docs.iter().any(|doc| doc.read(cx).path == *path) {
-                self.apply_pending_jump(window, cx);
-                changed = true;
-            }
+        if let Some((path, _)) = &self.pending_jump
+            && self.docs.iter().any(|doc| doc.read(cx).path == *path)
+        {
+            self.apply_pending_jump(window, cx);
+            changed = true;
         }
-        if let Some(snapshot) = self.pending_recovery.take() {
-            if let Some(doc) = self
+        if let Some(snapshot) = self.pending_recovery.take()
+            && let Some(doc) = self
                 .docs
                 .iter()
                 .find(|doc| doc.read(cx).path == snapshot.note_path)
                 .cloned()
-            {
-                let text = snapshot.text.clone();
-                doc.update(cx, |doc, cx| doc.replace_all(text, window, cx));
-                let note_path = snapshot.note_path.clone();
-                disk::enqueue(move || {
-                    let _ = mdwork_core::recovery::remove(
-                        &mdwork_core::paths::recovery_dir(),
-                        &note_path,
-                    );
-                });
-                if let Some(dialog) = self.recovery.as_mut() {
-                    dialog
-                        .entries
-                        .retain(|entry| entry.note_path != snapshot.note_path);
-                    if dialog.entries.is_empty() {
-                        self.recovery = None;
-                    }
+        {
+            let text = snapshot.text.clone();
+            doc.update(cx, |doc, cx| doc.replace_all(text, window, cx));
+            let note_path = snapshot.note_path.clone();
+            disk::enqueue(move || {
+                let _ =
+                    mdwork_core::recovery::remove(&mdwork_core::paths::recovery_dir(), &note_path);
+            });
+            if let Some(dialog) = self.recovery.as_mut() {
+                dialog
+                    .entries
+                    .retain(|entry| entry.note_path != snapshot.note_path);
+                if dialog.entries.is_empty() {
+                    self.recovery = None;
                 }
-                self.notify_success(t!("recovery.restored").to_string(), cx);
-                changed = true;
             }
+            self.notify_success(t!("recovery.restored").to_string(), cx);
+            changed = true;
         }
         if changed {
             self.reveal_active(cx);
@@ -434,11 +464,10 @@ impl AppShell {
             .notebooks
             .iter_mut()
             .find(|entry| entry.notebook.marker.id == id)
+            && !entry.root_expanded
         {
-            if !entry.root_expanded {
-                entry.root_expanded = true;
-                self.rebuild_sidebar_rows();
-            }
+            entry.root_expanded = true;
+            self.rebuild_sidebar_rows();
         }
         let preferred = self.docs.iter().position(|doc| {
             let doc = doc.read(cx);
@@ -458,20 +487,63 @@ impl AppShell {
         cx.notify();
     }
 
-    pub(super) fn close_doc(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.docs.len() {
-            return;
+    /// 把标签稳定的实体 id 解析为当前下标。监听器必须在事件发生时解析：
+    /// 关闭前面的任一标签都会让后续下标整体前移。
+    pub(super) fn doc_index(&self, id: EntityId) -> Option<usize> {
+        self.docs.iter().position(|doc| doc.entity_id() == id)
+    }
+
+    pub(super) fn activate_doc_by_id(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        if let Some(index) = self.doc_index(id) {
+            self.activate_doc(index, cx);
         }
-        let doc = self.docs[index].clone();
-        if doc.read(cx).dirty {
-            self.pending_close.insert(doc.entity_id());
-            doc.update(cx, |doc, cx| doc.save_now(cx));
-            cx.notify();
+    }
+
+    pub(super) fn close_doc(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(id) = self.docs.get(index).map(|doc| doc.entity_id()) else {
             return;
+        };
+        self.close_doc_by_id(id, cx);
+    }
+
+    /// 按稳定 id 移除标签。标签立即离开标签栏，
+    /// 即使缓冲区仍需保存；由 `closing_docs` 持有实体，
+    /// 直到保存事件到达后才释放。
+    pub(super) fn close_doc_by_id(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        if self.remove_doc_by_id(id, cx) {
+            self.after_tabs_changed(cx);
+        }
+    }
+
+    /// 返回是否真的移除了标签；批量关闭只在末尾同步一次状态。
+    pub(super) fn remove_doc_by_id(&mut self, id: EntityId, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.doc_index(id) else {
+            return false;
+        };
+        let doc = self.docs[index].clone();
+        if doc.read(cx).dirty && !self.pending_close.contains(&id) {
+            self.pending_close.insert(id);
+            self.closing_docs.insert(id, doc.clone());
+            doc.update(cx, |doc, cx| doc.save_now(cx));
         }
         self.drop_doc_at(index);
+        true
+    }
+
+    /// 标签移除后重新同步所有由 `docs` 派生的状态：
+    /// 活动标签、侧边栏高亮、会话以及标签栏滚动位置。
+    pub(super) fn after_tabs_changed(&mut self, cx: &mut Context<Self>) {
+        self.tab_drag = None;
+        let visible = self.visible_tabs(cx);
+        if let Some(active) = self.active_doc
+            && !visible.contains(&active)
+        {
+            self.active_doc = visible.last().copied();
+        }
+        self.sync_tree_selection_to_active_doc(cx);
         self.persist_session(cx);
         self.ensure_active_tab_visible(cx);
+        self.reveal_active(cx);
         cx.notify();
     }
 
@@ -565,10 +637,15 @@ impl AppShell {
         cx.notify();
     }
 
-    /// Closes several tabs at once; indices must be ascending.
-    pub(super) fn close_docs(&mut self, indices: &[usize], cx: &mut Context<Self>) {
-        for &index in indices.iter().rev() {
-            self.close_doc(index, cx);
+    /// 批量关闭标签。实体 id 在整个批次中保持有效，
+    /// 而同一渲染帧里记录的下标会失效。
+    pub(super) fn close_docs(&mut self, ids: &[EntityId], cx: &mut Context<Self>) {
+        let mut changed = false;
+        for &id in ids {
+            changed |= self.remove_doc_by_id(id, cx);
+        }
+        if changed {
+            self.after_tabs_changed(cx);
         }
     }
 
@@ -605,29 +682,34 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) {
         match event {
-            DocEvent::Saved { clean, .. } => {
+            DocEvent::Saved { clean } => {
                 if !self.pending_close.contains(&id) {
                     return;
                 }
                 if clean {
                     self.pending_close.remove(&id);
-                    if let Some(index) = self.docs.iter().position(|doc| doc.entity_id() == id) {
-                        self.drop_doc_at(index);
-                        self.persist_session(cx);
-                    }
+                    self.closing_docs.remove(&id);
                     self.try_complete_delete(cx);
-                } else if let Some(doc) =
-                    self.docs.iter().find(|doc| doc.entity_id() == id).cloned()
-                {
+                } else if let Some(doc) = self.closing_docs.get(&id).cloned() {
                     // Typed while the save was in flight; save the new text.
                     doc.update(cx, |doc, cx| doc.save_now(cx));
                 }
                 cx.notify();
             }
             DocEvent::SaveFailed { error } => {
-                self.pending_close.remove(&id);
-                self.pending_delete = None;
-                self.notify_error(format!("保存失败，未关闭：{error}"), cx);
+                if self.pending_close.remove(&id) {
+                    if let Some(doc) = self.closing_docs.remove(&id) {
+                        // 把未保存的缓冲区放回标签栏，避免内容丢失。
+                        self.docs.push(doc);
+                        self.active_doc = Some(self.docs.len() - 1);
+                        self.after_tabs_changed(cx);
+                    }
+                    self.pending_delete = None;
+                    self.notify_error(format!("保存失败，未关闭：{error}"), cx);
+                } else {
+                    self.notify_error(format!("保存失败：{error}"), cx);
+                }
+                cx.notify();
             }
         }
     }
@@ -636,10 +718,14 @@ impl AppShell {
         let Some((notebook_id, rel_path)) = self.pending_delete.clone() else {
             return;
         };
-        let still_open = self.docs.iter().any(|doc| {
-            let doc = doc.read(cx);
-            doc.notebook_id == Some(notebook_id) && path_under(&doc.rel_path, &rel_path)
-        });
+        let still_open = self
+            .docs
+            .iter()
+            .chain(self.closing_docs.values())
+            .any(|doc| {
+                let doc = doc.read(cx);
+                doc.notebook_id == Some(notebook_id) && path_under(&doc.rel_path, &rel_path)
+            });
         if still_open {
             return;
         }

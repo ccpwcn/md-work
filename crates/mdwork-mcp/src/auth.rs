@@ -167,6 +167,7 @@ fn protect(data: &[u8]) -> Result<Vec<u8>> {
         pbData: data.as_ptr() as *mut u8,
     };
     let mut output = CRYPT_INTEGER_BLOB::default();
+    // SAFETY: input 引用本函数入参切片，长度与之匹配；返回的缓冲区立即复制并用 LocalFree 释放一次。
     unsafe {
         CryptProtectData(
             &input,
@@ -189,6 +190,7 @@ fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
         pbData: data.as_ptr() as *mut u8,
     };
     let mut output = CRYPT_INTEGER_BLOB::default();
+    // SAFETY: input 引用本函数入参切片，长度与之匹配；返回的缓冲区立即复制并用 LocalFree 释放一次。
     unsafe {
         CryptUnprotectData(
             &input,

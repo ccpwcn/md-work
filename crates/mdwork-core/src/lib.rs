@@ -67,8 +67,9 @@ pub enum Error {
     #[error("invalid TOML in {path}: {source}")]
     Toml {
         path: PathBuf,
+        // TOML 解析错误体积很大，装箱后 Result 的错误分支只有指针大小。
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("cannot write TOML {path}: {source}")]

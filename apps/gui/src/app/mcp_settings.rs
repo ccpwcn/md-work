@@ -1,6 +1,9 @@
 use super::util::*;
 use super::*;
 
+/// 令牌写入线程的返回值：提示消息、新令牌明文、新建 id、最新令牌列表。
+type TokenWriteOutcome = Result<(String, Option<String>, Option<Uuid>, Vec<TokenRecord>), String>;
+
 impl AppShell {
     pub(super) fn mcp_tab_button(
         &self,
@@ -140,16 +143,14 @@ impl AppShell {
                 .child(status_text)
                 .into_any_element(),
         );
-        if !running {
-            if let Some(error) = mcp_error {
-                rows.push(
-                    div()
-                        .text_xs()
-                        .text_color(danger)
-                        .child(error)
-                        .into_any_element(),
-                );
-            }
+        if !running && let Some(error) = mcp_error {
+            rows.push(
+                div()
+                    .text_xs()
+                    .text_color(danger)
+                    .child(error)
+                    .into_any_element(),
+            );
         }
 
         let cli = self
@@ -722,12 +723,12 @@ impl AppShell {
 
     pub(super) fn set_mcp_tokens(dialog: &mut McpSettingsDialog, tokens: Vec<TokenRecord>) {
         dialog.tokens = tokens;
-        if let Some(id) = dialog.selected {
-            if !dialog.tokens.iter().any(|record| record.id == id) {
-                dialog.selected = None;
-                dialog.creating = false;
-                dialog.secret = None;
-            }
+        if let Some(id) = dialog.selected
+            && !dialog.tokens.iter().any(|record| record.id == id)
+        {
+            dialog.selected = None;
+            dialog.creating = false;
+            dialog.secret = None;
         }
         dialog.error = None;
     }
@@ -827,46 +828,42 @@ impl AppShell {
             return;
         }
 
-        let receiver = disk::submit(
-            move || -> Result<(String, Option<String>, Option<Uuid>, Vec<TokenRecord>), String> {
-                let store = token_store();
-                let mut secret = None;
-                let mut created_id = None;
-                let message = if creating {
-                    let (record, wire) = store
-                        .create(&name, scopes, notebooks, allow, deny)
-                        .map_err(|err| {
-                            t!("mcp.token_error", message = err.to_string()).to_string()
-                        })?;
-                    created_id = Some(record.id);
-                    secret = Some(wire);
-                    t!("mcp.created").to_string()
-                } else if let Some(id) = selected {
-                    let list = store.list().map_err(|err| {
-                        t!("mcp.token_error", message = err.to_string()).to_string()
-                    })?;
-                    let mut record = list
-                        .into_iter()
-                        .find(|record| record.id == id)
-                        .ok_or_else(|| t!("mcp.err.select").to_string())?;
-                    record.name = name;
-                    record.scopes = scopes;
-                    record.notebooks = notebooks;
-                    record.note_allow = allow;
-                    record.note_deny = deny;
-                    store.update(record).map_err(|err| {
-                        t!("mcp.token_error", message = err.to_string()).to_string()
-                    })?;
-                    t!("mcp.saved").to_string()
-                } else {
-                    return Err(t!("mcp.err.select").to_string());
-                };
+        let receiver = disk::submit(move || -> TokenWriteOutcome {
+            let store = token_store();
+            let mut secret = None;
+            let mut created_id = None;
+            let message = if creating {
+                let (record, wire) = store
+                    .create(&name, scopes, notebooks, allow, deny)
+                    .map_err(|err| t!("mcp.token_error", message = err.to_string()).to_string())?;
+                created_id = Some(record.id);
+                secret = Some(wire);
+                t!("mcp.created").to_string()
+            } else if let Some(id) = selected {
                 let list = store
                     .list()
                     .map_err(|err| t!("mcp.token_error", message = err.to_string()).to_string())?;
-                Ok((message, secret, created_id, list))
-            },
-        );
+                let mut record = list
+                    .into_iter()
+                    .find(|record| record.id == id)
+                    .ok_or_else(|| t!("mcp.err.select").to_string())?;
+                record.name = name;
+                record.scopes = scopes;
+                record.notebooks = notebooks;
+                record.note_allow = allow;
+                record.note_deny = deny;
+                store
+                    .update(record)
+                    .map_err(|err| t!("mcp.token_error", message = err.to_string()).to_string())?;
+                t!("mcp.saved").to_string()
+            } else {
+                return Err(t!("mcp.err.select").to_string());
+            };
+            let list = store
+                .list()
+                .map_err(|err| t!("mcp.token_error", message = err.to_string()).to_string())?;
+            Ok((message, secret, created_id, list))
+        });
 
         if let Some(dialog) = self.mcp_settings.as_mut() {
             dialog.error = None;

@@ -50,10 +50,15 @@ fn parse_icon(svg: &[u8]) -> Result<usvg::Tree> {
 fn render_icon(tree: &usvg::Tree, size: u32) -> Result<tiny_skia::Pixmap> {
     let mut pixmap = tiny_skia::Pixmap::new(size, size)
         .with_context(|| format!("allocate {size}x{size} pixmap"))?;
-    let scale = size as f32 / tree.size().width().max(tree.size().height());
+    // ICO 帧是正方形；竖版画板居中放置，两侧留白。
+    let width = tree.size().width();
+    let height = tree.size().height();
+    let scale = size as f32 / width.max(height);
+    let tx = (size as f32 - width * scale) / 2.0;
+    let ty = (size as f32 - height * scale) / 2.0;
     resvg::render(
         tree,
-        tiny_skia::Transform::from_scale(scale, scale),
+        tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, tx, ty),
         &mut pixmap.as_mut(),
     );
     Ok(pixmap)

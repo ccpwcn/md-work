@@ -52,6 +52,8 @@ pub struct Doc {
     pub dirty: bool,
     pub error: Option<String>,
     pub conflict: Option<DiskConflict>,
+    /// 编辑/预览模式属于当前标签，而不是整个窗口。
+    pub preview_mode: bool,
     pub base_hash: String,
     pub autosave: bool,
     pub registry: DirtyRegistry,
@@ -67,6 +69,10 @@ pub struct Doc {
 }
 
 impl Doc {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "文档构造参数来自打开流程，拆成结构体只会把同样的字段搬运一遍"
+    )]
     pub fn new(
         origin: DocOrigin,
         notebook_root: Option<PathBuf>,
@@ -120,6 +126,7 @@ impl Doc {
             dirty: false,
             error: None,
             conflict: None,
+            preview_mode: false,
             base_hash,
             autosave,
             registry,
@@ -524,10 +531,10 @@ impl EventEmitter<DocEvent> for Doc {}
 
 impl Drop for Doc {
     fn drop(&mut self) {
-        if self.dirty {
-            if let Some(notebook_id) = self.notebook_id {
-                self.registry.clear(notebook_id, &self.rel_path);
-            }
+        if self.dirty
+            && let Some(notebook_id) = self.notebook_id
+        {
+            self.registry.clear(notebook_id, &self.rel_path);
         }
     }
 }

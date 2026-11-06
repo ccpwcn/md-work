@@ -101,19 +101,19 @@ impl StyleSheet {
         let mut out = StyleDecls::default();
         for class in classes {
             for rule in &self.rules {
-                if let Selector::Class(name) = &rule.selector {
-                    if name == class {
-                        out.merge_from(&rule.decls);
-                    }
+                if let Selector::Class(name) = &rule.selector
+                    && name == class
+                {
+                    out.merge_from(&rule.decls);
                 }
             }
         }
         if let Some(id) = id {
             for rule in &self.rules {
-                if let Selector::Id(name) = &rule.selector {
-                    if name == id {
-                        out.merge_from(&rule.decls);
-                    }
+                if let Selector::Id(name) = &rule.selector
+                    && name == id
+                {
+                    out.merge_from(&rule.decls);
                 }
             }
         }
@@ -219,7 +219,7 @@ pub fn plain_text_from_htmlish(raw: &str) -> String {
     let mut chars = raw.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '<' {
-            while let Some(next) = chars.next() {
+            for next in chars.by_ref() {
                 if next == '>' {
                     break;
                 }
@@ -333,15 +333,15 @@ fn parse_selector(raw: &str) -> Option<Selector> {
     if raw.contains(|ch: char| ch.is_whitespace() || ch == ',' || ch == '>' || ch == '+') {
         return None;
     }
-    if let Some(name) = raw.strip_prefix('.') {
-        if is_ident(name) {
-            return Some(Selector::Class(name.to_string()));
-        }
+    if let Some(name) = raw.strip_prefix('.')
+        && is_ident(name)
+    {
+        return Some(Selector::Class(name.to_string()));
     }
-    if let Some(name) = raw.strip_prefix('#') {
-        if is_ident(name) {
-            return Some(Selector::Id(name.to_string()));
-        }
+    if let Some(name) = raw.strip_prefix('#')
+        && is_ident(name)
+    {
+        return Some(Selector::Id(name.to_string()));
     }
     None
 }

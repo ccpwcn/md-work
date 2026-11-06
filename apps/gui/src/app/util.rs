@@ -1,4 +1,28 @@
 use super::*;
+use gpui_kit::base::{Scrollbar, ScrollbarMode};
+
+/// `uniform_list` 自带滚轮滚动，但不会绘制滚动条。侧边栏面板统一通过
+/// 这个扩展方法包一层滚动区域，让列表与滚动条共享同一个滚动句柄。
+pub(super) trait PanelScrollbar: Sized {
+    fn panel_scrollbar(self, handle: &UniformListScrollHandle) -> AnyElement;
+}
+
+impl PanelScrollbar for UniformList {
+    fn panel_scrollbar(self, handle: &UniformListScrollHandle) -> AnyElement {
+        div()
+            .flex_1()
+            .min_h_0()
+            .v_flex()
+            .relative()
+            .child(self.flex_1().min_h_0().track_scroll(handle))
+            .child(
+                Scrollbar::vertical(handle)
+                    .viewport_from_layout()
+                    .mode(ScrollbarMode::Always),
+            )
+            .into_any_element()
+    }
+}
 
 /// Subsequence match with a bonus for word starts and consecutive runs.
 pub(super) fn fuzzy_score(label: &str, query: &str) -> Option<i64> {
@@ -292,13 +316,13 @@ pub(super) fn clipboard_images(item: &ClipboardItem) -> Vec<PastedImage> {
                     ImageFormat::Svg => Some(ImageKind::Svg),
                     _ => ImageKind::sniff(&image.bytes),
                 };
-                if let Some(kind) = kind {
-                    if image.bytes.len() as u64 <= image::IMAGE_MAX_BYTES {
-                        bitmaps.push(PastedImage::Bytes {
-                            bytes: image.bytes.clone(),
-                            kind,
-                        });
-                    }
+                if let Some(kind) = kind
+                    && image.bytes.len() as u64 <= image::IMAGE_MAX_BYTES
+                {
+                    bitmaps.push(PastedImage::Bytes {
+                        bytes: image.bytes.clone(),
+                        kind,
+                    });
                 }
             }
             ClipboardEntry::ExternalPaths(paths) => {
@@ -367,6 +391,10 @@ pub(super) fn store_images(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "图片插入任务需要一次性捕获文档、路径、图床与窗口上下文"
+)]
 pub(super) fn spawn_image_insert(
     shell: WeakEntity<AppShell>,
     doc: Entity<Doc>,
@@ -457,7 +485,7 @@ pub(super) fn token_store() -> TokenStore {
 }
 
 pub(super) fn split_globs(raw: &str) -> Vec<String> {
-    raw.split(|c: char| c == ',' || c == ';' || c == '\n' || c == '\r')
+    raw.split([',', ';', '\n', '\r'])
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(str::to_string)
@@ -519,6 +547,7 @@ pub(super) fn local_datetime_label(unix_secs: u64) -> String {
     };
     let mut utc = SYSTEMTIME::default();
     let mut local = SYSTEMTIME::default();
+    // SAFETY: 两个 SYSTEMTIME 输出参数都是本函数栈上的有效可变引用。
     let converted = unsafe {
         FileTimeToSystemTime(&filetime, &mut utc)
             .and_then(|()| SystemTimeToTzSpecificLocalTime(None, &utc, &mut local))

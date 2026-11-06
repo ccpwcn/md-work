@@ -9,6 +9,7 @@ pub fn alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }
+    // SAFETY: 只查询进程退出码，句柄在返回前由 CloseHandle 关闭。
     unsafe {
         let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
             return false;

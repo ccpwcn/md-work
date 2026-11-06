@@ -107,7 +107,7 @@ pub fn list(dir: &Path) -> Vec<Snapshot> {
             (snapshot.format == SNAPSHOT_FORMAT).then_some(snapshot)
         })
         .collect();
-    snapshots.sort_by(|left, right| right.saved_at.cmp(&left.saved_at));
+    snapshots.sort_by_key(|snapshot| std::cmp::Reverse(snapshot.saved_at));
     snapshots
 }
 

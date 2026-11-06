@@ -34,6 +34,7 @@ pub fn spawn_server() -> Receiver<String> {
 
 fn serve_one(tx: &mpsc::Sender<String>) -> bool {
     let name = HSTRING::from(pipe_name());
+    // SAFETY: 管道名是本地构造的 HSTRING，缓冲区上限由常量固定。
     let handle = unsafe {
         CreateNamedPipeW(
             &name,
@@ -50,10 +51,12 @@ fn serve_one(tx: &mpsc::Sender<String>) -> bool {
         return false;
     }
 
+    // SAFETY: handle 刚由 CreateNamedPipeW 返回且已校验非无效值。
     let _ = unsafe { ConnectNamedPipe(handle, None) };
 
     let mut buf = vec![0u8; MAX_PAYLOAD];
     let mut read = 0u32;
+    // SAFETY: buf 容量固定为 MAX_PAYLOAD，接收长度由 API 写入并用于切片。
     let connected = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) }.is_ok();
 
     if connected && read > 0 {
@@ -64,6 +67,7 @@ fn serve_one(tx: &mpsc::Sender<String>) -> bool {
         }
     }
 
+    // SAFETY: handle 来自本函数的 CreateNamedPipeW，断开后只关闭一次。
     unsafe {
         let _ = DisconnectNamedPipe(handle);
         let _ = CloseHandle(handle);

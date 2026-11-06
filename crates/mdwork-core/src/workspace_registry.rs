@@ -209,7 +209,7 @@ impl WorkspaceRegistry {
     /// Entries ordered by most recently opened, skipping duplicates.
     pub fn sorted(&self) -> Vec<&WorkspaceEntry> {
         let mut entries: Vec<&WorkspaceEntry> = self.workspaces.iter().collect();
-        entries.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_opened));
         entries
     }
 }

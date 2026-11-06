@@ -1,6 +1,13 @@
 use super::util::*;
 use super::*;
 
+/// 重新载入任务：标签 id、路径及磁盘读取结果。
+type ReloadedDoc = (
+    EntityId,
+    PathBuf,
+    std::io::Result<(mdwork_core::doc::DecodedDoc, String)>,
+);
+
 impl AppShell {
     pub(super) fn open_zip_export(
         &mut self,
@@ -659,11 +666,7 @@ impl AppShell {
 
     pub(super) fn apply_reloaded_docs(
         &mut self,
-        reads: Vec<(
-            EntityId,
-            PathBuf,
-            std::io::Result<(mdwork_core::doc::DecodedDoc, String)>,
-        )>,
+        reads: Vec<ReloadedDoc>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

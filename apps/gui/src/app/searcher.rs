@@ -3,7 +3,7 @@ use super::*;
 impl AppShell {
     pub(super) fn refresh_outline(&mut self, cx: &mut Context<Self>) {
         let Some(doc) = self.active_doc_entity().cloned() else {
-            self.outline.clear();
+            self.outline = Arc::default();
             self.outline_cache = None;
             return;
         };
@@ -21,7 +21,7 @@ impl AppShell {
                 PreviewIr::from_markdown(&text)
             }
         };
-        self.outline = ir.outline();
+        self.outline = Arc::new(ir.outline());
         self.outline_cache = Some((id, revision));
     }
 

@@ -29,7 +29,7 @@ use mdwork_core::notebook::{Entry, EntryKind, Notebook, TrashItem};
 use mdwork_core::order::{self, TreeOrder, file_name, parent_rel, sibling_rank};
 use mdwork_core::permissions::{self as perms, Scope, TokenRecord};
 use mdwork_core::search::{self, SearchHit, SearchQuery};
-use mdwork_core::text::text_stats;
+use mdwork_core::text::{TextStats, text_stats};
 use mdwork_core::workspace_registry::WorkspaceRegistry;
 use mdwork_core::{FolderKind, Workspace};
 use mdwork_export::{
@@ -59,6 +59,7 @@ mod prompt;
 mod render;
 mod searcher;
 mod settings;
+mod sidebar_tree;
 mod toolbar;
 mod tree_drag;
 mod util;
@@ -71,6 +72,9 @@ pub(crate) use window_place::restore_window;
 
 const PANEL_MIN_WIDTH: f32 = 240.0;
 const PANEL_MAX_WIDTH: f32 = 560.0;
+
+/// 行/标签下标及其最近一次绘制区域，供拖拽命中测试使用。
+type PaintedBounds = Arc<Mutex<Vec<(usize, Bounds<Pixels>)>>>;
 
 const WELCOME_NOTE: &str = r#"# 欢迎使用墨笺
 
@@ -395,11 +399,21 @@ struct MovePickerDialog {
     error: Option<String>,
 }
 
-/// App-internal clipboard for tree copy/paste (not the OS clipboard).
+/// 笔记树剪贴板的操作类型。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClipboardAction {
+    /// 粘贴时复制源条目。
+    Copy,
+    /// 粘贴时移动源条目，并清空剪贴板。
+    Cut,
+}
+
+/// 笔记树复制、剪切与粘贴用的应用内剪贴板，不是系统剪贴板。
 #[derive(Clone)]
 struct TreeClipboard {
     notebook_id: Uuid,
     rel_path: String,
+    action: ClipboardAction,
 }
 
 struct RecoveryDialog {
@@ -415,7 +429,7 @@ struct WorkspaceConfirm {
 
 enum DeleteConfirmKind {
     Trash { notebook_id: Uuid, rel_path: String },
-    CloseExternal { index: usize },
+    CloseExternal { id: EntityId },
 }
 
 struct DeleteConfirm {
@@ -539,20 +553,29 @@ pub struct AppShell {
     changed: Option<Arc<Mutex<Receiver<Vec<PathBuf>>>>>,
     window_handle: gpui_kit::AnyWindowHandle,
     tree_scroll: UniformListScrollHandle,
+    outline_scroll: UniformListScrollHandle,
+    search_scroll: UniformListScrollHandle,
+    bookmark_scroll: UniformListScrollHandle,
+    trash_scroll: UniformListScrollHandle,
     tree_drag: Option<tree_drag::TreeDrag>,
     /// Sidebar row indexes and their latest painted bounds, for drag hit-testing.
-    tree_bounds: Arc<Mutex<Vec<(usize, Bounds<Pixels>)>>>,
+    tree_bounds: PaintedBounds,
     /// A finished drag must not also activate the row under the pointer.
     tree_click_suppressed: bool,
+    /// 记录一次箭头切换的 `(笔记本 id、文件夹相对路径、时间)`，
+    /// 避免同一次手势随后的行点击把展开状态立刻翻回去。
+    tree_toggle_guard: Option<(Uuid, Option<String>, Instant)>,
     tab_scroll: ScrollHandle,
     tab_drag: Option<TabDrag>,
     /// Doc indices and their latest painted bounds for tab hit-testing.
-    tab_bounds: Arc<Mutex<Vec<(usize, Bounds<Pixels>)>>>,
+    tab_bounds: PaintedBounds,
     delete_confirm: Option<DeleteConfirm>,
     /// Briefly highlight this notebook entry after reveal/scroll.
     flash_rel: Option<(Uuid, String)>,
-    preview_mode: bool,
     preview_cache: Option<PreviewCache>,
+    /// 状态栏全文统计的缓存，键为 `(文档实体、文本修订号)`。
+    /// 预览时每次窗口重绘都会执行 `AppShell::render`，避免重复扫描全文。
+    status_stats: Option<(EntityId, u64, TextStats)>,
     math: HashMap<u64, Option<PathBuf>>,
     math_pending: HashSet<u64>,
     image_paths: HashMap<u64, Option<preview::PreviewImage>>,
@@ -564,7 +587,9 @@ pub struct AppShell {
     right_panel: SidePanel,
     /// (dock being dragged, mouse x at drag start, that dock's width at drag start)
     panel_resize: Option<(PanelDock, f32, f32)>,
-    outline: Vec<OutlineItem>,
+    /// 大纲用 `Arc` 持有：面板每次窗口重绘只需克隆指针，
+    /// 不必复制全部标题。
+    outline: Arc<Vec<OutlineItem>>,
     outline_cache: Option<(EntityId, u64)>,
     bookmarks: Bookmarks,
     bookmarks_notebook: Option<Uuid>,
@@ -613,6 +638,10 @@ pub struct AppShell {
     window_save_generation: u64,
     opening: HashSet<PathBuf>,
     pending_close: HashSet<EntityId>,
+    /// 已从标签栏移除、但最后一次保存仍在进行中的标签页。
+    /// 持有实体句柄，保证 `DocEvent` 订阅触发前实体不被释放，
+    /// 也让 `try_complete_delete` 仍把它们视为「打开中」。
+    closing_docs: HashMap<EntityId, Entity<Doc>>,
     pending_delete: Option<(Uuid, String)>,
     pending_jump: Option<(PathBuf, u32)>,
     pending_recovery: Option<mdwork_core::recovery::Snapshot>,
@@ -652,10 +681,10 @@ impl Startup {
     pub fn load() -> Self {
         let config_existed = mdwork_core::paths::config_path().is_file();
         let mut config = AppConfig::load_or_default();
-        if config.workspace_root.trim().is_empty() {
-            if let Some(root) = crate::install_hint::first_run_workspace() {
-                config.workspace_root = root;
-            }
+        if config.workspace_root.trim().is_empty()
+            && let Some(root) = crate::install_hint::first_run_workspace()
+        {
+            config.workspace_root = root;
         }
         config.panel_width = if config.panel_width.is_finite() {
             config.panel_width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
@@ -757,6 +786,26 @@ enum DiskRead {
 }
 
 impl AppShell {
+    /// 编辑/预览模式保存在每个 `Doc` 上，切换标签页时
+    /// 模式随标签一起切换，而不是共用一个窗口级标志。
+    pub(super) fn is_preview_mode(&self, cx: &App) -> bool {
+        self.active_doc_entity()
+            .is_some_and(|doc| doc.read(cx).preview_mode)
+    }
+
+    /// 箭头的鼠标按下与行点击属于同一次指针手势，
+    /// 记录本次切换，避免行点击立刻把它撤销。
+    fn mark_tree_toggle(&mut self, notebook_id: Uuid, folder: Option<&str>) {
+        self.tree_toggle_guard = Some((notebook_id, folder.map(str::to_string), Instant::now()));
+    }
+
+    fn take_tree_toggle(&mut self, notebook_id: Uuid, folder: Option<&str>) -> bool {
+        let Some((id, rel, at)) = self.tree_toggle_guard.take() else {
+            return false;
+        };
+        id == notebook_id && rel.as_deref() == folder && at.elapsed() < Duration::from_millis(500)
+    }
+
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -814,16 +863,21 @@ impl AppShell {
             changed: None,
             window_handle: window.window_handle(),
             tree_scroll: UniformListScrollHandle::new(),
+            outline_scroll: UniformListScrollHandle::new(),
+            search_scroll: UniformListScrollHandle::new(),
+            bookmark_scroll: UniformListScrollHandle::new(),
+            trash_scroll: UniformListScrollHandle::new(),
             tree_drag: None,
             tree_bounds: Arc::new(Mutex::new(Vec::new())),
             tree_click_suppressed: false,
+            tree_toggle_guard: None,
             tab_scroll: ScrollHandle::new(),
             tab_drag: None,
             tab_bounds: Arc::new(Mutex::new(Vec::new())),
             delete_confirm: None,
             flash_rel: None,
-            preview_mode: false,
             preview_cache: None,
+            status_stats: None,
             math: HashMap::new(),
             math_pending: HashSet::new(),
             image_paths: HashMap::new(),
@@ -832,7 +886,7 @@ impl AppShell {
             left_panel: SidePanel::Notes,
             right_panel: SidePanel::Notes,
             panel_resize: None,
-            outline: Vec::new(),
+            outline: Arc::default(),
             outline_cache: None,
             bookmarks: Bookmarks::default(),
             bookmarks_notebook: None,
@@ -876,6 +930,7 @@ impl AppShell {
             window_save_generation: 0,
             opening: HashSet::new(),
             pending_close: HashSet::new(),
+            closing_docs: HashMap::new(),
             pending_delete: None,
             pending_jump: None,
             pending_recovery: None,
@@ -1053,7 +1108,7 @@ impl Render for AppShell {
                 this.wrap_selection("[", "]()", window, cx)
             }))
             .on_action(cx.listener(|this, _: &crate::PastePlain, window, cx| {
-                if this.palette.is_some() || this.prompt.is_some() || this.preview_mode {
+                if this.palette.is_some() || this.prompt.is_some() || this.is_preview_mode(cx) {
                     return;
                 }
                 let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {

@@ -87,72 +87,69 @@ impl AppShell {
         let handle = self.window_handle;
         cx.spawn(async move |this, cx| {
             let task_root = root.clone();
-            let initial =
-                cx.background_executor()
-                    .spawn(async move {
-                        let mut failures = Vec::new();
-                        let workspace = match Workspace::open(&task_root) {
-                            Ok(workspace) => {
-                                if !root_exists {
-                                    if let Err(err) = seed_workspace(&workspace) {
-                                        failures.push((
-                                            NoticeKind::Error,
-                                            format!("初始化工作区失败：{err}"),
-                                        ));
-                                    }
-                                }
-                                Some(workspace)
+            let initial = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut failures = Vec::new();
+                    let workspace = match Workspace::open(&task_root) {
+                        Ok(workspace) => {
+                            if !root_exists && let Err(err) = seed_workspace(&workspace) {
+                                failures
+                                    .push((NoticeKind::Error, format!("初始化工作区失败：{err}")));
+                            }
+                            Some(workspace)
+                        }
+                        Err(err) => {
+                            failures.push((
+                                NoticeKind::Error,
+                                format!("无法打开工作区 {}：{err}", task_root.display()),
+                            ));
+                            None
+                        }
+                    };
+                    let mut entries = Vec::new();
+                    let mut issues = Vec::new();
+                    if let Some(workspace) = &workspace {
+                        match workspace.refresh() {
+                            Ok(scan) => {
+                                issues = scan
+                                    .issues
+                                    .iter()
+                                    .map(|issue| {
+                                        tracing::warn!(
+                                            path = %issue.path.display(),
+                                            kind = ?issue.kind,
+                                            message = %issue.message,
+                                            "扫描工作区发现问题"
+                                        );
+                                        format!("{}：{}", issue.path.display(), issue.message)
+                                    })
+                                    .collect();
+                                entries = scan
+                                    .notebooks
+                                    .into_iter()
+                                    .map(|notebook| {
+                                        load_notebook_entry(notebook, HashSet::new(), false)
+                                    })
+                                    .collect();
                             }
                             Err(err) => {
-                                failures.push((
-                                    NoticeKind::Error,
-                                    format!("无法打开工作区 {}：{err}", task_root.display()),
-                                ));
-                                None
-                            }
-                        };
-                        let mut entries = Vec::new();
-                        let mut issues = Vec::new();
-                        if let Some(workspace) = &workspace {
-                            match workspace.refresh() {
-                                Ok(scan) => {
-                                    issues = scan
-                                        .issues
-                                        .iter()
-                                        .map(|issue| {
-                                            tracing::warn!(
-                                                path = %issue.path.display(),
-                                                kind = ?issue.kind,
-                                                message = %issue.message,
-                                                "扫描工作区发现问题"
-                                            );
-                                            format!("{}：{}", issue.path.display(), issue.message)
-                                        })
-                                        .collect();
-                                    entries = scan
-                                        .notebooks
-                                        .into_iter()
-                                        .map(|notebook| {
-                                            load_notebook_entry(notebook, HashSet::new(), false)
-                                        })
-                                        .collect();
-                                }
-                                Err(err) => failures
-                                    .push((NoticeKind::Error, format!("扫描工作区失败：{err}"))),
+                                failures.push((NoticeKind::Error, format!("扫描工作区失败：{err}")))
                             }
                         }
-                        let snapshots =
-                            mdwork_core::recovery::list(&mdwork_core::paths::recovery_dir());
-                        Initialized {
-                            root: task_root,
-                            workspace,
-                            failures,
-                            entries,
-                            issues,
-                            snapshots,
-                        }
-                    })
-                    .await;
+                    }
+                    let snapshots =
+                        mdwork_core::recovery::list(&mdwork_core::paths::recovery_dir());
+                    Initialized {
+                        root: task_root,
+                        workspace,
+                        failures,
+                        entries,
+                        issues,
+                        snapshots,
+                    }
+                })
+                .await;
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.finish_initialization(initial, window, cx)
@@ -221,10 +218,10 @@ impl AppShell {
         for path in deferred {
             self.open_path(&path, window, cx);
         }
-        if self.docs.is_empty() {
-            if let Some((id, rel_path)) = self.pending_welcome.take() {
-                self.open_note_by_id(id, &rel_path, window, cx);
-            }
+        if self.docs.is_empty()
+            && let Some((id, rel_path)) = self.pending_welcome.take()
+        {
+            self.open_note_by_id(id, &rel_path, window, cx);
         }
         self.pending_welcome = None;
         self.startup_first_run = false;
@@ -256,16 +253,22 @@ impl AppShell {
                     .await;
                 tick = tick.wrapping_add(1);
                 let _ = this.update(cx, |this, cx| {
-                    let sig = this.active_doc_entity().map(|doc| {
-                        let range = doc.read(cx).editor.read(cx).selected_range();
-                        (range.start, range.end)
-                    });
+                    // 预览模式下编辑器没有挂载，读取它的选区没有意义；
+                    // 选区抖动还会让整棵预览元素树以 4Hz 反复重绘。
+                    let sig = if this.is_preview_mode(cx) {
+                        None
+                    } else {
+                        this.active_doc_entity().map(|doc| {
+                            let range = doc.read(cx).editor.read(cx).selected_range();
+                            (range.start, range.end)
+                        })
+                    };
                     if sig != this.selection_sig {
                         this.selection_sig = sig;
                         cx.notify();
                     }
                 });
-                if tick % 8 == 0 {
+                if tick.is_multiple_of(8) {
                     let _ = this.update(cx, |this, cx| {
                         let live = this.mcp.running();
                         if live != this.mcp_live {
@@ -378,17 +381,19 @@ impl AppShell {
                 }
                 match result {
                     Ok((entries, issues)) => {
+                        // 上面的 `previous` 已经带上了展开状态，
+                        // 后台刷新时不要再强制展开当前笔记本，
+                        // 用户可能刚刚手动收起了它。
+                        let active_kept = this.active_notebook.is_some_and(|id| {
+                            entries.iter().any(|entry| entry.notebook.marker.id == id)
+                        });
                         this.scan_issues = issues;
                         this.notebooks = entries;
-                        if !this
-                            .notebooks
-                            .iter()
-                            .any(|entry| Some(entry.notebook.marker.id) == this.active_notebook)
-                        {
+                        if !active_kept {
                             this.active_notebook =
                                 this.notebooks.first().map(|entry| entry.notebook.marker.id);
+                            this.ensure_active_root_expanded();
                         }
-                        this.ensure_active_root_expanded();
                         this.rebuild_sidebar_rows();
                     }
                     Err(err) => this.notify_error(format!("扫描工作区失败：{err}"), cx),
@@ -572,7 +577,9 @@ impl AppShell {
                 self.reload_entries(cx);
             }
         }
-        cx.notify();
+        // 磁盘读取、树刷新与打开文件的各自任务完成后都会单独
+        // `cx.notify()`；这里不再无条件重绘整个窗口，避免文件
+        // 监视的无关事件让大文档预览反复重建元素树。
     }
 
     pub(super) fn reload_doc(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -685,23 +692,21 @@ impl AppShell {
         for (request, path, decoded, hash) in loaded {
             self.insert_doc(request, path, decoded, hash, window, cx);
         }
-        if let Some(id) = session.active_notebook {
-            if self
+        if let Some(id) = session.active_notebook
+            && self
                 .notebooks
                 .iter()
                 .any(|entry| entry.notebook.marker.id == id)
-            {
-                self.active_notebook = Some(id);
-            }
+        {
+            self.active_notebook = Some(id);
         }
         self.ensure_active_root_expanded();
         self.rebuild_sidebar_rows();
-        if let Some(id) = self.active_notebook {
-            if let Some(saved) = session.notebook(&id) {
-                if let Some(active) = &saved.active_note {
-                    self.activate_note(&id, active, cx);
-                }
-            }
+        if let Some(id) = self.active_notebook
+            && let Some(saved) = session.notebook(&id)
+            && let Some(active) = &saved.active_note
+        {
+            self.activate_note(&id, active, cx);
         }
         if let Some(path) = &session.active_external {
             let path = PathBuf::from(path);
@@ -714,10 +719,10 @@ impl AppShell {
         } else if let Some(id) = session.active_notebook {
             // Opening external notes above makes the last one active; put the
             // focus back on the notebook note that was active at shutdown.
-            if let Some(saved) = session.notebook(&id) {
-                if let Some(active) = &saved.active_note {
-                    self.activate_note(&id, active, cx);
-                }
+            if let Some(saved) = session.notebook(&id)
+                && let Some(active) = &saved.active_note
+            {
+                self.activate_note(&id, active, cx);
             }
         }
         self.restore_cursor(&saved_cursors, window, cx);
@@ -758,8 +763,10 @@ impl AppShell {
     }
 
     pub(super) fn persist_session(&mut self, cx: &App) {
-        let mut session = Session::default();
-        session.active_notebook = self.active_notebook;
+        let mut session = Session {
+            active_notebook: self.active_notebook,
+            ..Default::default()
+        };
 
         for entry in &self.notebooks {
             let id = entry.notebook.marker.id;
@@ -777,12 +784,12 @@ impl AppShell {
                         .insert(doc.rel_path.clone(), CursorPos { line, column });
                 }
             }
-            if let Some(index) = self.active_doc {
-                if let Some(doc) = self.docs.get(index) {
-                    let doc = doc.read(cx);
-                    if doc.notebook_id == Some(id) {
-                        saved.active_note = Some(doc.rel_path.clone());
-                    }
+            if let Some(index) = self.active_doc
+                && let Some(doc) = self.docs.get(index)
+            {
+                let doc = doc.read(cx);
+                if doc.notebook_id == Some(id) {
+                    saved.active_note = Some(doc.rel_path.clone());
                 }
             }
             session.notebooks.push(saved);
@@ -799,12 +806,12 @@ impl AppShell {
                 session.external_notes.push(path);
             }
         }
-        if let Some(index) = self.active_doc {
-            if let Some(doc) = self.docs.get(index) {
-                let doc = doc.read(cx);
-                if doc.notebook_id.is_none() {
-                    session.active_external = Some(doc.path.display().to_string());
-                }
+        if let Some(index) = self.active_doc
+            && let Some(doc) = self.docs.get(index)
+        {
+            let doc = doc.read(cx);
+            if doc.notebook_id.is_none() {
+                session.active_external = Some(doc.path.display().to_string());
             }
         }
 

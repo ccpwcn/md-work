@@ -854,8 +854,8 @@ fn merge_encoding(target_root: &Path, staged_notebook: &Path) -> Result<()> {
     let mut merged = crate::notebook::load_encoding_map(target_root);
     let mut changed = false;
     for (key, value) in incoming {
-        if !merged.contains_key(&key) {
-            merged.insert(key, value);
+        if let std::collections::btree_map::Entry::Vacant(slot) = merged.entry(key) {
+            slot.insert(value);
             changed = true;
         }
     }
@@ -1505,7 +1505,7 @@ mod tests {
             let manifest = manifest_for(&files, &marker);
             let zip_path = root.join(format!("bad-{}.zip", Uuid::new_v4()));
             write_test_zip(&zip_path, &files, Some(&manifest));
-            let err = inspect(&zip_path).err().expect(bad);
+            let err = inspect(&zip_path).expect_err(bad);
             assert!(matches!(err, Error::InvalidArchive(_)), "{bad}: {err:?}");
         }
 

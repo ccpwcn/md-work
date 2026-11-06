@@ -8,10 +8,11 @@ impl AppShell {
         let index = self.active_doc?;
         let doc = self.docs.get(index)?.clone();
         let is_external = doc.read(cx).notebook_id.is_none();
-        let editing = !self.preview_mode;
+        let preview = self.is_preview_mode(cx);
+        let editing = !preview;
         let border = cx.theme().border;
         let shell = cx.entity();
-        let mode_tip = if self.preview_mode {
+        let mode_tip = if preview {
             t!("preview.edit").to_string()
         } else {
             t!("preview.show").to_string()
@@ -29,7 +30,7 @@ impl AppShell {
             Button::new("tb-toggle-preview")
                 .ghost()
                 .compact()
-                .icon(if self.preview_mode {
+                .icon(if preview {
                     IconName::SquarePen
                 } else {
                     IconName::Eye
@@ -37,7 +38,7 @@ impl AppShell {
                 .tooltip(format!("{mode_tip} (Ctrl+T)"))
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_preview(window, cx))),
         );
-        if self.preview_mode {
+        if preview {
             let wrap_label = if self.config.code_wrap {
                 t!("preview.wrap").to_string()
             } else {
@@ -341,7 +342,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.preview_mode {
+        if self.is_preview_mode(cx) {
             return;
         }
         let Some(doc) = self.active_doc_entity().cloned() else {
@@ -354,7 +355,7 @@ impl AppShell {
     }
 
     pub(super) fn open_doc_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.preview_mode {
+        if self.is_preview_mode(cx) {
             return;
         }
         let Some(doc) = self.active_doc_entity().cloned() else {
@@ -371,7 +372,7 @@ impl AppShell {
     }
 
     pub(super) fn pick_and_insert_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.preview_mode {
+        if self.is_preview_mode(cx) {
             return;
         }
         let Some(doc) = self.active_doc_entity().cloned() else {
@@ -427,7 +428,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.preview_mode {
+        if self.is_preview_mode(cx) {
             return;
         }
         let Some(doc) = self.active_doc_entity().cloned() else {
@@ -479,7 +480,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.preview_mode {
+        if self.is_preview_mode(cx) {
             return;
         }
         let Some(doc) = self.active_doc_entity().cloned() else {
@@ -541,7 +542,9 @@ impl AppShell {
         };
         let Some(notebook_id) = notebook_id else {
             self.delete_confirm = Some(DeleteConfirm {
-                kind: DeleteConfirmKind::CloseExternal { index },
+                kind: DeleteConfirmKind::CloseExternal {
+                    id: doc.entity_id(),
+                },
                 title,
             });
             cx.notify();
@@ -566,7 +569,7 @@ impl AppShell {
                 notebook_id,
                 rel_path,
             } => self.delete_entry(notebook_id, rel_path, cx),
-            DeleteConfirmKind::CloseExternal { index } => self.close_doc(index, cx),
+            DeleteConfirmKind::CloseExternal { id } => self.close_doc_by_id(id, cx),
         }
         cx.notify();
     }

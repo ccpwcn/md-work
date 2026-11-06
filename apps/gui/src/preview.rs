@@ -1,10 +1,12 @@
 //! Renders a [`PreviewIr`] with native GPUI elements.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::ActiveTheme;
@@ -31,6 +33,12 @@ struct InlineStyle {
     code_foreground: Hsla,
     family: SharedString,
     size: f32,
+    /// 本次渲染共享的阅读顺序，用作每个文本片段的稳定
+    /// 元素 id 与文档顺序；纯文本单元测试中为 `None`。
+    order: Option<Rc<Cell<u64>>>,
+    /// 本次渲染共享的选区帧数据；纯文本单元测试中为 `None`。
+    selection: Option<crate::preview_selection::SharedPreviewSelection>,
+    selection_color: Hsla,
 }
 
 /// Resolved preview image: on-disk path plus natural pixel size (for layout).
@@ -52,6 +60,10 @@ struct RenderCtx<'a> {
     body_size: f32,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "预览渲染需要显式传入主题、图片、字体等彼此独立的参数"
+)]
 pub fn render(
     ir: &PreviewIr,
     base: Option<&Path>,
@@ -73,6 +85,7 @@ pub fn render(
     } else {
         SharedString::from(note_font.trim().to_string())
     };
+    let frame = crate::preview_selection::new_frame_selection();
     let context = RenderCtx {
         base,
         style: InlineStyle {
@@ -83,6 +96,9 @@ pub fn render(
             code_foreground: theme.foreground,
             family: family.clone(),
             size: body_size,
+            order: Some(Rc::new(Cell::new(0))),
+            selection: Some(frame.clone()),
+            selection_color: theme.selection,
         },
         border: theme.border,
         styles: &ir.styles,
@@ -117,6 +133,9 @@ pub fn render(
         .id("preview-scroll")
         .size_full()
         .overflow_y_scroll()
+        // 整篇预览只挂载一个选区代理，且必须是第一个子元素：
+        // 它的 prepaint/paint 都要先于各文本片段执行。
+        .child(crate::preview_selection::SelectionProxy::new(frame))
         .child(column)
         .into_any_element()
 }
@@ -144,10 +163,7 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
                 .w_full()
                 .pt(px(2.))
                 .line_height(relative(1.2))
-                .child(
-                    StyledText::new(text.text)
-                        .with_default_highlights(&text.style, text.highlights),
-                )
+                .child(selectable_styled_text(text, &heading_style))
                 .into_any_element()
         }
         Block::Paragraph { content, .. } => render_paragraph(content, context),
@@ -185,15 +201,23 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
             }
             block = block.child(header);
 
-            let mut text_style = TextStyle::default();
-            text_style.color = theme.foreground;
-            text_style.font_family = SharedString::from(CODE_FAMILY);
-            text_style.font_size = px((context.body_size - 2.0).max(10.0)).into();
+            let text_style = TextStyle {
+                color: theme.foreground,
+                font_family: SharedString::from(CODE_FAMILY),
+                font_size: px((context.body_size - 2.0).max(10.0)).into(),
+                ..Default::default()
+            };
             let spans =
                 crate::highlight::code_spans(language.as_deref(), &code_text, theme.is_dark());
             let spans = flatten_highlights(&code_text, spans.as_ref().clone());
-            let styled =
-                StyledText::new(code_text.clone()).with_default_highlights(&text_style, spans);
+            let styled = selectable_styled_text(
+                StyledContent {
+                    text: code_text.clone(),
+                    style: text_style,
+                    highlights: spans,
+                },
+                style,
+            );
             let body: AnyElement = if context.wrap_code {
                 div()
                     .id(code_block_id(&code_text, true))
@@ -674,9 +698,29 @@ fn rgb_to_hsla(color: RgbColor) -> Hsla {
 
 fn styled_text(inlines: &[Inline], style: &InlineStyle) -> AnyElement {
     let text = styled_inlines(inlines, style, FontWeight::NORMAL);
-    StyledText::new(text.text)
-        .with_default_highlights(&text.style, text.highlights)
-        .into_any_element()
+    selectable_styled_text(text, style)
+}
+
+/// 把富文本片段挂到整篇预览共用的选区帧上，使预览文本
+/// 可以被拖选、高亮并 Ctrl+C 复制。`document_order` 保证
+/// 复制顺序稳定；片段本身不再注册窗口选区参与者。
+fn selectable_styled_text(text: StyledContent, style: &InlineStyle) -> AnyElement {
+    let styled =
+        StyledText::new(text.text.clone()).with_default_highlights(&text.style, text.highlights);
+    let Some((counter, frame)) = style.order.as_ref().zip(style.selection.as_ref()) else {
+        return styled.into_any_element();
+    };
+    let order = counter.get();
+    counter.set(order.saturating_add(1));
+    crate::preview_selection::SelectableStyledText::new(
+        ElementId::Name(format!("preview-text-{order}").into()),
+        text.text,
+        styled,
+        order,
+        style.selection_color,
+        frame.clone(),
+    )
+    .into_any_element()
 }
 
 fn render_list(
@@ -777,9 +821,13 @@ fn table_row(
             FontWeight::NORMAL
         };
         let text = styled_inlines(cell, style, weight);
-        let mut cell_div = div().flex_1().min_w_0().px_2().py_1().text_sm().child(
-            StyledText::new(text.text).with_default_highlights(&text.style, text.highlights),
-        );
+        let mut cell_div = div()
+            .flex_1()
+            .min_w_0()
+            .px_2()
+            .py_1()
+            .text_sm()
+            .child(selectable_styled_text(text, style));
         cell_div = match align {
             Align::Center => cell_div.text_center(),
             Align::Right => cell_div.text_right(),
@@ -815,12 +863,14 @@ fn styled_inlines(inlines: &[Inline], style: &InlineStyle, weight: FontWeight) -
     let mut highlights = Vec::new();
     append_inlines(inlines, style, 0, &mut text, &mut highlights);
 
-    let mut text_style = TextStyle::default();
-    text_style.color = style.foreground;
-    text_style.font_family = style.family.clone();
-    text_style.font_size = px(style.size).into();
-    text_style.line_height = relative(1.35).into();
-    text_style.font_weight = weight;
+    let text_style = TextStyle {
+        color: style.foreground,
+        font_family: style.family.clone(),
+        font_size: px(style.size).into(),
+        line_height: relative(1.35),
+        font_weight: weight,
+        ..Default::default()
+    };
     // Nested inlines (bold+code, link+emphasis, …) emit overlapping ranges;
     // GPUI's StyledText::with_default_highlights requires a non-overlapping
     // partition of the text or it panics with "invalid text run".
@@ -1048,6 +1098,9 @@ fn clone_style(style: &InlineStyle) -> InlineStyle {
         code_foreground: style.code_foreground,
         family: style.family.clone(),
         size: style.size,
+        order: style.order.clone(),
+        selection: style.selection.clone(),
+        selection_color: style.selection_color,
     }
 }
 
@@ -1272,6 +1325,9 @@ mod tests {
             code_foreground: gpui_kit::rgb(0x111111).into(),
             family: SharedString::from("sans"),
             size: 16.0,
+            order: None,
+            selection: None,
+            selection_color: gpui_kit::transparent_black(),
         }
     }
 

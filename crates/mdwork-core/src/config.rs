@@ -682,22 +682,20 @@ impl AppConfig {
     ) -> Result<Self> {
         let all_missing = !core.is_file() && !runtime.is_file() && !theme.is_file();
         let mut config = Self::default();
-        if all_missing {
-            if let Some(legacy) = legacy.filter(|path| path.is_file()) {
-                match Self::read_legacy(legacy) {
-                    Ok(mut loaded) => {
-                        if loaded.panel_docks == PanelDocks::default() {
-                            loaded.panel_docks = PanelDocks::uniform(loaded.panel_dock);
-                        }
-                        config = loaded;
+        if all_missing && let Some(legacy) = legacy.filter(|path| path.is_file()) {
+            match Self::read_legacy(legacy) {
+                Ok(mut loaded) => {
+                    if loaded.panel_docks == PanelDocks::default() {
+                        loaded.panel_docks = PanelDocks::uniform(loaded.panel_dock);
                     }
-                    Err(err) => {
-                        tracing::warn!(
-                            path = %legacy.display(),
-                            error = %err,
-                            "旧版配置读取失败，使用默认值"
-                        );
-                    }
+                    config = loaded;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        path = %legacy.display(),
+                        error = %err,
+                        "旧版配置读取失败，使用默认值"
+                    );
                 }
             }
         }
@@ -828,12 +826,12 @@ impl AppConfig {
             }
             None => config.panel_docks = PanelDocks::uniform(config.panel_dock),
         }
-        if let Some(images) = loader.table(&root, "images") {
-            if let Some(value) = images.get("host") {
-                match value.clone().try_into::<ImageHost>() {
-                    Ok(host) => config.image_host = host,
-                    Err(err) => loader.issue("images.host", format!("图床配置无效：{err}")),
-                }
+        if let Some(images) = loader.table(&root, "images")
+            && let Some(value) = images.get("host")
+        {
+            match value.clone().try_into::<ImageHost>() {
+                Ok(host) => config.image_host = host,
+                Err(err) => loader.issue("images.host", format!("图床配置无效：{err}")),
             }
         }
         if let Some(crash) = loader.table(&root, "crash_report") {
@@ -1465,8 +1463,10 @@ mod tests {
     fn config_round_trip() {
         let dir = temp_dir();
         let path = dir.join("runtime.toml");
-        let mut config = AppConfig::default();
-        config.language = "en".to_string();
+        let mut config = AppConfig {
+            language: "en".to_string(),
+            ..Default::default()
+        };
         config.theme = ThemePreference::Dark;
         config.set_workspace_root(Path::new(r"D:\notes"));
         config.set_panel_dock(PanelKind::Outline, PanelDock::Right);
@@ -1482,8 +1482,10 @@ mod tests {
     #[test]
     fn three_files_are_written_with_headers() {
         let dir = temp_dir();
-        let mut config = AppConfig::default();
-        config.workspace_root = r"D:\work".to_string();
+        let config = AppConfig {
+            workspace_root: r"D:\work".to_string(),
+            ..Default::default()
+        };
         config.save_to(&dir.join("runtime.toml")).unwrap();
         let core = fs::read_to_string(dir.join("core.toml")).unwrap();
         let runtime = fs::read_to_string(dir.join("runtime.toml")).unwrap();
@@ -1502,8 +1504,10 @@ mod tests {
     fn window_placement_round_trip() {
         let dir = temp_dir();
         let path = dir.join("runtime.toml");
-        let mut config = AppConfig::default();
-        config.window = WindowPlacement::new(WindowMode::Maximized, 120.4, 80.6, 1280.0, 800.0);
+        let config = AppConfig {
+            window: WindowPlacement::new(WindowMode::Maximized, 120.4, 80.6, 1280.0, 800.0),
+            ..Default::default()
+        };
         config.save_to(&path).unwrap();
         let loaded = AppConfig::load_from(&path).unwrap();
         assert_eq!(
@@ -1546,8 +1550,10 @@ mod tests {
     fn uniform_docks_use_shared_key_and_per_panel_uses_keys() {
         let dir = temp_dir();
         let path = dir.join("runtime.toml");
-        let mut config = AppConfig::default();
-        config.panel_docks = PanelDocks::uniform(PanelDock::Right);
+        let mut config = AppConfig {
+            panel_docks: PanelDocks::uniform(PanelDock::Right),
+            ..Default::default()
+        };
         config.save_to(&path).unwrap();
         let runtime = fs::read_to_string(&path).unwrap();
         assert!(runtime.contains("dock = \"right\""));
@@ -1632,12 +1638,14 @@ mod tests {
     fn image_host_round_trip() {
         let dir = temp_dir();
         let path = dir.join("runtime.toml");
-        let mut config = AppConfig::default();
-        config.image_host = ImageHost::Http {
-            endpoint: "https://img.example.com/upload".to_string(),
-            field: "file".to_string(),
-            url_path: "/url".to_string(),
-            headers: "Authorization: Bearer x".to_string(),
+        let config = AppConfig {
+            image_host: ImageHost::Http {
+                endpoint: "https://img.example.com/upload".to_string(),
+                field: "file".to_string(),
+                url_path: "/url".to_string(),
+                headers: "Authorization: Bearer x".to_string(),
+            },
+            ..Default::default()
         };
         config.save_to(&path).unwrap();
         let loaded = AppConfig::load_from(&path).unwrap();

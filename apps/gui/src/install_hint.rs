@@ -7,6 +7,8 @@ use windows::core::HSTRING;
 /// while `config/runtime.toml` (or the legacy `config.json`) has no workspace
 /// root yet.
 pub fn first_run_workspace() -> Option<String> {
+    // SAFETY: 键名与值名都是本地构造的 HSTRING，缓冲区容量按字节数传入，
+    // 且只从 API 实际写回的长度里解码字符串。
     unsafe {
         let subkey = HSTRING::from("Software\\md-work");
         let name = HSTRING::from("WorkspaceRoot");

@@ -126,7 +126,7 @@ fn exports_page_files_and_split_names() {
         temp_dir: None,
     };
     let outcome = run(&request, &mut |_| {}).expect("png export");
-    assert!(outcome.paths.len() >= 1);
+    assert!(!outcome.paths.is_empty());
     for path in &outcome.paths {
         assert!(path.exists(), "{}", path.display());
         assert!(path.file_name().unwrap().to_string_lossy().contains('-'));

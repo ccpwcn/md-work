@@ -20,12 +20,12 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(current) = self.current_workspace_root() {
-            if mdwork_core::workspace::same_path(&current, &root) {
-                self.workspace_menu = false;
-                cx.notify();
-                return;
-            }
+        if let Some(current) = self.current_workspace_root()
+            && mdwork_core::workspace::same_path(&current, &root)
+        {
+            self.workspace_menu = false;
+            cx.notify();
+            return;
         }
         for doc in &self.docs {
             if doc.read(cx).dirty {
@@ -50,6 +50,7 @@ impl AppShell {
 
         self.docs.clear();
         self.pending_close.clear();
+        self.closing_docs.clear();
         self.pending_delete = None;
         self.pending_jump = None;
         self.pending_recovery = None;
@@ -63,6 +64,10 @@ impl AppShell {
         self.tree_selection = None;
         self.active_notebook = None;
         self.tree_scroll = UniformListScrollHandle::new();
+        self.outline_scroll = UniformListScrollHandle::new();
+        self.search_scroll = UniformListScrollHandle::new();
+        self.bookmark_scroll = UniformListScrollHandle::new();
+        self.trash_scroll = UniformListScrollHandle::new();
         self.tree_drag = None;
         self.tree_click_suppressed = false;
         self.tab_scroll = ScrollHandle::new();
@@ -70,7 +75,7 @@ impl AppShell {
         self.delete_confirm = None;
         self.flash_rel = None;
         self.preview_cache = None;
-        self.outline.clear();
+        self.outline = Arc::default();
         self.outline_cache = None;
         self.math.clear();
         self.math_pending.clear();
@@ -107,13 +112,11 @@ impl AppShell {
                         let mut failures = Vec::new();
                         let workspace = match Workspace::open(&task_root) {
                             Ok(workspace) => {
-                                if !existed {
-                                    if let Err(err) = seed_workspace(&workspace) {
-                                        failures.push((
-                                            NoticeKind::Warning,
-                                            format!("初始化工作区失败：{err}"),
-                                        ));
-                                    }
+                                if !existed && let Err(err) = seed_workspace(&workspace) {
+                                    failures.push((
+                                        NoticeKind::Warning,
+                                        format!("初始化工作区失败：{err}"),
+                                    ));
                                 }
                                 Some(workspace)
                             }

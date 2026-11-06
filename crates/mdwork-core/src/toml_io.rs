@@ -25,7 +25,7 @@ pub fn read_table(path: &Path) -> Result<Option<toml::Table>> {
     };
     let table = toml::from_str::<toml::Table>(&text).map_err(|source| Error::Toml {
         path: path.to_path_buf(),
-        source,
+        source: Box::new(source),
     })?;
     Ok(Some(table))
 }
@@ -36,7 +36,7 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     };
     let value = table.try_into().map_err(|source| Error::Toml {
         path: path.to_path_buf(),
-        source,
+        source: Box::new(source),
     })?;
     Ok(Some(value))
 }

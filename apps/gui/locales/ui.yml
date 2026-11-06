@@ -401,6 +401,12 @@ preview.edit:
 preview.copy:
   en: "Copy all"
   zh-CN: "复制全文"
+preview.context_copy:
+  en: "Copy"
+  zh-CN: "复制"
+preview.context_copy_markdown:
+  en: "Copy as Markdown"
+  zh-CN: "复制为 Markdown"
 preview.copied:
   en: "Copied"
   zh-CN: "已复制"
@@ -1142,9 +1148,18 @@ tree.move_failed:
 tree.copy:
   en: "Copy"
   zh-CN: "复制"
+tree.cut:
+  en: "Cut"
+  zh-CN: "剪切"
+tree.cut_done:
+  en: "Cut. Paste into a folder to move it."
+  zh-CN: "已剪切，粘贴到目标文件夹即可移动"
 tree.paste:
   en: "Paste"
   zh-CN: "粘贴"
+tree.paste_invalid:
+  en: "Cannot paste here: the source is missing or the destination is invalid."
+  zh-CN: "无法粘贴到此位置：源已不存在或目标无效"
 tree.duplicate:
   en: "Duplicate"
   zh-CN: "创建副本"

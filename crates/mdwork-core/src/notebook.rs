@@ -385,9 +385,10 @@ impl Notebook {
             .filter_entry(|entry| !is_reserved(&root, entry.path()))
         {
             let item = item.map_err(|err| {
-                Error::Io(err.into_io_error().unwrap_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::Other, "walk error")
-                }))
+                Error::Io(
+                    err.into_io_error()
+                        .unwrap_or_else(|| std::io::Error::other("walk error")),
+                )
             })?;
 
             if item.file_type().is_dir() {
@@ -416,9 +417,10 @@ impl Notebook {
 
             let rel_path = self.rel_path(item.path())?;
             let metadata = item.metadata().map_err(|err| {
-                Error::Io(err.into_io_error().unwrap_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::Other, "metadata error")
-                }))
+                Error::Io(
+                    err.into_io_error()
+                        .unwrap_or_else(|| std::io::Error::other("metadata error")),
+                )
             })?;
             entries.push(Entry {
                 name: file_name.trim_end_matches(".md").to_string(),
@@ -430,7 +432,7 @@ impl Notebook {
             });
         }
 
-        entries.sort_by(|a, b| a.rel_path.to_lowercase().cmp(&b.rel_path.to_lowercase()));
+        entries.sort_by_key(|entry| entry.rel_path.to_lowercase());
         Ok(entries)
     }
 
@@ -659,10 +661,8 @@ impl Notebook {
         for (key, hint) in map {
             let new_rel = if key == from_key {
                 Some(to.to_string())
-            } else if let Some(rest) = key_strip_prefix(&key, &encoding_key(&from_prefix)) {
-                Some(join_rel(to, rest))
             } else {
-                None
+                key_strip_prefix(&key, &encoding_key(&from_prefix)).map(|rest| join_rel(to, rest))
             };
             if let Some(new_rel) = new_rel {
                 target.remember_encoding(&new_rel, hint)?;
@@ -755,7 +755,7 @@ impl Notebook {
             };
             items.push(item);
         }
-        items.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+        items.sort_by_key(|item| std::cmp::Reverse(item.deleted_at));
         Ok(items)
     }
 

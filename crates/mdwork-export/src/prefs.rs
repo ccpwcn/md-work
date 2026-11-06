@@ -84,8 +84,10 @@ mod tests {
     #[test]
     fn round_trip_prefs() {
         let path = std::env::temp_dir().join(format!("mdwork-prefs-{}.toml", Uuid::new_v4()));
-        let mut prefs = NotebookPrefs::default();
-        prefs.last_export_pdf_dir = Some(r"D:\out".to_string());
+        let mut prefs = NotebookPrefs {
+            last_export_pdf_dir: Some(r"D:\out".to_string()),
+            ..Default::default()
+        };
         prefs.export.cover = true;
         prefs.export.toc_depth = 5;
         prefs.export.table_width = TableWidth::Full;
@@ -129,8 +131,10 @@ mod tests {
 
     #[test]
     fn missing_directories_are_ignored() {
-        let mut prefs = NotebookPrefs::default();
-        prefs.last_export_pdf_dir = Some(r"Z:\definitely-missing\folder".to_string());
+        let prefs = NotebookPrefs {
+            last_export_pdf_dir: Some(r"Z:\definitely-missing\folder".to_string()),
+            ..Default::default()
+        };
         assert!(prefs.export_dir(true).is_none());
     }
 }

@@ -5,9 +5,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{Error, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TextEncoding {
+    #[default]
     #[serde(rename = "utf-8")]
     Utf8,
     #[serde(rename = "utf-16le")]
@@ -56,9 +57,10 @@ impl TextEncoding {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Eol {
+    #[default]
     Lf,
     Crlf,
 }
@@ -117,18 +119,6 @@ impl EncodingHint {
     /// UTF-8 with LF and no BOM needs no sidecar entry.
     pub fn is_default(self) -> bool {
         self.encoding == TextEncoding::Utf8 && !self.bom && self.eol == Eol::Lf
-    }
-}
-
-impl Default for TextEncoding {
-    fn default() -> Self {
-        Self::Utf8
-    }
-}
-
-impl Default for Eol {
-    fn default() -> Self {
-        Self::Lf
     }
 }
 
@@ -197,9 +187,8 @@ fn decode_text(bytes: &[u8]) -> (String, TextEncoding, bool) {
     let guessed = detector.guess(None, true);
     let preferred = TextEncoding::from_encoding(guessed);
 
-    let candidate = if preferred == TextEncoding::Gb18030 {
-        GB18030
-    } else if preferred == TextEncoding::Utf8 {
+    // 到这里已确定不是合法 UTF-8；探测仍猜 UTF-8 时，按 GBK 系编码兜底。
+    let candidate = if matches!(preferred, TextEncoding::Gb18030 | TextEncoding::Utf8) {
         GB18030
     } else {
         WINDOWS_1252

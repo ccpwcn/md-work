@@ -1,16 +1,28 @@
 use super::util::*;
 use super::*;
+use mdwork_render::preview::Block;
+
+/// 预览右键复制的内容形式。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PreviewCopyKind {
+    /// 复制渲染后的文本。
+    Text,
+    /// 复制选区对应的 Markdown 源码。
+    Markdown,
+}
 
 impl AppShell {
     pub(super) fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.preview_mode = !self.preview_mode;
-        if !self.preview_mode {
-            if let Some(index) = self.active_doc {
-                if let Some(doc) = self.docs.get(index).cloned() {
-                    let (line, column) = doc.read(cx).cursor(cx);
-                    doc.update(cx, |doc, cx| doc.set_cursor(line, column, window, cx));
-                }
-            }
+        let Some(doc) = self.active_doc_entity().cloned() else {
+            return;
+        };
+        let preview = !doc.read(cx).preview_mode;
+        doc.update(cx, |doc, _| doc.preview_mode = preview);
+        if preview {
+            self.ensure_preview(cx);
+        } else {
+            let (line, column) = doc.read(cx).cursor(cx);
+            doc.update(cx, |doc, cx| doc.set_cursor(line, column, window, cx));
         }
         cx.notify();
     }
@@ -22,7 +34,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.preview_mode {
+        if self.is_preview_mode(cx) {
             return;
         }
         let Some(doc) = self.active_doc_entity().cloned() else {
@@ -94,32 +106,43 @@ impl AppShell {
             pending.push((key, tex, display));
         }
 
-        for (key, tex, display) in pending {
-            let fill = fill.clone();
-            cx.spawn(async move |this, cx| {
-                let path = cx
-                    .background_executor()
-                    .spawn(async move {
-                        mdwork_export::math::math_svg(
-                            &tex,
-                            &mdwork_export::math::MathOptions {
-                                fill: &fill,
-                                size_pt: preview::MATH_SIZE_PT,
-                                display,
-                            },
-                        )
-                        .ok()
-                        .and_then(|svg| write_math_cache(key, &svg))
-                    })
-                    .await;
-                let _ = this.update(cx, |this, cx| {
+        if pending.is_empty() {
+            return;
+        }
+        // 所有公式合并成一个后台任务、完成后只通知一次：
+        // 逐个任务各自 `cx.notify()` 会让大文档预览在打开时
+        // 反复重建整棵元素树。
+        cx.spawn(async move |this, cx| {
+            let results = cx
+                .background_executor()
+                .spawn(async move {
+                    pending
+                        .into_iter()
+                        .map(|(key, tex, display)| {
+                            let path = mdwork_export::math::math_svg(
+                                &tex,
+                                &mdwork_export::math::MathOptions {
+                                    fill: &fill,
+                                    size_pt: preview::MATH_SIZE_PT,
+                                    display,
+                                },
+                            )
+                            .ok()
+                            .and_then(|svg| write_math_cache(key, &svg));
+                            (key, path)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                for (key, path) in results {
                     this.math_pending.remove(&key);
                     this.math.insert(key, path);
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Resolves preview image paths off the render thread so paint never stats
@@ -135,8 +158,7 @@ impl AppShell {
         }
         let base = self
             .active_doc_entity()
-            .map(|doc| doc.read(cx).path.parent().map(Path::to_path_buf))
-            .flatten();
+            .and_then(|doc| doc.read(cx).path.parent().map(Path::to_path_buf));
         let mut pending = Vec::new();
         for src in sources {
             let key = preview::image_key(&src, base.as_deref());
@@ -145,21 +167,32 @@ impl AppShell {
             }
             pending.push((key, src));
         }
-        for (key, src) in pending {
-            let base = base.clone();
-            cx.spawn(async move |this, cx| {
-                let resolved = cx
-                    .background_executor()
-                    .spawn(async move { preview::resolve_preview_image(&src, base.as_deref()) })
-                    .await;
-                let _ = this.update(cx, |this, cx| {
+        if pending.is_empty() {
+            return;
+        }
+        // 与公式同理：整批图片只重绘一次，避免 README 这类
+        // 含大量徽章图片的文档在打开时连续触发全量重绘。
+        cx.spawn(async move |this, cx| {
+            let results = cx
+                .background_executor()
+                .spawn(async move {
+                    pending
+                        .into_iter()
+                        .map(|(key, src)| {
+                            (key, preview::resolve_preview_image(&src, base.as_deref()))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                for (key, resolved) in results {
                     this.images_pending.remove(&key);
                     this.image_paths.insert(key, resolved);
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn toggle_code_wrap(&mut self, cx: &mut Context<Self>) {
@@ -170,11 +203,44 @@ impl AppShell {
 
     pub(super) fn copy_preview(&mut self, cx: &mut Context<Self>) {
         self.ensure_preview(cx);
-        let Some(cache) = &self.preview_cache else {
+        let Some(text) = self
+            .preview_cache
+            .as_ref()
+            .map(|cache| cache.ir.to_plain_text())
+        else {
             return;
         };
-        let text = cache.ir.to_plain_text();
         cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.flash_copied(cx);
+    }
+
+    /// 预览区的右键操作：复制选中的渲染文本
+    /// （无选中时复制全文），或复制选中内容对应的 Markdown 源码。
+    pub(super) fn copy_preview_text(
+        &mut self,
+        selected: &str,
+        kind: PreviewCopyKind,
+        cx: &mut Context<Self>,
+    ) {
+        self.ensure_preview(cx);
+        let Some(doc) = self.active_doc_entity().cloned() else {
+            return;
+        };
+        let source = doc.read(cx).text(cx).to_string();
+        let ir = self.preview_cache.as_ref().map(|cache| cache.ir.clone());
+        let text = match kind {
+            PreviewCopyKind::Markdown => ir
+                .as_ref()
+                .map(|ir| markdown_for_selection(ir, &source, selected))
+                .unwrap_or(source),
+            PreviewCopyKind::Text if !selected.is_empty() => selected.to_string(),
+            PreviewCopyKind::Text => ir.as_ref().map(|ir| ir.to_plain_text()).unwrap_or(source),
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.flash_copied(cx);
+    }
+
+    fn flash_copied(&mut self, cx: &mut Context<Self>) {
         self.copied = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -187,5 +253,119 @@ impl AppShell {
             });
         })
         .detach();
+    }
+}
+
+/// 返回顶层预览块在源码中的行号（从 1 开始）。
+fn block_source_line(block: &Block) -> usize {
+    match block {
+        Block::Heading { line, .. } => *line,
+        Block::Paragraph { line, .. } => *line,
+        Block::CodeBlock { line, .. } => *line,
+        Block::List { line, .. } => *line,
+        Block::Quote { line, .. } => *line,
+        Block::Table { line, .. } => *line,
+        Block::Image { line, .. } => *line,
+        Block::Div { line, .. } => *line,
+        Block::Rule { line } => *line,
+        Block::Blank { line, .. } => *line,
+        Block::Math { line, .. } => *line,
+        Block::FootnoteDefinition { line, .. } => *line,
+    }
+}
+
+/// 把渲染文本的选区映射回生成它的 Markdown 源码行。
+/// 无法定位选区时（例如跨图片或表格）
+/// 退化为复制整篇源码。
+fn markdown_for_selection(ir: &PreviewIr, source: &str, selected: &str) -> String {
+    let needle = selected.trim();
+    if needle.is_empty() {
+        return source.to_string();
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    let plain = ir.to_plain_text();
+    let first_line = needle
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(needle)
+        .trim();
+    let (start, end) = match plain.find(needle) {
+        Some(pos) => (pos, pos + needle.len()),
+        None => match plain.find(first_line) {
+            Some(pos) if !first_line.is_empty() => (pos, pos + first_line.len()),
+            _ => return source.to_string(),
+        },
+    };
+
+    let mut cursor = 0usize;
+    let mut from_line: Option<usize> = None;
+    let mut to_line = 0usize;
+    for (index, block) in ir.blocks.iter().enumerate() {
+        let segment = PreviewIr {
+            blocks: vec![block.clone()],
+            styles: Default::default(),
+        }
+        .to_plain_text();
+        if segment.trim().is_empty() {
+            continue;
+        }
+        let seg_start = cursor;
+        let seg_end = seg_start + segment.len();
+        // `to_plain_text` 用一个换行符连接所有非空块。
+        cursor = seg_end + 1;
+        if seg_end <= start || seg_start >= end {
+            continue;
+        }
+        let first = block_source_line(block).saturating_sub(1).min(lines.len());
+        let next = ir.blocks[index + 1..]
+            .iter()
+            .map(block_source_line)
+            .find(|line| *line > 0)
+            .map(|line| line.saturating_sub(1).min(lines.len()))
+            .unwrap_or(lines.len());
+        if from_line.is_none() {
+            from_line = Some(first);
+        }
+        to_line = to_line.max(next.max(first));
+    }
+    match from_line {
+        Some(from) if to_line > from => lines[from..to_line]
+            .join("\n")
+            .trim_end_matches('\n')
+            .to_string(),
+        Some(from) => lines[from..].join("\n").trim_end_matches('\n').to_string(),
+        None => source.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 不能用 `use super::*`：GPUI 的通配导入会遮蔽内置的 `#[test]`。
+    use super::markdown_for_selection;
+    use mdwork_render::preview::PreviewIr;
+
+    const SOURCE: &str = "# Title\n\nHello **world**\n\nSecond line\n";
+
+    #[test]
+    fn empty_selection_copies_whole_source() {
+        let ir = PreviewIr::from_markdown(SOURCE);
+        assert_eq!(markdown_for_selection(&ir, SOURCE, ""), SOURCE);
+        assert_eq!(markdown_for_selection(&ir, SOURCE, "  \n "), SOURCE);
+    }
+
+    #[test]
+    fn selection_maps_back_to_markdown_source() {
+        let ir = PreviewIr::from_markdown(SOURCE);
+        assert_eq!(markdown_for_selection(&ir, SOURCE, "Title"), "# Title");
+        assert_eq!(
+            markdown_for_selection(&ir, SOURCE, "Hello world"),
+            "Hello **world**"
+        );
+    }
+
+    #[test]
+    fn unmatched_selection_falls_back_to_whole_source() {
+        let ir = PreviewIr::from_markdown(SOURCE);
+        assert_eq!(markdown_for_selection(&ir, SOURCE, "not in here"), SOURCE);
     }
 }

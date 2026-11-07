@@ -5,7 +5,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use resvg::{tiny_skia, usvg};
 
-const SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
+const APP_ICON_SIZES: [u32; 5] = [16, 32, 64, 128, 256];
+const INSTALLER_ICON_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> Result<()> {
@@ -20,7 +21,7 @@ fn main() -> Result<()> {
         }
         _ => {
             println!("usage: xtask <icon|package|installer|all>");
-            println!("  icon       regenerate assets/icon.ico from assets/icon.svg");
+            println!("  icon       regenerate app and installer .ico files from assets/*.svg");
             println!("  package    release build + dist/md-work-{VERSION}-win64(.zip)");
             println!("  installer  compile the per-user NSIS installer (needs makensis)");
             println!("  all        package then installer");
@@ -40,32 +41,63 @@ fn bundle_dir(root: &Path) -> PathBuf {
     root.join("dist").join(format!("md-work-{VERSION}-win64"))
 }
 
-fn icon() -> Result<()> {
-    let root = workspace_root()?;
-    let svg_path = root.join("assets").join("icon.svg");
-    let svg = fs::read(&svg_path).with_context(|| format!("read {}", svg_path.display()))?;
-
+fn parse_icon(svg: &[u8]) -> Result<usvg::Tree> {
     let mut options = usvg::Options::default();
     options.fontdb_mut().load_system_fonts();
-    let tree = usvg::Tree::from_data(&svg, &options)
-        .with_context(|| format!("parse {}", svg_path.display()))?;
+    usvg::Tree::from_data(svg, &options).context("parse icon svg")
+}
 
+fn render_icon(tree: &usvg::Tree, size: u32) -> Result<tiny_skia::Pixmap> {
+    let mut pixmap = tiny_skia::Pixmap::new(size, size)
+        .with_context(|| format!("allocate {size}x{size} pixmap"))?;
+    // ICO 帧是正方形；竖版画板居中放置，两侧留白。
+    let width = tree.size().width();
+    let height = tree.size().height();
+    let scale = size as f32 / width.max(height);
+    let tx = (size as f32 - width * scale) / 2.0;
+    let ty = (size as f32 - height * scale) / 2.0;
+    resvg::render(
+        tree,
+        tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, tx, ty),
+        &mut pixmap.as_mut(),
+    );
+    Ok(pixmap)
+}
+
+fn write_ico(tree: &usvg::Tree, ico_path: &Path, sizes: &[u32]) -> Result<()> {
     let mut icon_dir = ico::IconDir::new(ico::ResourceType::Icon);
-    for size in SIZES {
-        let mut pixmap = tiny_skia::Pixmap::new(size, size)
-            .with_context(|| format!("allocate {size}x{size} pixmap"))?;
-        let scale = size as f32 / tree.size().width().max(tree.size().height());
-        let transform = tiny_skia::Transform::from_scale(scale, scale);
-        resvg::render(&tree, transform, &mut pixmap.as_mut());
-        let image = ico::IconImage::from_rgba_data(size, size, pixmap.data().to_vec());
+    for &size in sizes {
+        let pixmap = render_icon(tree, size)?;
+        // ICO bitmaps store straight alpha. Demultiply tiny-skia's pixels so the
+        // white contour stays white along antialiased edges.
+        let image = ico::IconImage::from_rgba_data(size, size, pixmap.take_demultiplied());
         icon_dir.add_entry(ico::IconDirEntry::encode(&image)?);
     }
-
-    let ico_path = root.join("assets").join("icon.ico");
     let file =
-        fs::File::create(&ico_path).with_context(|| format!("create {}", ico_path.display()))?;
+        fs::File::create(ico_path).with_context(|| format!("create {}", ico_path.display()))?;
     icon_dir.write(file)?;
-    println!("wrote {} ({} sizes)", ico_path.display(), SIZES.len());
+    println!("wrote {} ({sizes:?})", ico_path.display());
+    Ok(())
+}
+
+fn icon() -> Result<()> {
+    let root = workspace_root()?;
+    for (svg_name, ico_name, sizes) in [
+        ("icon.svg", "icon.ico", APP_ICON_SIZES.as_slice()),
+        (
+            "installer-icon.svg",
+            "installer-icon.ico",
+            INSTALLER_ICON_SIZES.as_slice(),
+        ),
+    ] {
+        let svg_path = root.join("assets").join(svg_name);
+        let svg = fs::read(&svg_path).with_context(|| format!("read {}", svg_path.display()))?;
+        write_ico(
+            &parse_icon(&svg)?,
+            &root.join("assets").join(ico_name),
+            sizes,
+        )?;
+    }
     Ok(())
 }
 
@@ -216,4 +248,80 @@ fn installer() -> Result<()> {
             .display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_reads_against_its_own_blue() {
+        let root = workspace_root().expect("workspace root");
+        let svg = fs::read(root.join("assets").join("icon.svg")).expect("read icon.svg");
+        let pixmap = render_icon(&parse_icon(&svg).expect("parse icon"), 32).expect("render icon");
+        let corner = pixmap.pixel(0, 0).expect("corner pixel");
+        assert_eq!(corner.alpha(), 0, "icon keeps a transparent margin");
+
+        let background = [0x12_u8, 0x96, 0xdb];
+        let mut separated = 0_u32;
+        let mut blue = 0_u32;
+        for pixel in pixmap.pixels() {
+            if pixel.alpha() < 200 {
+                continue;
+            }
+            let color = pixel.demultiply();
+            let distance = (i32::from(color.red()) - i32::from(background[0])).unsigned_abs()
+                + (i32::from(color.green()) - i32::from(background[1])).unsigned_abs()
+                + (i32::from(color.blue()) - i32::from(background[2])).unsigned_abs();
+            if distance > 90 {
+                separated += 1;
+            }
+            if color.blue() > color.red().saturating_add(40) && color.blue() > 100 {
+                blue += 1;
+            }
+        }
+        assert!(
+            separated > 80,
+            "white contour is missing against #1296db ({separated} pixels)"
+        );
+        assert!(blue > 40, "blue glyph is missing ({blue} pixels)");
+    }
+
+    #[test]
+    fn installer_icon_is_a_carton_holding_the_app_mark() {
+        let root = workspace_root().expect("workspace root");
+        let svg = fs::read(root.join("assets").join("installer-icon.svg")).expect("read svg");
+        let pixmap = render_icon(&parse_icon(&svg).expect("parse icon"), 64).expect("render icon");
+        let corner = pixmap.pixel(0, 0).expect("corner pixel");
+        assert_eq!(
+            corner.alpha(),
+            0,
+            "installer icon keeps a transparent margin"
+        );
+
+        let mut carton = 0_u32;
+        let mut blue = 0_u32;
+        for pixel in pixmap.pixels() {
+            if pixel.alpha() < 200 {
+                continue;
+            }
+            let color = pixel.demultiply();
+            let (red, green, blue_channel) = (color.red(), color.green(), color.blue());
+            if red > green
+                && green > blue_channel
+                && red > 150
+                && u16::from(red) > u16::from(blue_channel) + 50
+            {
+                carton += 1;
+            }
+            if blue_channel > red.saturating_add(40) && blue_channel > 100 {
+                blue += 1;
+            }
+        }
+        assert!(carton > 400, "carton is missing ({carton} pixels)");
+        assert!(
+            blue > 20,
+            "app mark is missing from the carton ({blue} pixels)"
+        );
+    }
 }

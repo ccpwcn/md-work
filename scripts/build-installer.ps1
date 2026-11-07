@@ -6,7 +6,7 @@
 .DESCRIPTION
   封装已有 xtask 流程：
     1) （可选）cargo test --workspace
-    2) cargo run -p xtask -- icon     # 若 assets/icon.ico 缺失
+    2) cargo run -p xtask -- icon     # 若软件或安装包 ico 缺失
     3) cargo run -p xtask -- package  # release 构建 → dist\md-work-<ver>-win64\ + .zip
     4) cargo run -p xtask -- installer # makensis → dist\md-work-<ver>-setup.exe
 
@@ -19,7 +19,7 @@
   跳过 cargo test（开发阶段已测过时可加）。
 
 .PARAMETER SkipIcon
-  不重新生成 icon.ico（已有且未改 SVG 时可加）。
+  不重新生成 icon.ico / installer-icon.ico（已有且未改 SVG 时可加）。
 
 .PARAMETER SkipPackage
   跳过 release 构建与便携包，仅重打安装包（需 dist 里已有 md-work.exe）。
@@ -144,12 +144,13 @@ else {
 }
 
 $iconPath = Join-Path $root 'assets\icon.ico'
-if ((-not $SkipIcon) -or (-not (Test-Path -LiteralPath $iconPath))) {
+$installerIconPath = Join-Path $root 'assets\installer-icon.ico'
+if ((-not $SkipIcon) -or (-not (Test-Path -LiteralPath $iconPath)) -or (-not (Test-Path -LiteralPath $installerIconPath))) {
     Write-Step "生成图标 (xtask icon)"
     Invoke-Cargo -Root $root -CargoArgs @('run', '-p', 'xtask', '--', 'icon')
 }
 else {
-    Write-Host "已跳过图标 (-SkipIcon)，沿用 $iconPath"
+    Write-Host "已跳过图标 (-SkipIcon)，沿用 $iconPath 与 $installerIconPath"
 }
 
 if (-not $SkipPackage) {

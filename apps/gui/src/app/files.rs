@@ -271,8 +271,7 @@ impl AppShell {
             let result = receiver.await;
             let _ = this.update(cx, |this, cx| {
                 for id in &affected {
-                    if let Some(doc) = this.docs.iter().find(|doc| doc.entity_id() == *id).cloned()
-                    {
+                    if let Some(doc) = this.doc_by_id(*id) {
                         doc.update(cx, |doc, cx| doc.release_saves(cx));
                     }
                 }
@@ -543,12 +542,12 @@ impl AppShell {
                 (None, Some(_)) | (Some(_), None) => {}
                 (Some(_), Some(_)) => {}
             }
-            if source_kind == EntryKind::Folder {
-                if dest_folder.is_some_and(|folder| {
+            if source_kind == EntryKind::Folder
+                && dest_folder.is_some_and(|folder| {
                     folder == source_rel || folder.starts_with(&format!("{source_rel}/"))
-                }) {
-                    return false;
-                }
+                })
+            {
+                return false;
             }
         }
         true
@@ -583,7 +582,7 @@ impl AppShell {
         };
         self.move_picker = None;
         if dest_notebook_id == source_notebook_id {
-            self.begin_move_entry(source_notebook_id, source_rel, dest_rel, cx);
+            self.begin_move_entry(source_notebook_id, source_rel, dest_rel, None, cx);
         } else {
             self.begin_cross_notebook_move(
                 source_notebook_id,
@@ -659,8 +658,7 @@ impl AppShell {
             let result = receiver.await;
             let _ = this.update(cx, |this, cx| {
                 for id in &affected {
-                    if let Some(doc) = this.docs.iter().find(|doc| doc.entity_id() == *id).cloned()
-                    {
+                    if let Some(doc) = this.doc_by_id(*id) {
                         doc.update(cx, |doc, cx| doc.release_saves(cx));
                     }
                 }
@@ -710,6 +708,10 @@ impl AppShell {
         .detach();
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "跨笔记本移动需同时传入源、目标与上下文，参数之间没有可复用的结构体"
+    )]
     pub(super) fn update_docs_after_cross_move(
         &mut self,
         source_notebook_id: Uuid,
@@ -764,8 +766,24 @@ impl AppShell {
         self.tree_clipboard = Some(TreeClipboard {
             notebook_id,
             rel_path: rel_path.to_string(),
+            action: ClipboardAction::Copy,
         });
         self.notify_success(t!("tree.copied").to_string(), cx);
+        cx.notify();
+    }
+
+    pub(super) fn cut_tree_entry(
+        &mut self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.tree_clipboard = Some(TreeClipboard {
+            notebook_id,
+            rel_path: rel_path.to_string(),
+            action: ClipboardAction::Cut,
+        });
+        self.notify_success(t!("tree.cut_done").to_string(), cx);
         cx.notify();
     }
 
@@ -795,14 +813,71 @@ impl AppShell {
         let Some(clip) = self.tree_clipboard.clone() else {
             return;
         };
-        self.begin_paste_entry(
+        if clip.action == ClipboardAction::Copy {
+            self.begin_paste_entry(
+                clip.notebook_id,
+                clip.rel_path,
+                dest_notebook_id,
+                dest_folder,
+                true,
+                cx,
+            );
+            return;
+        }
+
+        // 剪切 + 粘贴等价于移动：目标写入完成后才删除源条目，
+        // 且剪贴板只被消费一次。
+        let basename = clip
+            .rel_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(clip.rel_path.as_str())
+            .to_string();
+        let dest_rel = match &dest_folder {
+            Some(parent) => format!("{parent}/{basename}"),
+            None => basename,
+        };
+        let kind = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == clip.notebook_id)
+            .and_then(|entry| {
+                entry
+                    .tree
+                    .iter()
+                    .find(|item| item.rel_path == clip.rel_path)
+                    .map(|item| item.kind)
+            });
+        let Some(kind) = kind else {
+            self.tree_clipboard = None;
+            self.notify_error(t!("tree.paste_invalid").to_string(), cx);
+            cx.notify();
+            return;
+        };
+        if !self.move_destination_allowed(
             clip.notebook_id,
-            clip.rel_path,
+            &clip.rel_path,
+            kind,
             dest_notebook_id,
-            dest_folder,
-            true,
-            cx,
-        );
+            dest_folder.as_deref(),
+        ) {
+            self.notify_error(t!("tree.paste_invalid").to_string(), cx);
+            return;
+        }
+        self.tree_clipboard = None;
+        if dest_notebook_id == clip.notebook_id {
+            self.begin_move_entry(clip.notebook_id, clip.rel_path.clone(), dest_rel, None, cx);
+        } else {
+            self.begin_cross_notebook_move(
+                clip.notebook_id,
+                clip.rel_path.clone(),
+                dest_notebook_id,
+                dest_folder,
+                false,
+                cx,
+            );
+        }
+        cx.notify();
     }
 
     pub(super) fn begin_paste_entry(
@@ -1065,7 +1140,13 @@ impl AppShell {
             cx.notify();
             return;
         }
-        self.begin_move_entry(renaming.notebook_id, renaming.rel_path.clone(), target, cx);
+        self.begin_move_entry(
+            renaming.notebook_id,
+            renaming.rel_path.clone(),
+            target,
+            None,
+            cx,
+        );
         cx.notify();
     }
 
@@ -1098,11 +1179,16 @@ impl AppShell {
 
     /// Renames or moves an entry on the writer thread. Open buffers are held
     /// so a mid-rename save cannot recreate the old path.
+    ///
+    /// `placement` optionally pins the final sibling order of the destination
+    /// parent. `rename_entry` appends a moved child at the end, so a drag that
+    /// targets a specific position rewrites that list on the same writer thread.
     pub(super) fn begin_move_entry(
         &mut self,
         notebook_id: Uuid,
         from: String,
         to: String,
+        placement: Option<(String, Vec<String>)>,
         cx: &mut Context<Self>,
     ) {
         let Some(notebook) = self
@@ -1129,13 +1215,20 @@ impl AppShell {
             }
         }
         let submitted_from = from.clone();
-        let receiver = disk::submit(move || notebook.rename_entry(&submitted_from, &to));
+        let receiver = disk::submit(move || -> mdwork_core::Result<String> {
+            let new_rel = notebook.rename_entry(&submitted_from, &to)?;
+            if let Some((parent, names)) = placement {
+                let mut order = notebook.load_tree_order();
+                order.set_names(parent, names);
+                notebook.save_tree_order(&order)?;
+            }
+            Ok(new_rel)
+        });
         cx.spawn(async move |this, cx| {
             let result = receiver.await;
             let _ = this.update(cx, |this, cx| {
                 for id in &affected {
-                    if let Some(doc) = this.docs.iter().find(|doc| doc.entity_id() == *id).cloned()
-                    {
+                    if let Some(doc) = this.doc_by_id(*id) {
                         doc.update(cx, |doc, cx| doc.release_saves(cx));
                     }
                 }
@@ -1208,7 +1301,15 @@ impl AppShell {
             return;
         };
         let from_prefix = format!("{from}/");
-        for doc in &self.docs {
+        // 已离开标签栏但仍在保存的标签同样需要更新路径，
+        // 否则进行中的写入仍会落到旧位置。
+        let all_docs: Vec<Entity<Doc>> = self
+            .docs
+            .iter()
+            .chain(self.closing_docs.values())
+            .cloned()
+            .collect();
+        for doc in &all_docs {
             let rel_path = {
                 let doc = doc.read(cx);
                 if doc.notebook_id != Some(notebook_id) {
@@ -1243,29 +1344,20 @@ impl AppShell {
             self.notify_warning(t!("tree.delete_busy").to_string(), cx);
             return;
         }
-        let affected: Vec<Entity<Doc>> = self
+        let affected: Vec<EntityId> = self
             .docs
             .iter()
             .filter(|doc| {
                 let doc = doc.read(cx);
                 doc.notebook_id == Some(notebook_id) && path_under(&doc.rel_path, &rel_path)
             })
-            .cloned()
+            .map(|doc| doc.entity_id())
             .collect();
         self.pending_delete = Some((notebook_id, rel_path));
-        for doc in affected {
-            if doc.read(cx).dirty {
-                self.pending_close.insert(doc.entity_id());
-                doc.update(cx, |doc, cx| doc.save_now(cx));
-            } else if let Some(index) = self
-                .docs
-                .iter()
-                .position(|open| open.entity_id() == doc.entity_id())
-            {
-                self.drop_doc_at(index);
-            }
+        for id in affected {
+            self.remove_doc_by_id(id, cx);
         }
-        self.persist_session(cx);
+        self.after_tabs_changed(cx);
         self.try_complete_delete(cx);
         cx.notify();
     }

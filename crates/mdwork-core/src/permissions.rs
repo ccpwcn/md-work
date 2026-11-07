@@ -344,7 +344,7 @@ mod tests {
 
         token.note_allow = vec!["工作/*.md".to_string()];
         assert!(token.allows_note(&id, "工作/a.md"));
-        assert!(token.allows_note(&id, "工作/子/b.md") == false);
+        assert!(!token.allows_note(&id, "工作/子/b.md"));
         assert!(!token.allows_note(&id, "生活/a.md"));
 
         token.note_allow = vec!["工作/**".to_string()];

@@ -1,5 +1,7 @@
+use super::previewer::PreviewCopyKind;
 use super::util::*;
 use super::*;
+use gpui_kit::base::TextSelection;
 
 impl AppShell {
     pub(super) fn render_palette(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -759,6 +761,12 @@ impl AppShell {
             .filter(|d| d.started)
             .map(|d| d.insert_at);
         let primary = cx.theme().primary;
+        // 关闭叉号要有自己的悬停/按下反馈：ghost 按钮的悬停色与标签本身的
+        // 悬停色几乎相同，叠在一起看不出变化，所以单独用一层危险色提示。
+        let close_fg = cx.theme().muted_foreground;
+        let close_hover_bg = cx.theme().danger.opacity(0.16);
+        let close_hover_fg = cx.theme().danger;
+        let close_pressed_bg = cx.theme().danger.opacity(0.28);
         let tab_bounds = self.tab_bounds.clone();
 
         // Clear stale bounds; each tab re-registers on paint.
@@ -775,8 +783,16 @@ impl AppShell {
             .lock_scroll_axis()
             .track_scroll(&self.tab_scroll);
 
+        // 使用每个标签稳定的实体 id。关闭标签会导致下标整体前移，
+        // 因此元素 id 与菜单目标都不能由下标推导。
+        let tab_ids: Vec<EntityId> = visible
+            .iter()
+            .map(|&index| self.docs[index].entity_id())
+            .collect();
+
         for (position, &index) in visible.iter().enumerate() {
             let doc = self.docs[index].read(cx);
+            let doc_id = self.docs[index].entity_id();
             let active = self.active_doc == Some(index);
             let is_external = doc.notebook_id.is_none();
             let title = if is_external {
@@ -798,19 +814,20 @@ impl AppShell {
                 cx.theme().muted_foreground
             };
             let hover = cx.theme().list_hover;
-            let left_tabs = visible[..position].to_vec();
-            let right_tabs = visible[position + 1..].to_vec();
-            let other_tabs: Vec<usize> = visible
+            let left_tabs = tab_ids[..position].to_vec();
+            let right_tabs = tab_ids[position + 1..].to_vec();
+            let other_tabs: Vec<EntityId> = tab_ids
                 .iter()
                 .copied()
-                .filter(|&seen| seen != index)
+                .filter(|&seen| seen != doc_id)
                 .collect();
             let rename_target = doc.notebook_id.map(|id| (id, doc.rel_path.clone()));
             let can_rename = rename_target.is_some();
             let shell = shell.clone();
-            let visible_tabs = visible.clone();
+            let visible_tabs = tab_ids.clone();
             let rename_label = rename_label.clone();
             let close_label = close_label.clone();
+            let close_button_label = close_label.clone();
             let close_others_label = close_others_label.clone();
             let close_left_label = close_left_label.clone();
             let close_right_label = close_right_label.clone();
@@ -833,7 +850,7 @@ impl AppShell {
             let bounds_store = tab_bounds.clone();
             tabs_row = tabs_row.child(
                 div()
-                    .id(format!("tab-{index}"))
+                    .id(format!("tab-{doc_id:?}"))
                     .flex()
                     .items_center()
                     .gap_1()
@@ -863,13 +880,15 @@ impl AppShell {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                            this.begin_tab_drag(index, f32::from(event.position.x), cx);
+                            if let Some(index) = this.doc_index(doc_id) {
+                                this.begin_tab_drag(index, f32::from(event.position.x), cx);
+                            }
                         }),
                     )
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, _, cx| {
-                            this.close_doc(index, cx);
+                            this.close_doc_by_id(doc_id, cx);
                         }),
                     )
                     .on_mouse_up(
@@ -887,7 +906,7 @@ impl AppShell {
                             return;
                         }
                         this.tab_drag = None;
-                        this.activate_doc(index, cx);
+                        this.activate_doc_by_id(doc_id, cx);
                     }))
                     .context_menu(move |menu, _, _| {
                         let rename_shell = shell.clone();
@@ -911,7 +930,7 @@ impl AppShell {
                                         return;
                                     };
                                     rename_shell.update(cx, |this, cx| {
-                                        this.activate_doc(index, cx);
+                                        this.activate_doc_by_id(doc_id, cx);
                                         this.begin_rename(notebook_id, &rel_path, window, cx);
                                     });
                                 }),
@@ -920,7 +939,7 @@ impl AppShell {
                             menu = menu.item(PopupMenuItem::new(adopt_label.clone()).on_click(
                                 move |_, window, cx| {
                                     adopt_shell.update(cx, |this, cx| {
-                                        this.activate_doc(index, cx);
+                                        this.activate_doc_by_id(doc_id, cx);
                                         this.save_external_into_notebook(window, cx);
                                     });
                                 },
@@ -929,7 +948,8 @@ impl AppShell {
                         menu.separator()
                             .item(PopupMenuItem::new(close_label.clone()).on_click(
                                 move |_, _, cx| {
-                                    close_shell.update(cx, |this, cx| this.close_doc(index, cx));
+                                    close_shell
+                                        .update(cx, |this, cx| this.close_doc_by_id(doc_id, cx));
                                 },
                             ))
                             .item(
@@ -974,11 +994,30 @@ impl AppShell {
                             .child(doc_label),
                     )
                     .child(
-                        Button::new(format!("close-{index}"))
-                            .ghost()
-                            .compact()
-                            .label("×")
-                            .on_click(cx.listener(move |this, _, _, cx| this.close_doc(index, cx))),
+                        // 独立的关闭控件：常态灰色叉号，悬停出现底色且叉号变红，
+                        // 按下时底色加深。同时阻止左键冒泡，避免关闭时被当成
+                        // 标签拖拽或激活标签。
+                        div()
+                            .id(format!("close-{doc_id:?}"))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(20.))
+                            .flex_shrink_0()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .bg(cx.theme().transparent)
+                            .text_color(close_fg)
+                            .hover(move |style| style.bg(close_hover_bg).text_color(close_hover_fg))
+                            .active(move |style| style.bg(close_pressed_bg))
+                            .role(Role::Button)
+                            .aria_label(close_button_label)
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.close_doc_by_id(doc_id, cx);
+                            }))
+                            .child(Icon::new(IconName::X).xsmall()),
                     ),
             );
         }
@@ -994,7 +1033,7 @@ impl AppShell {
             );
         }
 
-        let tab_switch_items: Vec<(usize, String, bool)> = visible
+        let tab_switch_items: Vec<(EntityId, String)> = visible
             .iter()
             .map(|&index| {
                 let doc = self.docs[index].read(cx);
@@ -1011,7 +1050,7 @@ impl AppShell {
                 } else {
                     title
                 };
-                (index, label, self.active_doc == Some(index))
+                (self.docs[index].entity_id(), label)
             })
             .collect();
         let has_tabs = !tab_switch_items.is_empty();
@@ -1038,7 +1077,7 @@ impl AppShell {
                     .disabled(!has_tabs)
                     .dropdown_menu_with_anchor(Anchor::TopRight, {
                         let items = tab_switch_items;
-                        move |menu, _, _| {
+                        move |menu, _, cx| {
                             let mut menu = menu.scrollable(true);
                             if items.is_empty() {
                                 return menu.item(
@@ -1046,17 +1085,23 @@ impl AppShell {
                                         .disabled(true),
                                 );
                             }
-                            for (index, label, active) in items.iter() {
-                                let index = *index;
+                            // 菜单展开时再解析活动标签，
+                            // 而不是依赖上一次渲染标签栏时的帧状态。
+                            let active = switch_shell
+                                .read(cx)
+                                .active_doc_entity()
+                                .map(|doc| doc.entity_id());
+                            for (id, label) in items.iter() {
+                                let id = *id;
                                 let shell = switch_shell.clone();
                                 menu = menu.item(
-                                    PopupMenuItem::new(label.clone()).checked(*active).on_click(
-                                        move |_, _, cx| {
+                                    PopupMenuItem::new(label.clone())
+                                        .checked(Some(id) == active)
+                                        .on_click(move |_, _, cx| {
                                             shell.update(cx, |this, cx| {
-                                                this.activate_doc(index, cx);
+                                                this.activate_doc_by_id(id, cx);
                                             });
-                                        },
-                                    ),
+                                        }),
                                 );
                             }
                             menu
@@ -1175,12 +1220,12 @@ impl AppShell {
                 window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
                     let x = f32::from(event.position.x);
                     if let Some(shell) = mover.upgrade() {
-                        let _ = shell.update(cx, |this, cx| this.update_tab_drag(x, cx));
+                        shell.update(cx, |this, cx| this.update_tab_drag(x, cx));
                     }
                 });
                 window.on_mouse_event(move |_event: &MouseUpEvent, _phase, _window, cx| {
                     if let Some(shell) = shell.upgrade() {
-                        let _ = shell.update(cx, |this, cx| this.end_tab_drag(cx));
+                        shell.update(cx, |this, cx| this.end_tab_drag(cx));
                     }
                 });
             },
@@ -1210,11 +1255,11 @@ impl AppShell {
                 .into_any_element();
         };
 
-        if self.preview_mode {
+        if doc.read(cx).preview_mode {
             self.ensure_preview(cx);
             if let Some(cache) = &self.preview_cache {
                 let base = doc.read(cx).path.parent().map(|path| path.to_path_buf());
-                return preview::render(
+                let rendered = preview::render(
                     &cache.ir,
                     base.as_deref(),
                     &self.math,
@@ -1224,6 +1269,56 @@ impl AppShell {
                     self.config.note_font_size,
                     cx,
                 );
+                let shell = cx.entity().downgrade();
+                let copy_label = t!("preview.context_copy").to_string();
+                let markdown_label = t!("preview.context_copy_markdown").to_string();
+                // 右键菜单触发器始终挂载：若按条件切换
+                // `context_menu` 包装层，元素 id 路径会变化，
+                // 所有文本片段已保留的选区句柄都会丢失。
+                return div()
+                    .id("preview-root")
+                    .size_full()
+                    // 整个预览都是可选文本，光标与编辑器一致使用
+                    // I 形光标。内部按钮（例如代码块的复制按钮）
+                    // 仍会以各自的
+                    // 手型光标覆盖它。
+                    .cursor(CursorStyle::IBeam)
+                    .context_menu(move |menu, window, cx| {
+                        // 与 Zed 一致：未选中文本时不弹菜单。空的
+                        // PopupMenu 会被 ContextMenu 过滤掉，
+                        // 此时右键不会显示任何内容。
+                        let selected = TextSelection::selected_text(window, cx).trim().to_string();
+                        if selected.is_empty() {
+                            return menu;
+                        }
+                        let copy_shell = shell.clone();
+                        let copy_selected = selected.clone();
+                        let markdown_shell = shell.clone();
+                        menu.item(PopupMenuItem::new(copy_label.clone()).on_click(
+                            move |_, _, cx| {
+                                let _ = copy_shell.update(cx, |this, cx| {
+                                    this.copy_preview_text(
+                                        &copy_selected,
+                                        PreviewCopyKind::Text,
+                                        cx,
+                                    );
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::new(markdown_label.clone()).on_click(move |_, _, cx| {
+                                let _ = markdown_shell.update(cx, |this, cx| {
+                                    this.copy_preview_text(
+                                        &selected,
+                                        PreviewCopyKind::Markdown,
+                                        cx,
+                                    );
+                                });
+                            }),
+                        )
+                    })
+                    .child(rendered)
+                    .into_any_element();
             }
         }
 
@@ -1309,7 +1404,7 @@ impl AppShell {
             .into_any_element()
     }
 
-    pub(super) fn render_status(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_status(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let mut status = div()
             .h(px(26.))
             .px_3()
@@ -1322,10 +1417,21 @@ impl AppShell {
             .text_xs()
             .text_color(cx.theme().muted_foreground);
 
-        if let Some(doc) = self.active_doc_entity() {
+        if let Some(doc) = self.active_doc_entity().cloned() {
+            let entity_id = doc.entity_id();
+            let revision = doc.read(cx).revision();
+            // 全文统计只在文本修订号变化时重算；窗口每次重绘都扫描
+            // 整篇大文档会明显放大预览模式的 CPU 占用。
+            let stats = match self.status_stats {
+                Some((id, rev, cached)) if id == entity_id && rev == revision => cached,
+                _ => {
+                    let text = doc.read(cx).text(cx);
+                    let stats = text_stats(&text);
+                    self.status_stats = Some((entity_id, revision, stats));
+                    stats
+                }
+            };
             let doc = doc.read(cx);
-            let text = doc.text(cx);
-            let stats = text_stats(&text);
             let saved_label = if doc.dirty {
                 t!("status.unsaved").to_string()
             } else {
@@ -1361,7 +1467,7 @@ impl AppShell {
                 .child(doc.encoding.label())
                 .child(doc.eol.label())
                 .child(saved_label)
-                .child(if self.preview_mode {
+                .child(if doc.preview_mode {
                     t!("status.mode.preview").to_string()
                 } else {
                     t!("status.mode.edit").to_string()

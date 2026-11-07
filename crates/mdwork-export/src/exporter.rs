@@ -290,11 +290,11 @@ fn load_markdown(request: &ExportRequest) -> Result<(String, PathBuf)> {
 }
 
 fn ensure_parent(path: &Path) -> Result<PathBuf> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("无法创建导出目录 {}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("无法创建导出目录 {}", parent.display()))?;
     }
     Ok(path.to_path_buf())
 }

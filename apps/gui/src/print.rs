@@ -44,6 +44,7 @@ pub fn print_text(title: &str, text: &str, allow_selection: bool) -> PrintResult
         ..Default::default()
     };
 
+    // SAFETY: pd 已完整初始化，且在整个调用期间由本函数独占。
     let accepted = unsafe { PrintDlgW(&mut pd) };
     if !accepted.as_bool() {
         cleanup_print_dlg(&pd);
@@ -56,7 +57,9 @@ pub fn print_text(title: &str, text: &str, allow_selection: bool) -> PrintResult
         return PrintResult::Failed("打印机设备上下文无效".into());
     }
 
+    // SAFETY: hdc 来自 PrintDlgW 且刚校验过有效，调用期间不会被释放。
     let result = unsafe { print_with_dc(hdc, title, text) };
+    // SAFETY: hdc 由对话框创建，仅在此处释放一次。
     unsafe {
         let _ = DeleteDC(hdc);
     }
@@ -65,6 +68,7 @@ pub fn print_text(title: &str, text: &str, allow_selection: bool) -> PrintResult
 }
 
 fn cleanup_print_dlg(pd: &PRINTDLGW) {
+    // SAFETY: 句柄来自 PRINTDLGW，已判空且每个只释放一次。
     unsafe {
         if !pd.hDevMode.is_invalid() {
             let _ = GlobalFree(Some(pd.hDevMode));
@@ -75,7 +79,10 @@ fn cleanup_print_dlg(pd: &PRINTDLGW) {
     }
 }
 
+/// # Safety
+/// `hdc` 必须是有效、且在本次调用期间保持存活的打印机设备上下文。
 unsafe fn print_with_dc(hdc: HDC, title: &str, text: &str) -> PrintResult {
+    // SAFETY: 宽字符串缓冲区在同步 GDI 调用期间保持存活，指针不会被保存。
     unsafe {
         let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         let doc = DOCINFOW {

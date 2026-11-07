@@ -43,6 +43,7 @@ fn replace(tmp: &Path, target: &Path) -> io::Result<()> {
 
     let target_w = HSTRING::from(target.to_string_lossy().as_ref());
     let tmp_w = HSTRING::from(tmp.to_string_lossy().as_ref());
+    // SAFETY: 源、目标的宽字符串与输出参数均为本次调用内构造的有效值。
     let result = unsafe {
         ReplaceFileW(
             &target_w,

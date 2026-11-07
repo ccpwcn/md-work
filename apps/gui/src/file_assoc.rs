@@ -14,6 +14,7 @@ fn set_string(
     name: Option<&str>,
     value: &str,
 ) -> windows::core::Result<()> {
+    // SAFETY: 键名、值名都是本地构造的 HSTRING，输出句柄仅在本函数内使用并关闭。
     unsafe {
         let subkey = HSTRING::from(subkey);
         let mut key = HKEY::default();
@@ -116,6 +117,7 @@ pub fn is_registered() -> bool {
 }
 
 fn current_command() -> Option<String> {
+    // SAFETY: 键名是本地构造的 HSTRING，缓冲区长度按字节数传入，解码范围限于写回长度。
     unsafe {
         let subkey = HSTRING::from("Software\\Classes\\MoJian.Markdown\\shell\\open\\command");
         let mut buf = vec![0u16; 1024];

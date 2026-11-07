@@ -1,11 +1,14 @@
-# 发版只在 main 分支进行：
-#   - dev 上推送 v* 标签只表示「准备发版」，不触发本流水线，不创建 Release；
-#   - dev 合并进 main 后，本流水线在 main 上起草（draft）并发布 Release。
+# 发版只在 main 上进行：
+#   - dev（及其他分支）的推送只跑 ci.yml 的构建与测试，无论是否带 v* 标签都不发版；
+#   - 只有 main 的推送（且与 Cargo 版本一致的标签已进入 main 历史）才起草并发布 Release；
+#   - 标签推送本身也会触发本流水线，但标签未进入 main 历史时直接跳过；
+#   - 发版正文固定取与该标签同名的 doc/changelog/vX.Y.Z.md。
 name: Release
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -20,8 +23,9 @@ env:
 
 jobs:
   release:
-    # workflow_dispatch 也必须选 main，禁止从 dev 或其他 ref 发版
-    if: github.ref == 'refs/heads/main'
+    # 只接受 main 分支推送或 v* 标签推送；workflow_dispatch 也必须选 main，
+    # 禁止从 dev 或其他 ref 发版
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -30,11 +34,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Verify version, tag and changelog on main
+      - name: Verify tag on main and changelog
         id: meta
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $false
@@ -47,18 +53,35 @@ jobs:
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' |
             Select-Object -First 1).Matches[0].Groups[1].Value
           if (-not $version) { throw '无法从 Cargo.toml 读取 [workspace.package].version' }
-          $tag = "v$version"
+          $cargoTag = "v$version"
+          $isTagEvent = $env:RELEASE_REF_TYPE -eq 'tag'
+          # 发版标签：标签推送用推送的标签，分支推送用 Cargo 版本对应的标签；
+          # 发版说明始终取与该标签同名的文件
+          $tag = if ($isTagEvent) { $env:RELEASE_REF_NAME } else { $cargoTag }
           $notes = "doc/changelog/$tag.md"
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "notes_path=$notes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          # 版本标签在 dev 上打；只有 main 分支的 push 会走到这里
+          # 标签必须已存在（在 dev 上打标签只表示准备发版）
           git rev-parse -q --verify "refs/tags/$tag" | Out-Null
           if ($LASTEXITCODE -ne 0) {
-            Skip "尚无版本标签 $tag，跳过发版（在 dev 上打标签表示准备发版）"
+            Skip "尚无版本标签 $tag，跳过发版（打标签只表示准备发版）"
           }
-          # squash / rebase 合并时标签不一定在 main 的历史里，因此不检查祖先关系；
-          # 是否就绪以 main 上已有的同名发版说明为准（见下方校验）。
+
+          # 标签必须已进入 main 历史：dev 上的标签推送永远不会发版；
+          # squash / rebase 合并会丢失标签，需在 main 上重新打标签
+          & git fetch --no-tags --force origin "+refs/heads/main:refs/remotes/origin/main"
+          if ($LASTEXITCODE -ne 0) { throw '拉取 main 失败，无法校验标签归属' }
+          $tagCommit = (& git rev-list -n 1 "refs/tags/$tag").Trim()
+          & git merge-base --is-ancestor $tagCommit refs/remotes/origin/main
+          if ($LASTEXITCODE -ne 0) {
+            Skip "标签 $tag 未进入 main 历史，跳过发版（dev 分支只跑测试，不发版）"
+          }
+
+          # 已进入 main 的标签必须与 Cargo 版本一致，避免发错版本
+          if ($tag -ne $cargoTag) {
+            throw "标签 $tag 与 Cargo.toml 版本 $version 不一致，拒绝发版"
+          }
 
           # 已发布的版本不重复发版；已有的 draft 则继续起草并发布
           $ErrorActionPreference = 'Continue'
@@ -72,7 +95,7 @@ jobs:
           }
 
           if (-not (Test-Path -LiteralPath $notes)) {
-            throw "缺少发版说明：$notes（须随 dev 合并进 main 后一起提交）"
+            throw "缺少发版说明：$notes（须与标签同名，并随 dev 合并进 main）"
           }
           $body = Get-Content -LiteralPath $notes -Raw -Encoding utf8
           if ([string]::IsNullOrWhiteSpace($body)) {

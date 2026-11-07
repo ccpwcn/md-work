@@ -1,5 +1,5 @@
-# dev 上推送 v* 标签只表示「准备发版」：这里仅构建与测试，不创建 Release。
-# Release 只在 main 分支上起草并发布，见 .github/workflows/release.yml。
+# 任何分支（含 dev）与 v* 标签的推送只做构建与测试，绝不创建 Release。
+# 发版只在 main 上进行，见 .github/workflows/release.yml。
 name: CI
 
 on:

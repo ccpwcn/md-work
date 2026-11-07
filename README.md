@@ -225,7 +225,7 @@ cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.2.3-se
 
 #### 持续集成
 
-GitHub Actions 与 Gitee Go 的流水线配置、Gitee 自建 Windows 主机组与发版步骤见 [doc/ci.md](doc/ci.md)：推送分支或 PR 自动构建并运行测试；GitHub 侧在 `dev` 上推送 `v*` 标签只表示准备发版，只有 `dev` 合并进 `main` 后才在 `main` 分支起草并发布 Release；Gitee Go 仍由标签触发。
+GitHub Actions 与 Gitee Go 的流水线配置、Gitee 自建 Windows 主机组与发版步骤见 [doc/ci.md](doc/ci.md)：推送分支或 PR 自动构建并运行测试；GitHub 侧 `dev` 的推送（无论是否带 `v*` 标签）只跑测试、不发版，只有 `main` 的推送且对应标签已进入 `main` 历史时才在 `main` 分支起草并发布 Release；Gitee Go 仍由标签触发。
 
 ### 已知限制（v1 范围）
 

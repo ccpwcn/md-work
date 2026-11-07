@@ -5,23 +5,28 @@ DirectX，因此所有 CI 都必须跑在 Windows 上。
 
 | 平台 | 测试（push / PR） | 发布 | 配置文件 |
 | --- | --- | --- | --- |
-| GitHub | `.github/workflows/ci.yml` | `.github/workflows/release.yml`，仅 `main` 分支 | 已就绪，使用 `windows-latest` |
+| GitHub | `.github/workflows/ci.yml` | `.github/workflows/release.yml`，仅 `main` 分支且标签已进入 `main` 历史 | 已就绪，使用 `windows-latest` |
 | Gitee | `.workflow/ci.yml` | `.workflow/release.yml`，`v*` 标签 | 需要自建 Windows 主机组 |
 
 ## 分支与发版约定（GitHub）
 
 - 功能开发一律在 `dev` 上完成，向 `main` 提 PR（或直接合并）前跑通测试。
-- 在 `dev` 上升版本、写好发版说明后推送 `v*` 标签，表示「准备发版」：
-  标签推送只触发 CI 构建与测试，**不会创建或发布 Release**。
-- 把 `dev` 合并进 `main` 并推送后，发布流水线才在 `main` 上**起草（draft）
-  并发布** Release；不得在 `dev` 或其他分支上起草、发布 Release。
+- `dev`（以及其他非 `main` 分支）的推送**只做构建与测试**：无论是否推送 `v*`
+  标签，都不会创建或发布 Release。
+- 在 `dev` 上升版本、写好发版说明后推送 `v*` 标签，只表示「准备发版」。
+- 只有推送 `main` 才会进入发布流水线，并且要求与 `Cargo.toml` 版本一致的
+  `vX.Y.Z` 标签**已进入 `main` 历史**：
+  - `dev` 合并进 `main` 后推送 `main` → 校验通过后起草并发布 Release；
+  - 单独推送一个尚未进入 `main` 的标签（例如在 `dev` 上推标签）→ 跳过，不发版；
+  - 标签在 `main` 合并之后才推送时，推标签本身也会触发同一条流水线，条件相同。
+- squash / rebase 合并会改写提交，标签不会自动进入 `main` 历史；这种情况下需
+  在 `main` 上重新打同名标签后再推送。
 
 GitHub 侧无需额外配置：任意分支（含 `dev`）、向 `main` 提 PR、以及推送
-`v*` 标签都会构建并运行 `cargo test --workspace`。只有推送 `main` 分支会进入
-发布流水线，它会：
+`v*` 标签都会构建并运行 `cargo test --workspace`。发布流水线会：
 
-1. 校验 `Cargo.toml` 的 `[workspace.package].version` 对应的 `vX.Y.Z` 标签
-   已存在（标签不存在则跳过，不发布）；
+1. 读取 `Cargo.toml` 的 `[workspace.package].version`，要求同名 `vX.Y.Z`
+   标签已存在且已进入 `main` 历史（否则跳过，不发布）；
 2. 该版本若已发布则跳过；若已有 draft Release，则继续起草并发布；
 3. 校验存在非空的 `doc/changelog/vX.Y.Z.md`（与标签同名，须已随
    `dev -> main` 合并进入 `main`），并将其作为 GitHub Release 正文
@@ -29,8 +34,9 @@ GitHub 侧无需额外配置：任意分支（含 `dev`）、向 `main` 提 PR�
 4. 跑 `cargo test --workspace`，再打便携 zip 与 NSIS 安装包，先以 `main` 为
    目标创建/更新 draft Release 并附到其上，随后在同一条流水线中发布。
 
-发布运行时的构建产物同时作为工作流 artifact 保留 90 天。`workflow_dispatch` 必须选
-`main` 分支才会运行发布 job；在 `dev` 上手动触发不会发版。
+发布运行时的构建产物同时作为工作流 artifact 保留 90 天。`workflow_dispatch`
+必须选 `main` 分支、且标签已进入 `main` 历史才会实际发版；在 `dev` 上手动触发
+不会发版。
 
 ## Gitee 远端
 
@@ -88,12 +94,12 @@ git commit -m "发布 1.2.0"
 #    例：doc/changelog/v1.2.0.md
 #    约定见 doc/changelog/README.md
 
-# 4. 在 dev 上打标签并推送（只表示准备发版，不会创建 Release）
+# 4. 在 dev 上打标签并推送（只表示准备发版；dev 上的推送不会发版）
 git tag v1.2.0
 git push origin dev
 git push origin v1.2.0
 
-# 5. 把 dev 合并进 main 并推送；main 上的流水线起草并发布 Release
+# 5. 把 dev 合并进 main 并推送；标签已进入 main 历史，流水线起草并发布 Release
 git checkout main
 git merge --no-ff dev
 git push origin main
@@ -104,11 +110,11 @@ git push gitee main
 git push gitee v1.2.0        # Gitee Go 仍由标签触发发布
 ```
 
-标签须与 Cargo 版本一致，同名发版说明须已随合并进入 `main`；缺 changelog
-或正文为空时发布任务会失败，不会创建空 Release；已发布的版本不会重复发版。
-合并方式不限：squash / rebase 合并时标签可能不在 `main` 的历史里，发布只认
-`main` 分支上的 push 与校验结果。安装包保留
-`/S` 静默安装参数，供升级脚本使用。
+标签须与 Cargo 版本一致，且须已进入 `main` 历史；同名发版说明须已随合并进入
+`main`；缺 changelog 或正文为空时发布任务会失败，不会创建空 Release；已发布的
+版本不会重复发版。`dev` 上的推送（包括 `v*` 标签）只跑测试，不发版。使用
+squash / rebase 合并时标签不会进入 `main` 历史，请在 `main` 上重新打标签后再
+推送。安装包保留 `/S` 静默安装参数，供升级脚本使用。
 
 ## 本地打包（只有明确要求时才执行）
 

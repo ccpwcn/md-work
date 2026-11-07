@@ -70,13 +70,14 @@ The NSIS script must keep working with `/S` (silent install/upgrade). If you tou
 
 ## 5. Release surfaces
 
-- Functional work happens on `dev`. The version bump, `doc/changelog/vX.Y.Z.md`
-  and a pushed `v*` tag there only mean "ready to release"; **do not draft or
-  publish a Release on `dev` or on any branch other than `main`**.
-- Releases are drafted and published only on `main`, after `dev` is merged into
-  `main`: `.github/workflows/release.yml` runs on `main` pushes (and
-  `workflow_dispatch` from `main` only), checks that the version tag exists and
-  the matching changelog is on `main`, and skips versions already published.
+- Functional work happens on `dev`. Pushes to `dev` (with or without a `v*` tag)
+  only build and test; **do not draft or publish a Release outside `main`**.
+- Releases are drafted and published only on `main`: `.github/workflows/release.yml`
+  runs on `main` pushes and on `v*` tag pushes (and `workflow_dispatch` from
+  `main` only), requires that the `vX.Y.Z` tag matching `Cargo.toml` is already
+  reachable from `main`, checks that the matching changelog is on `main`, and
+  skips versions already published. A tag pushed from `dev` alone never
+  releases; squash / rebase merges need the tag re-created on `main`.
 - The tag must match `[workspace.package].version`, and
   `doc/changelog/vX.Y.Z.md` must exist and be non-empty; that file is the
   Release body (no auto-generated notes).

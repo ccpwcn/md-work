@@ -27,6 +27,7 @@ rustc-ice-*.txt
 dist/
 temp/
 
+.cursor/mcp.json
 
 *.exe
 *.log

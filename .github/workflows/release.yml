@@ -1,66 +1,111 @@
+# 发版只在 main 分支进行：
+#   - dev 上推送 v* 标签只表示「准备发版」，不触发本流水线，不创建 Release；
+#   - dev 合并进 main 后，本流水线在 main 上起草（draft）并发布 Release。
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   release:
+    # workflow_dispatch 也必须选 main，禁止从 dev 或其他 ref 发版
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
-      - name: Verify tag, Cargo version, and changelog
+      - name: Verify version, tag and changelog on main
         id: meta
-        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
-          REF_NAME: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Skip([string]$reason) {
+            Write-Host $reason
+            "publish=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' |
             Select-Object -First 1).Matches[0].Groups[1].Value
-          $tag = $env:REF_NAME.TrimStart('v')
-          if ($tag -ne $version) {
-            throw "Tag $env:REF_NAME does not match workspace version $version"
+          if (-not $version) { throw '无法从 Cargo.toml 读取 [workspace.package].version' }
+          $tag = "v$version"
+          $notes = "doc/changelog/$tag.md"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "notes_path=$notes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          # 版本标签在 dev 上打；只有 main 分支的 push 会走到这里
+          git rev-parse -q --verify "refs/tags/$tag" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Skip "尚无版本标签 $tag，跳过发版（在 dev 上打标签表示准备发版）"
           }
-          $notes = "doc/changelog/v$version.md"
+          # squash / rebase 合并时标签不一定在 main 的历史里，因此不检查祖先关系；
+          # 是否就绪以 main 上已有的同名发版说明为准（见下方校验）。
+
+          # 已发布的版本不重复发版；已有的 draft 则继续起草并发布
+          $ErrorActionPreference = 'Continue'
+          $state = & gh release view $tag --json isDraft --jq '.isDraft' 2>$null
+          $ghExitCode = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          # gh 查不到 Release 会返回 1；重置，避免 Actions 用最后的退出码判失败
+          $LASTEXITCODE = 0
+          if ($ghExitCode -eq 0 -and "$state".Trim() -eq 'false') {
+            Skip "$tag 已发布，跳过发版"
+          }
+
           if (-not (Test-Path -LiteralPath $notes)) {
-            throw "缺少发版说明：$notes（推送 v* 标签前必须提交该文件）"
+            throw "缺少发版说明：$notes（须随 dev 合并进 main 后一起提交）"
           }
           $body = Get-Content -LiteralPath $notes -Raw -Encoding utf8
           if ([string]::IsNullOrWhiteSpace($body)) {
             throw "发版说明为空：$notes"
           }
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "notes_path=$notes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "将使用发版说明 $notes"
+          "publish=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "将在 main 上使用发版说明 $notes 起草并发布 $tag"
 
       - name: Install Rust
+        if: steps.meta.outputs.publish == 'true'
         uses: dtolnay/rust-toolchain@1.97.1
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.meta.outputs.publish == 'true'
 
       - name: Test
+        if: steps.meta.outputs.publish == 'true'
         run: cargo test --workspace
 
       - name: Package portable bundle
+        if: steps.meta.outputs.publish == 'true'
         run: cargo run -p xtask -- package
 
       - name: Install NSIS
+        if: steps.meta.outputs.publish == 'true'
         run: choco install nsis -y --no-progress
 
       - name: Build installer
+        if: steps.meta.outputs.publish == 'true'
         run: cargo run -p xtask -- installer
 
       - name: Upload workflow artifacts
+        if: steps.meta.outputs.publish == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: md-work-windows
@@ -69,12 +114,26 @@ jobs:
             dist/md-work-*-win64.zip
           if-no-files-found: error
 
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+      # 起草：以 main 为目标分支创建/更新 draft Release，并附上产物
+      - name: Draft release on main
+        if: steps.meta.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: main
+          name: ${{ steps.meta.outputs.tag }}
           body_path: ${{ steps.meta.outputs.notes_path }}
           generate_release_notes: false
+          draft: true
           files: |
             dist/md-work-*-setup.exe
             dist/md-work-*-win64.zip
+
+      # 发布：仍在同一条 main 流水线中把草稿转为正式 Release
+      - name: Publish release on main
+        if: steps.meta.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: gh release edit "$env:TAG" --draft=false

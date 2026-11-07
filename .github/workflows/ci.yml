@@ -1,8 +1,11 @@
+# dev 上推送 v* 标签只表示「准备发版」：这里仅构建与测试，不创建 Release。
+# Release 只在 main 分支上起草并发布，见 .github/workflows/release.yml。
 name: CI
 
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:

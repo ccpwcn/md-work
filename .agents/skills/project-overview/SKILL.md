@@ -11,7 +11,7 @@ description: 在软件开发中全局使用此技能。
 # 版本号
 - 唯一权威来源：根目录 `Cargo.toml` 的 `[workspace.package].version`（`X.Y.Z`）。
 - 用户要求升版本号时，**必须**运行 `.\scripts\bump-version.ps1`（可 `-Patch` / `-Minor` / `-Major` 或直接给目标版本）；禁止手工逐文件改版本。
-- 发版：仅 `v*` 标签触发；须有 `doc/changelog/vX.Y.Z.md` 作为 Release 正文。
+- 发版：功能在 `dev` 开发，推 `v*` 标签只表示准备发版、不发版；`dev` 合并进 `main` 后，只在 `main` 分支起草并发布 Release（Gitee Go 仍由标签触发）；须有 `doc/changelog/vX.Y.Z.md` 作为 Release 正文。
 - 定义、同步文件列表、自动派生引用与 Agent 约定见 [references/version.md](references/version.md)。
 
 # 参考文档

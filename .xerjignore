@@ -1,0 +1,65 @@
+# ===== 编译输出（内置规则已涵盖，保留作双重保险）=====
+target/
+build/
+out/
+bin/
+
+# ===== IntelliJ IDEA =====
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# ===== 其他IDE =====
+.openidea/
+.vscode/
+
+# ===== 日志 =====
+logs/
+*.log
+
+# ===== 本地环境与临时文件 =====
+.git/
+temp/
+*.tmp
+*.bak
+*.swp
+.DS_Store
+
+*.jpg
+*.png
+*.webp
+*.gif
+*.docx
+*.xlsx
+*.pptx
+*.pdf
+*.ttc
+*.ttf
+*.jar
+*.map
+*.zip
+*.rar
+*.tar.gz
+
+# ===== rust语言开发环境项目特别配置 =====
+Cargo.lock
+*.dll
+*.lib
+*.rlib
+*.rmeta
+*.o
+*.rcgu.o
+*.pdb
+*.bin
+*.exe
+*.msi
+*.msix
+*.zip
+*.rpm
+*.oiplugin
+*.dylib
+*.so
+*.AppImage
+*.dmg
+*.deb

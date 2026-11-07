@@ -58,17 +58,29 @@ impl AppShell {
     pub(super) fn ensure_preview(&mut self, cx: &mut Context<Self>) {
         let Some(doc) = self.active_doc_entity().cloned() else {
             self.preview_cache = None;
+            self.preview_view = None;
+            self.selection_overlay = None;
+            self.preview_frame = None;
+            self.preview_render_config = None;
             return;
         };
         let (id, revision) = {
             let doc = doc.read(cx);
             (doc.editor.entity_id(), doc.revision())
         };
-        if self
+        let config = (
+            self.config.code_wrap,
+            self.config.note_font.clone(),
+            self.config.note_font_size,
+        );
+        let cache_ok = self
             .preview_cache
             .as_ref()
-            .is_some_and(|cache| cache.doc == id && cache.revision == revision)
-        {
+            .is_some_and(|cache| cache.doc == id && cache.revision == revision);
+        let view_ok = self.preview_view.is_some()
+            && self.selection_overlay.is_some()
+            && self.preview_render_config.as_ref() == Some(&config);
+        if cache_ok && view_ok {
             return;
         }
         let text = doc.read(cx).text(cx);
@@ -82,6 +94,37 @@ impl AppShell {
             self.image_paths.clear();
             self.images_pending.clear();
         }
+        self.preview_render_config = Some(config.clone());
+
+        // 正文与选区覆盖层共享同一份选区帧数据：正文只收集布局，覆盖层
+        // 负责投影与绘制高亮。内容层随后由上层用 `Entity::cached` 缓存，
+        // 只有选区变化才会重绘覆盖层，拖选大文档时才不会每帧重排正文。
+        let frame = crate::preview_selection::new_frame_selection();
+        let base = doc.read(cx).path.parent().map(|path| path.to_path_buf());
+        let ir = self.preview_cache.as_ref().unwrap().ir.clone();
+        let preview_view = cx.new(|_| {
+            crate::preview::MarkdownPreview::new(
+                ir,
+                base,
+                self.math.clone(),
+                self.image_paths.clone(),
+                config.0,
+                config.1,
+                config.2,
+                frame.clone(),
+            )
+        });
+        // 预览滚动只通知 MarkdownPreview 自身，不会像编辑态那样经 Doc 冒泡到
+        // AppShell。订阅它，滚动时 AppShell 才会重绘大纲面板并反查当前标题，
+        // 实现「内容滚动→大纲跟随」。旧视图被替换 dropping 后订阅自动失效。
+        cx.observe(&preview_view, |_, _, cx| cx.notify()).detach();
+        let selection_color = cx.theme().selection;
+        let overlay = cx.new(|cx| {
+            crate::preview_selection::SelectionOverlay::new(frame.clone(), selection_color, cx)
+        });
+        self.preview_frame = Some(frame);
+        self.preview_view = Some(preview_view);
+        self.selection_overlay = Some(overlay);
         self.queue_math(cx);
         self.queue_images(cx);
     }
@@ -139,7 +182,13 @@ impl AppShell {
                     this.math_pending.remove(&key);
                     this.math.insert(key, path);
                 }
-                cx.notify();
+                if let Some(view) = this.preview_view.clone() {
+                    view.update(cx, |view, cx| {
+                        view.set_assets(this.math.clone(), this.image_paths.clone(), cx);
+                    });
+                } else {
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -189,7 +238,13 @@ impl AppShell {
                     this.images_pending.remove(&key);
                     this.image_paths.insert(key, resolved);
                 }
-                cx.notify();
+                if let Some(view) = this.preview_view.clone() {
+                    view.update(cx, |view, cx| {
+                        view.set_assets(this.math.clone(), this.image_paths.clone(), cx);
+                    });
+                } else {
+                    cx.notify();
+                }
             });
         })
         .detach();

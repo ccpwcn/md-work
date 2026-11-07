@@ -561,6 +561,7 @@ impl AppShell {
 
     pub(super) fn render_outline_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.refresh_outline(cx);
+        self.sync_outline_to_content(cx);
         let items = self.outline.clone();
         let count = items.len();
         let has_doc = self.active_doc.is_some();
@@ -571,6 +572,8 @@ impl AppShell {
         let bookmarks = self.bookmarks.clone();
         let shell = cx.entity();
         let hover = cx.theme().list_hover;
+        let active_bg = cx.theme().list_active;
+        let active = self.active_outline;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
 
@@ -586,17 +589,14 @@ impl AppShell {
                         let level = item.level.clamp(1, 6);
                         let line = item.line;
                         let title = item.title.clone();
-                        let (notebook_id, rel_path) = match &target {
-                            Some((id, rel)) => (Some(*id), Some(rel.clone())),
-                            None => (None, None),
-                        };
+                        let is_active = active == Some(index);
+                        let rel_path = target.as_ref().map(|(_, rel)| rel.clone());
                         let starred = rel_path
                             .as_deref()
                             .map(|rel| bookmarks.has_heading(rel, &title))
                             .unwrap_or(false);
                         let row_shell = shell.clone();
                         let star_shell = shell.clone();
-                        let jump_rel = rel_path.clone();
                         let star_rel = rel_path.clone();
                         let star_title = title.clone();
 
@@ -610,6 +610,7 @@ impl AppShell {
                             .pl(px(8.0 + (level - 1) as f32 * 12.0))
                             .pr_1()
                             .rounded_md()
+                            .when(is_active, move |style| style.bg(active_bg))
                             .hover(move |style| style.bg(hover))
                             .child(
                                 div()
@@ -621,13 +622,9 @@ impl AppShell {
                                     .items_center()
                                     .cursor_pointer()
                                     .on_click(move |_, window, cx| {
-                                        if let (Some(id), Some(rel)) =
-                                            (notebook_id, jump_rel.clone())
-                                        {
-                                            row_shell.update(cx, |this, cx| {
-                                                this.jump_to(id, &rel, line, window, cx)
-                                            });
-                                        }
+                                        row_shell.update(cx, |this, cx| {
+                                            this.jump_to_outline(line, window, cx)
+                                        });
                                     })
                                     .child(
                                         div()
@@ -635,6 +632,9 @@ impl AppShell {
                                             .min_w_0()
                                             .truncate()
                                             .text_sm()
+                                            .when(is_active, |this| {
+                                                this.font_weight(FontWeight::BOLD)
+                                            })
                                             .text_color(foreground)
                                             .child(title),
                                     ),

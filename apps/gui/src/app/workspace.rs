@@ -75,6 +75,10 @@ impl AppShell {
         self.delete_confirm = None;
         self.flash_rel = None;
         self.preview_cache = None;
+        self.preview_view = None;
+        self.selection_overlay = None;
+        self.preview_frame = None;
+        self.preview_render_config = None;
         self.outline = Arc::default();
         self.outline_cache = None;
         self.math.clear();

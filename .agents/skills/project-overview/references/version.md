@@ -4,8 +4,8 @@
 
 - **唯一权威**：仓库根目录 `Cargo.toml` → `[workspace.package].version`
 - 格式：严格 `X.Y.Z`（semver 数字三段，无 `v` 前缀、无预发布后缀）
-- Git 发版标签：`v` + 版本号，例如 `v1.1.1`；CI 会校验标签与 Cargo 版本一致
-- 发版说明：`doc/changelog/vX.Y.Z.md`（与标签同名）；打 `v*` 标签前必须已提交且非空，Release 正文用该文件，不用 GitHub 自动生成说明
+- Git 发版标签：`v` + 版本号，例如 `v1.1.1`；标签可在 `dev` 上打并推送，但 `dev` 的推送（无论是否带标签）只跑测试、不发版；只有 `main` 的推送且该标签已进入 `main` 历史时才发版，发布流水线会校验标签与 Cargo 版本一致，以及同名发版说明已随合并进入 `main`
+- 发版说明：`doc/changelog/vX.Y.Z.md`（与标签同名）；打 `v*` 标签前必须已提交且非空，Release 正文用该文件，不用 GitHub 自动生成说明；Release 只在 `main` 上起草并发布
 
 ## 升版方式（必用脚本）
 
@@ -21,6 +21,7 @@
 
 - **不要**手工逐个文件改版本号；一律跑上述脚本。
 - 脚本**不会** git commit / tag / push；提交与打标签由用户明确要求后再做。
+- 升版 ≠ 发版；`dev` 上打标签只是准备发版，合并进 `main` 后才发布。
 - 升版 ≠ 打安装包；安装包仍须用户明确要求后才执行 `.\scripts\build-installer.ps1` 或 xtask。
 
 ## 脚本会同步改写的文件
@@ -48,13 +49,13 @@
 | Windows VERSIONINFO | `apps/gui/build.rs` + winresource |
 | 便携包/安装包文件名 | `xtask`（`md-work-<ver>-win64`、`md-work-<ver>-setup.exe`） |
 | NSIS 正式构建 | xtask 传 `/DVERSION=...`（覆盖 nsi 回退值） |
-| Release 标签校验 | `.github/workflows/release.yml` 等 |
+| Release 标签校验与发布 | `.github/workflows/release.yml`（仅 `main`，且标签须已进入 `main` 历史）、`.workflow/release.yml`（Gitee 仍按标签） |
 | 发版说明 | `doc/changelog/vX.Y.Z.md`（发版流水线必检） |
 
 ## Agent 执行约定
 
 1. 用户要求升版 → 只运行 `scripts/bump-version.ps1`（可先 `-DryRun`）。
 2. 升版后按 `md-work-dev-workflow`：`cargo build --workspace` 与 `cargo test --workspace`（脚本已做 `cargo check`；完整 test 仍建议跑）。
-3. 用户准备发版时：确保 `doc/changelog/vX.Y.Z.md` 已写好并与即将打的标签一致；缺文件不要推 tag。
-4. 不要顺手打 NSIS 包、不要推 tag，除非用户明确说。
+3. 用户准备发版时：在 `dev` 上确保 `doc/changelog/vX.Y.Z.md` 已写好并与即将打的标签一致；缺文件不要推 tag。推送标签只是「准备发版」，不得在 `dev` 上起草或发布 Release。
+4. 发版只在 `main`：`dev` 的推送（包括 `v*` 标签）只跑测试、不发版；`dev` 合并进 `main` 且标签已进入 `main` 历史后，由 GitHub Actions 在 `main` 上起草并发布 Release；未经用户明确要求，不要合并、推 tag、打 NSIS 包或创建 Release。
 5. 不要在业务代码或新文档里再复制一份硬编码版本；能读 Cargo / env 就读 Cargo / env。

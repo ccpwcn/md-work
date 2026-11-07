@@ -9,7 +9,7 @@
 
 ## 一、项目简介
 
-**当前版本：1.2.3**。Windows 优先的纯 Rust Markdown 笔记本——为 AI 时代的笔记与文档工作流而生。
+**当前版本：1.2.4**。Windows 优先的纯 Rust Markdown 笔记本——为 AI 时代的笔记与文档工作流而生。
 
 版本号以根目录 `Cargo.toml` 的 `[workspace.package].version` 为唯一来源；各 crate、CLI `--version`、设置页、Windows 资源 VERSIONINFO、NSIS 安装包与标签 `v*` 均与之对齐。镜像仓库：[Gitee](https://gitee.com/ccpwcn/md-work)。
 
@@ -73,13 +73,13 @@
 
 | 产物 | 说明 |
 | --- | --- |
-| `md-work-1.2.3-setup.exe` | NSIS 安装包（推荐） |
-| `md-work-1.2.3-win64.zip` | 便携版，解压即用 |
+| `md-work-1.2.4-setup.exe` | NSIS 安装包（推荐） |
+| `md-work-1.2.4-win64.zip` | 便携版，解压即用 |
 
 ### 安装
 
 - **安装包**：双击 `md-work-*-setup.exe`，按提示选择工作区（默认 `我的文档\md-work`）。安装到当前用户目录，**不需要管理员权限**，不写 HKLM，也不会静默抢走 `.md` 的默认打开方式。
-- **静默安装**：`md-work-1.2.3-setup.exe /S`（不弹页面，使用默认工作区）。
+- **静默安装**：`md-work-1.2.4-setup.exe /S`（不弹页面，使用默认工作区）。
 - **便携版**：解压 zip 后直接运行 `md-work.exe`。
 
 安装目录（按用户）：`%LOCALAPPDATA%\Programs\md-work`。
@@ -217,15 +217,15 @@ cargo test --workspace
 
 ```powershell
 cargo run -p xtask -- icon        # 由 SVG 生成软件图标和安装包图标
-cargo run -p xtask -- package     # release 构建 → dist/md-work-1.2.3-win64/ 与 .zip
-cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.2.3-setup.exe
+cargo run -p xtask -- package     # release 构建 → dist/md-work-1.2.4-win64/ 与 .zip
+cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.2.4-setup.exe
 ```
 
 `installer` 需要 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH、`NSIS_HOME`、`E:\apps\nsis` 或默认 Program Files 目录）。安装脚本位于 `packaging/nsis/md-work.nsi`，按用户安装、HKCU 卸载信息、卸载时保留笔记与设置。安装程序包含「选择工作区」页面（默认 `我的文档\md-work`），首次安装时把所选文件夹写入 `HKCU\Software\md-work\WorkspaceRoot`；应用只在 `config\runtime.toml`（以及旧版 `config.json`）尚无工作区时采用该值，随后写回完整配置，升级不会覆盖现有设置。支持 `/S` 静默安装（不弹页面，直接使用默认工作区）。
 
 #### 持续集成
 
-GitHub Actions 与 Gitee Go 的流水线配置、Gitee 自建 Windows 主机组与发版步骤见 [doc/ci.md](doc/ci.md)：推送分支或 PR 自动构建并运行测试，推送 `v*` 标签自动构建安装包并发布 Release。
+GitHub Actions 与 Gitee Go 的流水线配置、Gitee 自建 Windows 主机组与发版步骤见 [doc/ci.md](doc/ci.md)：推送分支或 PR 自动构建并运行测试；GitHub 侧 `dev` 的推送（无论是否带 `v*` 标签）只跑测试、不发版，只有 `main` 的推送且对应标签已进入 `main` 历史时才在 `main` 分支起草并发布 Release；Gitee Go 仍由标签触发。
 
 ### 已知限制（v1 范围）
 

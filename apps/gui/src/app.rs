@@ -573,6 +573,15 @@ pub struct AppShell {
     /// Briefly highlight this notebook entry after reveal/scroll.
     flash_rel: Option<(Uuid, String)>,
     preview_cache: Option<PreviewCache>,
+    /// 预览正文内容层实体。文档内容/配置不变时它由 `Entity::cached`
+    /// 整段缓存、跳过重绘，选区变化只会重绘独立的覆盖层。
+    preview_view: Option<Entity<crate::preview::MarkdownPreview>>,
+    /// 预览选区覆盖层实体：订阅窗口选区变化，只在自身被通知时重绘。
+    selection_overlay: Option<Entity<crate::preview_selection::SelectionOverlay>>,
+    /// 正文与覆盖层共享的选区帧数据（runs / 投影结果）。
+    preview_frame: Option<crate::preview_selection::SharedPreviewSelection>,
+    /// 创建 `preview_view` 时使用的渲染配置，用于在设置变化时重建它。
+    preview_render_config: Option<(bool, String, f32)>,
     /// 状态栏全文统计的缓存，键为 `(文档实体、文本修订号)`。
     /// 预览时每次窗口重绘都会执行 `AppShell::render`，避免重复扫描全文。
     status_stats: Option<(EntityId, u64, TextStats)>,
@@ -877,6 +886,10 @@ impl AppShell {
             delete_confirm: None,
             flash_rel: None,
             preview_cache: None,
+            preview_view: None,
+            selection_overlay: None,
+            preview_frame: None,
+            preview_render_config: None,
             status_stats: None,
             math: HashMap::new(),
             math_pending: HashSet::new(),

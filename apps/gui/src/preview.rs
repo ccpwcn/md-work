@@ -38,7 +38,6 @@ struct InlineStyle {
     order: Option<Rc<Cell<u64>>>,
     /// 本次渲染共享的选区帧数据；纯文本单元测试中为 `None`。
     selection: Option<crate::preview_selection::SharedPreviewSelection>,
-    selection_color: Hsla,
 }
 
 /// Resolved preview image: on-disk path plus natural pixel size (for layout).
@@ -72,8 +71,16 @@ pub fn render(
     wrap_code: bool,
     note_font: &str,
     note_size: f32,
+    frame: crate::preview_selection::SharedPreviewSelection,
     cx: &App,
 ) -> AnyElement {
+    // 全量重建正文前清空上一帧的选区片段：内容层缓存失效（滚动、窗口
+    // 缩放、图片/公式加载）会重新 prepaint 并向共享帧追加 runs。若不清空，
+    // 覆盖层会把同一选区按累积的重复片段绘制多次——半透明高亮越叠越深，
+    // 旧片段还带着旧滚动偏移的 bounds，投影出错位残影，且 runs 无限增长
+    // 让 update_runs 每帧越来越慢。每次全量 re-prepaint 前必经一次 render()，
+    // 在此清空即可保证 runs 恒为「当前这一份」。
+    frame.borrow_mut().clear();
     let theme = cx.theme();
     let body_size = if note_size > 0.0 {
         note_size.clamp(10.0, 32.0)
@@ -85,7 +92,6 @@ pub fn render(
     } else {
         SharedString::from(note_font.trim().to_string())
     };
-    let frame = crate::preview_selection::new_frame_selection();
     let context = RenderCtx {
         base,
         style: InlineStyle {
@@ -98,7 +104,6 @@ pub fn render(
             size: body_size,
             order: Some(Rc::new(Cell::new(0))),
             selection: Some(frame.clone()),
-            selection_color: theme.selection,
         },
         border: theme.border,
         styles: &ir.styles,
@@ -132,12 +137,76 @@ pub fn render(
     div()
         .id("preview-scroll")
         .size_full()
-        .overflow_y_scroll()
-        // 整篇预览只挂载一个选区代理，且必须是第一个子元素：
-        // 它的 prepaint/paint 都要先于各文本片段执行。
-        .child(crate::preview_selection::SelectionProxy::new(frame))
+        .overflow_y_scrollbar()
         .child(column)
         .into_any_element()
+}
+
+/// 预览正文内容层：把 [`PreviewIr`] 渲染成原生 GPUI 元素树。它被上层用
+/// `Entity::cached` 包裹，文档内容不变时整段跳过重绘与重新排版；选区高亮
+/// 由独立的 [`SelectionOverlay`](crate::preview_selection::SelectionOverlay)
+/// 负责，本层不绘制选区。
+pub struct MarkdownPreview {
+    ir: PreviewIr,
+    base: Option<PathBuf>,
+    math: HashMap<u64, Option<PathBuf>>,
+    images: HashMap<u64, Option<PreviewImage>>,
+    wrap_code: bool,
+    note_font: String,
+    note_size: f32,
+    frame: crate::preview_selection::SharedPreviewSelection,
+}
+
+impl MarkdownPreview {
+    pub fn new(
+        ir: PreviewIr,
+        base: Option<PathBuf>,
+        math: HashMap<u64, Option<PathBuf>>,
+        images: HashMap<u64, Option<PreviewImage>>,
+        wrap_code: bool,
+        note_font: String,
+        note_size: f32,
+        frame: crate::preview_selection::SharedPreviewSelection,
+    ) -> Self {
+        Self {
+            ir,
+            base,
+            math,
+            images,
+            wrap_code,
+            note_font,
+            note_size,
+            frame,
+        }
+    }
+
+    /// 异步加载完图片/公式后，由 AppShell 注入最新资产并触发本层重绘。
+    pub fn set_assets(
+        &mut self,
+        math: HashMap<u64, Option<PathBuf>>,
+        images: HashMap<u64, Option<PreviewImage>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.math = math;
+        self.images = images;
+        cx.notify();
+    }
+}
+
+impl Render for MarkdownPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        render(
+            &self.ir,
+            self.base.as_deref(),
+            &self.math,
+            &self.images,
+            self.wrap_code,
+            &self.note_font,
+            self.note_size,
+            self.frame.clone(),
+            cx,
+        )
+    }
 }
 
 fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement {
@@ -717,7 +786,6 @@ fn selectable_styled_text(text: StyledContent, style: &InlineStyle) -> AnyElemen
         text.text,
         styled,
         order,
-        style.selection_color,
         frame.clone(),
     )
     .into_any_element()
@@ -946,11 +1014,7 @@ fn append_inlines(
         let start = out.len();
         match inline {
             Inline::Text(text) => out.push_str(text),
-            Inline::Code(code) => {
-                out.push('`');
-                out.push_str(code);
-                out.push('`');
-            }
+            Inline::Code(code) => out.push_str(code),
             Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strike(children) => {
                 let is_strong = matches!(inline, Inline::Strong(_));
                 let is_strike = matches!(inline, Inline::Strike(_));
@@ -1100,7 +1164,6 @@ fn clone_style(style: &InlineStyle) -> InlineStyle {
         size: style.size,
         order: style.order.clone(),
         selection: style.selection.clone(),
-        selection_color: style.selection_color,
     }
 }
 
@@ -1327,7 +1390,6 @@ mod tests {
             size: 16.0,
             order: None,
             selection: None,
-            selection_color: gpui_kit::transparent_black(),
         }
     }
 

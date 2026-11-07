@@ -1257,18 +1257,7 @@ impl AppShell {
 
         if doc.read(cx).preview_mode {
             self.ensure_preview(cx);
-            if let Some(cache) = &self.preview_cache {
-                let base = doc.read(cx).path.parent().map(|path| path.to_path_buf());
-                let rendered = preview::render(
-                    &cache.ir,
-                    base.as_deref(),
-                    &self.math,
-                    &self.image_paths,
-                    self.config.code_wrap,
-                    &self.config.note_font,
-                    self.config.note_font_size,
-                    cx,
-                );
+            if let (Some(content), Some(overlay)) = (&self.preview_view, &self.selection_overlay) {
                 let shell = cx.entity().downgrade();
                 let copy_label = t!("preview.context_copy").to_string();
                 let markdown_label = t!("preview.context_copy_markdown").to_string();
@@ -1317,7 +1306,16 @@ impl AppShell {
                             }),
                         )
                     })
-                    .child(rendered)
+                    // 正文内容层用 `Entity::cached` 包裹：文档不变时整段
+                    // 缓存、跳过重绘与重新排版，拖选大文档才不会每帧重排
+                    // 上千个文本元素。选区高亮由独立的覆盖层负责，只在选区
+                    // 变化时重绘。
+                    .child(
+                        content
+                            .clone()
+                            .cached(gpui_kit::StyleRefinement::default().size_full()),
+                    )
+                    .child(overlay.clone())
                     .into_any_element();
             }
         }

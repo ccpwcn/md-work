@@ -600,6 +600,9 @@ pub struct AppShell {
     /// 不必复制全部标题。
     outline: Arc<Vec<OutlineItem>>,
     outline_cache: Option<(EntityId, u64)>,
+    /// 当前内容对应的大纲标题下标：编辑态随光标、预览态随滚动更新，
+    /// 变化时高亮并把大纲滚动到该标题。
+    active_outline: Option<usize>,
     bookmarks: Bookmarks,
     bookmarks_notebook: Option<Uuid>,
     bookmarks_loading: Option<Uuid>,
@@ -901,6 +904,7 @@ impl AppShell {
             panel_resize: None,
             outline: Arc::default(),
             outline_cache: None,
+            active_outline: None,
             bookmarks: Bookmarks::default(),
             bookmarks_notebook: None,
             bookmarks_loading: None,

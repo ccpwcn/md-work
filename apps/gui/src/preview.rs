@@ -1,6 +1,7 @@
 //! Renders a [`PreviewIr`] with native GPUI elements.
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -57,6 +58,114 @@ struct RenderCtx<'a> {
     images: &'a HashMap<u64, Option<PreviewImage>>,
     wrap_code: bool,
     body_size: f32,
+    outline: Option<PreviewOutlineTracker>,
+}
+
+/// 一帧内预览各标题相对滚动内容原点的 y 位置（文档顺序），供大纲联动：
+/// 点击大纲据此把标题滚到视口顶部，内容滚动据此反查当前标题。
+#[derive(Default)]
+pub struct PreviewFrameHeadings {
+    entries: Vec<(usize, Pixels)>,
+}
+
+impl PreviewFrameHeadings {
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn push(&mut self, line: usize, y: Pixels) {
+        self.entries.push((line, y));
+    }
+
+    pub fn entries(&self) -> &[(usize, Pixels)] {
+        &self.entries
+    }
+}
+
+pub type SharedPreviewHeadings = Rc<RefCell<PreviewFrameHeadings>>;
+
+pub fn new_frame_headings() -> SharedPreviewHeadings {
+    Rc::new(RefCell::new(PreviewFrameHeadings::default()))
+}
+
+/// 预览大纲联动共享状态：标题位置帧 + 正文滚动句柄。
+#[derive(Clone)]
+pub struct PreviewOutlineTracker {
+    pub headings: SharedPreviewHeadings,
+    pub scroll_handle: ScrollHandle,
+}
+
+/// 包裹标题元素：prepaint 时把标题的窗口坐标换算成相对滚动内容原点的 y
+/// 写入共享帧。换算公式 `content_y = bounds.y - 容器.y - 滚动偏移.y`
+/// （偏移向下为负），因此滚动后标题的内容坐标保持稳定。
+struct HeadingAnchor {
+    line: usize,
+    tracker: PreviewOutlineTracker,
+    child: AnyElement,
+}
+
+impl IntoElement for HeadingAnchor {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for HeadingAnchor {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        Some(ElementId::Name(
+            format!("preview-heading-{}", self.line).into(),
+        ))
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let handle = &self.tracker.scroll_handle;
+        let content_y = bounds.origin.y - handle.bounds().origin.y - handle.offset().y;
+        self.tracker
+            .headings
+            .borrow_mut()
+            .push(self.line, content_y);
+        self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        _: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+    }
 }
 
 #[expect(
@@ -72,6 +181,7 @@ pub fn render(
     note_font: &str,
     note_size: f32,
     frame: crate::preview_selection::SharedPreviewSelection,
+    outline: Option<PreviewOutlineTracker>,
     cx: &App,
 ) -> AnyElement {
     // 全量重建正文前清空上一帧的选区片段：内容层缓存失效（滚动、窗口
@@ -81,6 +191,9 @@ pub fn render(
     // 让 update_runs 每帧越来越慢。每次全量 re-prepaint 前必经一次 render()，
     // 在此清空即可保证 runs 恒为「当前这一份」。
     frame.borrow_mut().clear();
+    if let Some(outline) = &outline {
+        outline.headings.borrow_mut().clear();
+    }
     let theme = cx.theme();
     let body_size = if note_size > 0.0 {
         note_size.clamp(10.0, 32.0)
@@ -111,6 +224,7 @@ pub fn render(
         images,
         wrap_code,
         body_size,
+        outline: outline.clone(),
     };
 
     let mut column = div()
@@ -134,12 +248,37 @@ pub fn render(
         column = column.child(render_block(block, &context, cx));
     }
 
-    div()
-        .id("preview-scroll")
-        .size_full()
-        .overflow_y_scrollbar()
-        .child(column)
-        .into_any_element()
+    // 大纲联动需要持有「真正滚动容器」的句柄：overflow_y_scrollbar() 会在
+    // 内部另建一个滚动区与句柄，把 track_scroll 挂在外层只会绑到被滚动的内容
+    // 上，offset 恒为 0。这里仿照 Scrollable 的结构手动搭建——相对定位根之下，
+    // scroll_area 用我们的句柄 track_scroll + overflow_y_scroll 承担实际滚动，
+    // 滚动条作为兄弟覆盖层读取同一句柄，不随内容滚动。
+    match &outline {
+        Some(outline) => {
+            let handle = &outline.scroll_handle;
+            div()
+                .id("preview-scroll")
+                .size_full()
+                .relative()
+                .child(
+                    div()
+                        .id("preview-scroll-area")
+                        .size_full()
+                        .flex_col()
+                        .track_scroll(handle)
+                        .overflow_y_scroll()
+                        .child(column.flex_none().h_auto().min_h_full()),
+                )
+                .vertical_scrollbar(handle)
+                .into_any_element()
+        }
+        None => div()
+            .id("preview-scroll")
+            .size_full()
+            .overflow_y_scrollbar()
+            .child(column)
+            .into_any_element(),
+    }
 }
 
 /// 预览正文内容层：把 [`PreviewIr`] 渲染成原生 GPUI 元素树。它被上层用
@@ -155,6 +294,8 @@ pub struct MarkdownPreview {
     note_font: String,
     note_size: f32,
     frame: crate::preview_selection::SharedPreviewSelection,
+    headings: SharedPreviewHeadings,
+    scroll_handle: ScrollHandle,
 }
 
 impl MarkdownPreview {
@@ -177,7 +318,26 @@ impl MarkdownPreview {
             note_font,
             note_size,
             frame,
+            headings: new_frame_headings(),
+            scroll_handle: ScrollHandle::new(),
         }
+    }
+
+    /// 大纲联动用的共享状态：标题位置帧 + 正文滚动句柄。
+    pub fn outline_tracker(&self) -> PreviewOutlineTracker {
+        PreviewOutlineTracker {
+            headings: self.headings.clone(),
+            scroll_handle: self.scroll_handle.clone(),
+        }
+    }
+
+    /// 当前帧各标题（源码行号从 1 开始）相对内容原点的 y 位置。
+    pub fn headings(&self) -> Vec<(usize, Pixels)> {
+        self.headings.borrow().entries().to_vec()
+    }
+
+    pub fn scroll_handle(&self) -> ScrollHandle {
+        self.scroll_handle.clone()
     }
 
     /// 异步加载完图片/公式后，由 AppShell 注入最新资产并触发本层重绘。
@@ -204,6 +364,7 @@ impl Render for MarkdownPreview {
             &self.note_font,
             self.note_size,
             self.frame.clone(),
+            Some(self.outline_tracker()),
             cx,
         )
     }
@@ -213,7 +374,11 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
     let theme = cx.theme();
     let style = &context.style;
     match block {
-        Block::Heading { level, content, .. } => {
+        Block::Heading {
+            level,
+            content,
+            line,
+        } => {
             let size = context.body_size
                 * match level {
                     1 => 1.875,
@@ -228,12 +393,21 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
                 ..clone_style(style)
             };
             let text = styled_inlines(content, &heading_style, FontWeight::BOLD);
-            div()
+            let heading = div()
                 .w_full()
                 .pt(px(2.))
                 .line_height(relative(1.2))
                 .child(selectable_styled_text(text, &heading_style))
-                .into_any_element()
+                .into_any_element();
+            match &context.outline {
+                Some(outline) => HeadingAnchor {
+                    line: *line,
+                    tracker: outline.clone(),
+                    child: heading,
+                }
+                .into_any_element(),
+                None => heading,
+            }
         }
         Block::Paragraph { content, .. } => render_paragraph(content, context),
         Block::CodeBlock { language, text, .. } => {
@@ -324,8 +498,11 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
                 .into_any_element()
         }
         Block::Table {
-            head, rows, aligns, ..
-        } => render_table(head, rows, aligns, style, cx),
+            head,
+            rows,
+            aligns,
+            line,
+        } => render_table(head, rows, aligns, *line, style, cx),
         Block::Image {
             src,
             alt,
@@ -849,10 +1026,19 @@ fn render_table(
     head: &[Vec<Inline>],
     rows: &[Vec<Vec<Inline>>],
     aligns: &[Align],
+    line: usize,
     style: &InlineStyle,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
+    // 隔行底色取悬停色的一半透明度：比表头浅、比空白行深，形成柔和条纹；
+    // 悬停时用完整悬停色覆盖，给出明确的交互反馈。
+    let zebra = Hsla {
+        a: theme.list_hover.a * 0.5,
+        ..theme.list_hover
+    };
+    let hover = theme.list_hover;
+    let table_id = format!("tbl-{line}");
     let mut table = div()
         .w_full()
         .rounded_md()
@@ -862,25 +1048,45 @@ fn render_table(
         .v_flex();
 
     if !head.is_empty() {
-        table = table.child(table_row(head, aligns, style, true));
+        table = table.child(table_row(
+            head, aligns, style, true, 0, &table_id, zebra, hover,
+        ));
     }
-    for row in rows {
-        table = table.child(table_row(row, aligns, style, false));
+    for (index, row) in rows.iter().enumerate() {
+        table = table.child(table_row(
+            row, aligns, style, false, index, &table_id, zebra, hover,
+        ));
     }
     table.into_any_element()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "表格行需要显式传入对齐、条纹与悬停色等彼此独立的渲染参数"
+)]
 fn table_row(
     cells: &[Vec<Inline>],
     aligns: &[Align],
     style: &InlineStyle,
     header: bool,
+    row_index: usize,
+    table_id: &str,
+    zebra: Hsla,
+    hover: Hsla,
 ) -> AnyElement {
+    let row_id = if header {
+        format!("{table_id}-head")
+    } else {
+        format!("{table_id}-row-{row_index}")
+    };
     let mut row = div()
+        .id(row_id)
         .w_full()
         .flex()
         .border_b_1()
-        .when(header, |this| this.bg(style.code_background));
+        .when(header, |this| this.bg(style.code_background))
+        .when(!header && row_index % 2 == 1, move |this| this.bg(zebra))
+        .when(!header, move |this| this.hover(move |this| this.bg(hover)));
     for (index, cell) in cells.iter().enumerate() {
         let align = aligns.get(index).copied().unwrap_or(Align::None);
         let weight = if header {

@@ -114,6 +114,10 @@ impl AppShell {
                 frame.clone(),
             )
         });
+        // 预览滚动只通知 MarkdownPreview 自身，不会像编辑态那样经 Doc 冒泡到
+        // AppShell。订阅它，滚动时 AppShell 才会重绘大纲面板并反查当前标题，
+        // 实现「内容滚动→大纲跟随」。旧视图被替换 dropping 后订阅自动失效。
+        cx.observe(&preview_view, |_, _, cx| cx.notify()).detach();
         let selection_color = cx.theme().selection;
         let overlay = cx.new(|cx| {
             crate::preview_selection::SelectionOverlay::new(frame.clone(), selection_color, cx)

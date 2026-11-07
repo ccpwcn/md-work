@@ -71,10 +71,8 @@ impl SelectionOverlay {
         // 选区每次变化（mouse_move、滚动都会发布新快照）只重绘覆盖层
         // 自身，而不是整窗：正文层因此可以保持缓存、不被拖选拖垮。
         let entity = cx.entity().clone();
-        let _subscription = handle.subscribe(
-            move |_, cx: &mut App| cx.notify(entity.entity_id()),
-            cx,
-        );
+        let _subscription =
+            handle.subscribe(move |_, cx: &mut App| cx.notify(entity.entity_id()), cx);
         Self {
             frame,
             handle,
@@ -98,11 +96,7 @@ pub struct SelectionOverlayElement {
 }
 
 impl SelectionOverlayElement {
-    pub fn new(
-        frame: SharedPreviewSelection,
-        color: Hsla,
-        handle: TextSelectionHandle,
-    ) -> Self {
+    pub fn new(frame: SharedPreviewSelection, color: Hsla, handle: TextSelectionHandle) -> Self {
         Self {
             frame,
             handle,
@@ -570,7 +564,11 @@ mod tests {
                     .h(px(60.))
                     .w(px(300.))
                     .overflow_y_scroll()
-                    .child(SelectionOverlayElement::new(frame, selection_color(), handle))
+                    .child(SelectionOverlayElement::new(
+                        frame,
+                        selection_color(),
+                        handle,
+                    ))
                     .child(column),
             )
         }
@@ -646,6 +644,7 @@ mod tests {
                     "",
                     16.0,
                     self.frame.clone(),
+                    None,
                     cx,
                 )
             }
@@ -664,5 +663,62 @@ mod tests {
             let _ = window.draw(cx);
         });
         assert_eq!(probe.borrow().len(), first, "重绘不得累积选区片段");
+    }
+
+    /// 回归用例：预览标题位置帧与选区帧同样由内容实体跨帧持有，缓存失效
+    /// 重建会重新 prepaint 并追加标题位置。`render()` 必须先清空再重建，
+    /// 否则标题位置随重绘累积，大纲联动会读到重复/错位的坐标。这里连续
+    /// 重绘两次，断言两个标题各记录一次且数量恒定。
+    #[gpui::test]
+    fn preview_headings_recorded_without_accumulation(cx: &mut TestAppContext) {
+        use crate::preview::{PreviewOutlineTracker, new_frame_headings};
+        use gpui_kit::ScrollHandle;
+        use mdwork_render::preview::PreviewIr;
+        use std::collections::HashMap;
+
+        struct HeadingPreview {
+            frame: SharedPreviewSelection,
+            tracker: PreviewOutlineTracker,
+        }
+        impl Render for HeadingPreview {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let ir = PreviewIr::from_markdown("# One\n\ntext\n\n## Two\n\nmore\n");
+                crate::preview::render(
+                    &ir,
+                    None,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    false,
+                    "",
+                    16.0,
+                    self.frame.clone(),
+                    Some(self.tracker.clone()),
+                    cx,
+                )
+            }
+        }
+
+        let frame = new_frame_selection();
+        let headings = new_frame_headings();
+        let tracker = PreviewOutlineTracker {
+            headings: headings.clone(),
+            scroll_handle: ScrollHandle::new(),
+        };
+        let probe = headings.clone();
+        cx.update(|cx| gpui_kit::init(cx));
+        let (_, cx) = cx.add_window_view(|_, _| HeadingPreview { frame, tracker });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let first = probe.borrow().entries().len();
+        assert_eq!(first, 2, "两个标题应各记录一次位置");
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(
+            probe.borrow().entries().len(),
+            first,
+            "重绘不得累积标题位置"
+        );
     }
 }

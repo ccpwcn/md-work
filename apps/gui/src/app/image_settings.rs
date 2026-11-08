@@ -154,10 +154,17 @@ impl AppShell {
         let config_body: AnyElement = match dialog.mode {
             ImageHostMode::Local => div()
                 .h_flex()
+                .w_full()
                 .items_start()
                 .gap_2()
                 .child(Icon::new(IconName::FolderOpen).small().text_color(p.muted))
-                .child(settings_hint(t!("image.local_hint").to_string(), p))
+                .child(
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(settings_hint(t!("image.local_hint").to_string(), p)),
+                )
                 .into_any_element(),
             ImageHostMode::PicGo => div()
                 .v_flex()

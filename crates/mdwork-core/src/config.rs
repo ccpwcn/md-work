@@ -1499,15 +1499,15 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("runtime.toml");
         let config = AppConfig {
-            shown_changelog_version: "1.2.4".to_string(),
+            shown_changelog_version: "1.2.5".to_string(),
             ..Default::default()
         };
         config.save_to(&path).unwrap();
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("shown_changelog_version = '1.2.4'"));
+        assert!(text.contains("shown_changelog_version = '1.2.5'"));
         assert_eq!(
             AppConfig::load_from(&path).unwrap().shown_changelog_version,
-            "1.2.4"
+            "1.2.5"
         );
         fs::remove_dir_all(dir).unwrap();
     }

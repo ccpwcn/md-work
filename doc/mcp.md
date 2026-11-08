@@ -1,6 +1,6 @@
 # 墨笺 MCP 服务与工具使用说明
 
-> 适用版本：v1.2.4；验证日期：2026-11-08；平台：Windows 10/11 x64。
+> 适用版本：v1.2.4+；验证日期：2026-11-08；平台：Windows 10/11 x64。
 > 本文说明 `md-work-cli.exe` 提供的 MCP 服务（stdio / Streamable HTTP）、AI Agent 如何发现并使用它的能力，以及配置与排障时的注意事项。
 > 相关源码：`apps/cli/src/main.rs`、`crates/mdwork-mcp/`、`crates/mdwork-core/src/{permissions,mcp_permissions}.rs`、`apps/gui/src/app/mcp_settings.rs`。
 

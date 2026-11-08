@@ -905,6 +905,45 @@ image.failed:
 image.upload_failed:
   en: "Image upload failed, saved to the notebook assets instead: %{message}"
   zh-CN: "图床上传失败，已保存到本地 assets：%{message}"
+mcp.usage_doc:
+  en: "Detailed guide"
+  zh-CN: "使用详细说明"
+mcp.usage_doc_hint:
+  en: "Close settings and open the bundled mcp.md in preview mode"
+  zh-CN: "关闭设置面板，以预览模式打开随包的 mcp.md"
+official_docs.changelog_title:
+  en: "What's new in %{version}"
+  zh-CN: "v%{version} 更新说明"
+official_docs.mcp_title:
+  en: "MCP usage guide"
+  zh-CN: "MCP 使用详细说明"
+official_docs.readonly:
+  en: "Official release documents cannot be edited"
+  zh-CN: "官方发布文档不允许编辑修改"
+official_docs.status:
+  en: "Official document · read-only"
+  zh-CN: "官方发布文档 · 只读"
+official_docs.source:
+  en: "Official document"
+  zh-CN: "官方发布文档"
+official_docs.alert_title:
+  en: "Official document verification failed"
+  zh-CN: "官方发布文档校验未通过"
+official_docs.modified:
+  en: "This file has been modified and is not the official authoritative version. Please verify carefully, or contact the author."
+  zh-CN: "此文件已被修改，不是官方权威版本，请仔细甄别，或联系软件作者。"
+official_docs.missing:
+  en: "The bundled official document was not found in the application directory."
+  zh-CN: "安装目录中未找到随包发布的官方说明文档。"
+official_docs.authoritative:
+  en: "MoJiān will show the authoritative copy embedded in the application; the file on disk is never read or written."
+  zh-CN: "墨笺已改为显示程序内置的权威版本，磁盘上的文件不会被读取或写入。"
+official_docs.ok:
+  en: "Got it"
+  zh-CN: "我知道了"
+official_docs.unavailable:
+  en: "Cannot locate the application directory for official documents."
+  zh-CN: "无法定位程序目录，暂时不能打开官方发布文档。"
 mcp.settings:
   en: "MCP"
   zh-CN: "MCP"

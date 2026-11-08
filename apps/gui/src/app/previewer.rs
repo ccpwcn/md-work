@@ -16,6 +16,11 @@ impl AppShell {
         let Some(doc) = self.active_doc_entity().cloned() else {
             return;
         };
+        if doc.read(cx).official.is_some() {
+            // 官方发布文档永远停在只读预览，用户点击切换按钮时给出提示。
+            self.warn_official_readonly(cx);
+            return;
+        }
         let preview = !doc.read(cx).preview_mode;
         doc.update(cx, |doc, _| doc.preview_mode = preview);
         if preview {

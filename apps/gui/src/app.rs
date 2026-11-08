@@ -43,6 +43,7 @@ use rust_i18n::t;
 use uuid::Uuid;
 
 use crate::doc::{DiskConflict, Doc, DocEvent, DocOrigin, OpenRequest};
+use crate::official_docs::{OfficialDocAlert, OfficialDocKind};
 use crate::{disk, preview, theme};
 
 mod bookmarks;
@@ -53,6 +54,7 @@ mod image_settings;
 mod lifecycle;
 mod mcp_settings;
 mod notifications;
+mod official_docs_ui;
 mod palette;
 mod panels;
 mod previewer;
@@ -684,6 +686,15 @@ pub struct AppShell {
     pending_startup_path: Option<String>,
     startup_first_run: bool,
     pending_welcome: Option<(Uuid, String)>,
+    /// 当前版本更新说明尚未被用户关闭：启动末尾自动以只读预览打开。
+    pending_changelog: bool,
+    /// 启动时的多个异步打开任务可能后到的把 changelog 挤到后台；
+    /// 等所有打开任务结束后再把它设为活动标签。
+    pending_official_focus: Option<OfficialDocKind>,
+    /// 官方说明文档校验失败时待展示的弹窗（逐个显示）。
+    official_doc_alerts: Vec<OfficialDocAlert>,
+    /// 同一份文档本进程内只提醒一次，避免打开标签时反复弹窗。
+    official_doc_warned: HashSet<OfficialDocKind>,
     /// CLI executable resolved once at startup; rendering and exporting must
     /// not stat the filesystem.
     cli: Result<PathBuf, String>,
@@ -703,6 +714,7 @@ pub struct Startup {
     notices: Vec<(NoticeKind, String)>,
     config_existed: bool,
     cli: Result<PathBuf, String>,
+    official_doc_alerts: Vec<OfficialDocAlert>,
 }
 
 impl Startup {
@@ -764,6 +776,9 @@ impl Startup {
         if let Some(summary) = config.issue_summary() {
             notices.push((NoticeKind::Warning, summary));
         }
+        // 安装目录 / exe 同目录里的官方说明文档若被改动，启动时就提醒；
+        // 开发态没有随包文件，check_deployed_docs 会自动跳过缺文件的情况。
+        let official_doc_alerts = crate::official_docs::check_deployed_docs();
         Self {
             config,
             registry,
@@ -773,6 +788,7 @@ impl Startup {
             notices,
             config_existed,
             cli,
+            official_doc_alerts,
         }
     }
 
@@ -854,7 +870,14 @@ impl AppShell {
             notices: startup_notices,
             config_existed,
             cli,
+            official_doc_alerts,
         } = startup;
+
+        let pending_changelog = config.shown_changelog_version != mdwork_core::version();
+        let official_doc_warned = official_doc_alerts
+            .iter()
+            .map(|alert| alert.kind)
+            .collect::<HashSet<_>>();
 
         theme::apply(&config, window, cx);
 
@@ -976,6 +999,10 @@ impl AppShell {
             pending_startup_path: initial_path,
             startup_first_run: !root_exists,
             pending_welcome: None,
+            pending_changelog,
+            pending_official_focus: None,
+            official_doc_alerts,
+            official_doc_warned,
             cli,
             _watcher: None,
             _appearance_subscription: None,
@@ -1201,6 +1228,10 @@ impl Render for AppShell {
         }
         if self.palette.is_some() {
             root = root.child(self.render_palette(cx));
+        }
+        // 校验弹窗放在最上层：即使设置面板或恢复对话框同时打开也能看到。
+        if !self.official_doc_alerts.is_empty() {
+            root = root.child(self.render_official_doc_alert(cx));
         }
         root
     }

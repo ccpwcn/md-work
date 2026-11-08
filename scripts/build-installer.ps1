@@ -175,6 +175,12 @@ $bundle = Join-Path $root ("dist\md-work-$version-win64")
 if (-not (Test-Path -LiteralPath $setup)) {
     throw "安装包未生成: $setup"
 }
+foreach ($doc in @('changelog.md', 'mcp.md')) {
+    $docPath = Join-Path $bundle $doc
+    if (-not (Test-Path -LiteralPath $docPath)) {
+        throw "便携包缺少随包发布的官方说明文档: $docPath"
+    }
+}
 
 Write-Host ""
 Write-Host "完成。" -ForegroundColor Green

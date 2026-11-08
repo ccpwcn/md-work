@@ -1,5 +1,6 @@
 use super::util::*;
 use super::*;
+use crate::official_docs::OfficialDocKind;
 
 /// 批量打开任务：打开请求及其对应的磁盘读取结果。
 type OpenedPair = (
@@ -45,6 +46,12 @@ impl AppShell {
             .unwrap_or(false);
         if !is_markdown {
             self.notify_warning(format!("不是 Markdown 文件：{}", path.display()), cx);
+            return;
+        }
+        // 从资源管理器 / 单实例转发打开安装目录里的官方说明文档时，
+        // 也必须走只读预览通道，不能当成普通外部文档编辑。
+        if let Some(kind) = crate::official_docs::kind_for_path(&path) {
+            self.open_official_doc(kind, window, cx);
             return;
         }
 
@@ -258,6 +265,18 @@ impl AppShell {
             self.notify_success(t!("recovery.restored").to_string(), cx);
             changed = true;
         }
+        // `opening` 为空说明本轮所有打开任务都已落地；此时再把官方说明
+        // 文档设为活动标签，不会被后到达的欢迎笔记 / 命令行路径挤掉。
+        if self.opening.is_empty()
+            && let Some(kind) = self.pending_official_focus.take()
+            && let Some(index) = self
+                .docs
+                .iter()
+                .position(|doc| doc.read(cx).official == Some(kind))
+        {
+            self.active_doc = Some(index);
+            changed = true;
+        }
         if changed {
             self.reveal_active(cx);
             self.persist_session(cx);
@@ -280,6 +299,10 @@ impl AppShell {
             self.active_doc = Some(index);
             return Some(index);
         }
+        let official = match &request {
+            OpenRequest::Official { kind, .. } => Some(*kind),
+            _ => None,
+        };
         let (origin, root, rel_path) = match request {
             OpenRequest::Notebook { notebook, rel_path } => (
                 DocOrigin::Notebook {
@@ -296,12 +319,14 @@ impl AppShell {
                     .unwrap_or_else(|| path.display().to_string());
                 (DocOrigin::External, None, file_name)
             }
+            OpenRequest::Official { kind, .. } => (DocOrigin::External, None, kind.title()),
         };
         let autosave = self.config.autosave;
         let registry = self.dirty.clone();
         let doc = cx.new(|cx| {
             Doc::new(
-                origin, root, rel_path, path, decoded, hash, autosave, registry, window, cx,
+                origin, root, rel_path, path, decoded, hash, autosave, registry, official, window,
+                cx,
             )
         });
         cx.observe(&doc, |_, _, cx| cx.notify()).detach();
@@ -327,6 +352,10 @@ impl AppShell {
         let Some(doc) = self.docs.get(index).cloned() else {
             return;
         };
+        if doc.read(cx).official.is_some() {
+            self.warn_official_readonly(cx);
+            return;
+        }
         let (text, encoding, bom, eol, file_name) = {
             let doc = doc.read(cx);
             if doc.notebook_id.is_some() {
@@ -521,13 +550,28 @@ impl AppShell {
             return false;
         };
         let doc = self.docs[index].clone();
+        let official = doc.read(cx).official;
         if doc.read(cx).dirty && !self.pending_close.contains(&id) {
             self.pending_close.insert(id);
             self.closing_docs.insert(id, doc.clone());
             doc.update(cx, |doc, cx| doc.save_now(cx));
         }
         self.drop_doc_at(index);
+        // 用户关掉这份更新说明后，记下版本，下次启动不再自动打开。
+        if official == Some(OfficialDocKind::Changelog) {
+            self.mark_changelog_seen(cx);
+        }
         true
+    }
+
+    /// 持久化「本版本更新说明已读」标记。
+    pub(super) fn mark_changelog_seen(&mut self, cx: &mut Context<Self>) {
+        let version = mdwork_core::version();
+        if self.config.shown_changelog_version == version {
+            return;
+        }
+        self.config.shown_changelog_version = version.to_string();
+        self.save_config(cx);
     }
 
     /// 标签移除后重新同步所有由 `docs` 派生的状态：
@@ -924,6 +968,10 @@ impl AppShell {
             return;
         };
         if let Some(doc) = self.docs.get(index) {
+            if doc.read(cx).official.is_some() {
+                self.warn_official_readonly(cx);
+                return;
+            }
             doc.update(cx, |doc, cx| doc.save_now(cx));
         }
         self.persist_session(cx);

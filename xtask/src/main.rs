@@ -41,6 +41,24 @@ fn bundle_dir(root: &Path) -> PathBuf {
     root.join("dist").join(format!("md-work-{VERSION}-win64"))
 }
 
+/// 随包发布的官方说明文档：打包后的文件名 + 仓库内的源文件。
+/// 两个包（安装版、zip 解压版）都必须带上，否则用户电脑里没有文档可打开。
+fn official_doc_sources(root: &Path, version: &str) -> Vec<(&'static str, PathBuf)> {
+    vec![
+        (
+            "changelog.md",
+            root.join("doc")
+                .join("changelog")
+                .join(format!("v{version}.md")),
+        ),
+        ("mcp.md", root.join("doc").join("mcp.md")),
+    ]
+}
+
+fn is_official_doc_name(name: &str) -> bool {
+    matches!(name, "changelog.md" | "mcp.md")
+}
+
 fn parse_icon(svg: &[u8]) -> Result<usvg::Tree> {
     let mut options = usvg::Options::default();
     options.fontdb_mut().load_system_fonts();
@@ -138,7 +156,56 @@ fn copy_binaries(root: &Path, bundle: &Path) -> Result<()> {
                 .with_context(|| format!("copy {}", source.display()))?;
         }
     }
+    copy_official_docs(root, bundle, VERSION)
+}
+
+/// 把当前版本发版说明与 MCP 说明复制进便携目录；NSIS 与 zip 都从这里取文件。
+fn copy_official_docs(root: &Path, bundle: &Path, version: &str) -> Result<()> {
+    for (name, source) in official_doc_sources(root, version) {
+        if !source.is_file() {
+            bail!(
+                "缺少随包发布的官方说明文档 {}；请先补齐当前版本发版说明与 doc/mcp.md",
+                source.display()
+            );
+        }
+        fs::copy(&source, bundle.join(name))
+            .with_context(|| format!("copy {} -> {}", source.display(), name))?;
+    }
     Ok(())
+}
+
+/// 递归收集便携目录里的所有文件。原来只遍历顶层，子目录会被静默丢掉；
+/// 官方说明文档将来若移入资源子目录，也不会再漏包。
+fn collect_bundle_files(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, PathBuf)>,
+) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let path = entry.path();
+        if kind.is_dir() {
+            collect_bundle_files(root, &path, out)?;
+        } else if kind.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .with_context(|| format!("strip {} from {}", root.display(), path.display()))?;
+            out.push((relative.to_string_lossy().replace('\\', "/"), path));
+        }
+    }
+    Ok(())
+}
+
+/// 高位是 Unix `0444`，低位 `0x01` 是 DOS 只读位；解压后官方说明文档
+/// 默认只读。真正的安全边界仍是应用内的 SHA-256 校验与只读标签页。
+fn zip_options_for(relative: &str) -> zip::write::SimpleFileOptions {
+    let mut options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    if is_official_doc_name(relative) {
+        options = options.external_attributes((0o100444 << 16) | 0x01);
+    }
+    options
 }
 
 fn zip_bundle(bundle: &Path) -> Result<PathBuf> {
@@ -151,21 +218,15 @@ fn zip_bundle(bundle: &Path) -> Result<PathBuf> {
     let zip_path = bundle.with_file_name(format!("{name}.zip"));
     let file = fs::File::create(&zip_path)?;
     let mut writer = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    let prefix = bundle
-        .file_name()
-        .context("bundle dir has no name")?
-        .to_string_lossy()
-        .into_owned();
-    for entry in fs::read_dir(bundle)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        writer.start_file(format!("{prefix}/{name}"), options)?;
-        let mut source = fs::File::open(entry.path())?;
+    let prefix = name;
+
+    let mut files = Vec::new();
+    collect_bundle_files(bundle, bundle, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    for (relative, source_path) in files {
+        writer.start_file(format!("{prefix}/{relative}"), zip_options_for(&relative))?;
+        let mut source = fs::File::open(&source_path)
+            .with_context(|| format!("open {}", source_path.display()))?;
         std::io::copy(&mut source, &mut writer)?;
     }
     writer.finish()?;
@@ -252,7 +313,75 @@ fn installer() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Cursor, Write};
+
     use super::*;
+
+    #[test]
+    fn official_doc_sources_exist_for_the_current_version() {
+        let root = workspace_root().expect("workspace root");
+        let sources = official_doc_sources(&root, VERSION);
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            sources.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            vec!["changelog.md", "mcp.md"]
+        );
+        for (name, source) in sources {
+            assert!(source.is_file(), "缺少官方说明文档 {name}: {}", source.display());
+        }
+    }
+
+    #[test]
+    fn official_docs_land_in_the_bundle_and_zip() {
+        let root = workspace_root().expect("workspace root");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let bundle = std::env::temp_dir().join(format!("mdwork-docs-{unique}"));
+        fs::create_dir_all(&bundle).unwrap();
+        copy_official_docs(&root, &bundle, VERSION).unwrap();
+        assert!(bundle.join("changelog.md").is_file());
+        assert!(bundle.join("mcp.md").is_file());
+
+        let zip_path = zip_bundle(&bundle).unwrap();
+        let archive_file = fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(archive_file).unwrap();
+        let prefix = bundle.file_name().unwrap().to_string_lossy();
+        for name in ["changelog.md", "mcp.md"] {
+            let entry = archive
+                .by_name(&format!("{prefix}/{name}"))
+                .unwrap_or_else(|_| panic!("zip 中缺少 {name}"));
+            assert_eq!(entry.external_attributes() & 0x01, 0x01);
+        }
+        drop(archive);
+        fs::remove_file(&zip_path).unwrap();
+        fs::remove_dir_all(&bundle).unwrap();
+    }
+
+    #[test]
+    fn official_docs_are_readonly_in_the_zip() {
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            writer
+                .start_file("changelog.md", zip_options_for("changelog.md"))
+                .unwrap();
+            writer.write_all(b"official changelog").unwrap();
+            writer
+                .start_file("md-work.exe", zip_options_for("md-work.exe"))
+                .unwrap();
+            writer.write_all(b"binary").unwrap();
+            writer.finish().unwrap();
+        }
+        buf.set_position(0);
+        let mut archive = zip::ZipArchive::new(buf).unwrap();
+        let official = archive.by_name("changelog.md").unwrap().external_attributes();
+        let executable = archive.by_name("md-work.exe").unwrap().external_attributes();
+        assert_eq!(official & 0x01, 0x01, "DOS 只读位必须置位");
+        assert_eq!(official >> 16, 0o100444, "Unix 权限为只读");
+        assert_eq!(executable, 0o100644 << 16, "普通文件保持可写");
+    }
 
     #[test]
     fn icon_reads_against_its_own_blue() {

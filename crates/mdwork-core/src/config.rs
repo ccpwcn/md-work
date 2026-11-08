@@ -466,6 +466,9 @@ pub struct AppConfig {
     pub note_font_size: f32,
     pub autosave: bool,
     pub code_wrap: bool,
+    /// 用户已关闭的随包更新说明所属版本。升级后与当前版本不一致时，
+    /// 启动时会自动以预览模式打开一次新版本的 changelog。
+    pub shown_changelog_version: String,
     /// Where pasted/dropped images go; `Local` keeps them in the notebook.
     pub image_host: ImageHost,
     /// Keeps the loopback MCP server running while md-work is open.
@@ -499,6 +502,7 @@ impl Default for AppConfig {
             note_font_size: 16.0,
             autosave: true,
             code_wrap: true,
+            shown_changelog_version: String::new(),
             image_host: ImageHost::Local,
             mcp_http: false,
             mcp_port: 11026,
@@ -778,6 +782,12 @@ impl AppConfig {
             loader.boolean(general, "general", "autosave", &mut config.autosave);
             loader.boolean(general, "general", "code_wrap", &mut config.code_wrap);
             loader.boolean(general, "general", "mcp_http", &mut config.mcp_http);
+            loader.string(
+                general,
+                "general",
+                "shown_changelog_version",
+                &mut config.shown_changelog_version,
+            );
         }
         apply_window(&mut loader, &root, config);
         match loader.table(&root, "panels") {
@@ -930,6 +940,11 @@ impl AppConfig {
         out.push_str(&format!("code_wrap = {}\n", self.code_wrap));
         out.push_str("# 应用运行期间保持本地 MCP 服务。\n");
         out.push_str(&format!("mcp_http = {}\n", self.mcp_http));
+        out.push_str("# 已关闭的随包更新说明版本；升级后首次启动会再次自动打开。\n");
+        out.push_str(&format!(
+            "shown_changelog_version = {}\n",
+            toml_string(&self.shown_changelog_version)
+        ));
 
         if let Some(window) = self.window {
             out.push_str("\n[window]\n");
@@ -1476,6 +1491,24 @@ mod tests {
         config.save_to(&path).unwrap();
         let loaded = AppConfig::load_from(&path).unwrap();
         assert_eq!(loaded, config);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn shown_changelog_version_round_trip() {
+        let dir = temp_dir();
+        let path = dir.join("runtime.toml");
+        let config = AppConfig {
+            shown_changelog_version: "1.2.4".to_string(),
+            ..Default::default()
+        };
+        config.save_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("shown_changelog_version = '1.2.4'"));
+        assert_eq!(
+            AppConfig::load_from(&path).unwrap().shown_changelog_version,
+            "1.2.4"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

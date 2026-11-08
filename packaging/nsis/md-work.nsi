@@ -131,8 +131,21 @@ FunctionEnd
 
 Section "主程序" SEC_MAIN
   SetOutPath "$INSTDIR"
+  ; 官方发布文档升级前先去掉旧副本的只读属性，否则 File 覆盖可能失败。
+  ${If} ${FileExists} "$INSTDIR\changelog.md"
+    SetFileAttributes "$INSTDIR\changelog.md" NORMAL
+  ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\mcp.md"
+    SetFileAttributes "$INSTDIR\mcp.md" NORMAL
+  ${EndIf}
   File "${DIST}\${APP_EXE}"
   File "${DIST}\${APP_CLI}"
+  File "${DIST}\changelog.md"
+  File "${DIST}\mcp.md"
+  ; 安装目录里的两份官方文档设为只读；应用内还会用 SHA-256 校验，
+  ; 并始终以只读预览模式显示程序内置的权威版本。
+  SetFileAttributes "$INSTDIR\changelog.md" READONLY
+  SetFileAttributes "$INSTDIR\mcp.md" READONLY
   SetOutPath "$INSTDIR\licenses"
   File "${DIST}\LICENSE"
   File "${DIST}\THIRD-PARTY-NOTICES.md"
@@ -179,6 +192,14 @@ Section "Uninstall"
 
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\${APP_CLI}"
+  ${If} ${FileExists} "$INSTDIR\changelog.md"
+    SetFileAttributes "$INSTDIR\changelog.md" NORMAL
+  ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\mcp.md"
+    SetFileAttributes "$INSTDIR\mcp.md" NORMAL
+  ${EndIf}
+  Delete "$INSTDIR\changelog.md"
+  Delete "$INSTDIR\mcp.md"
   Delete "$INSTDIR\uninstall.exe"
   RMDir /r "$INSTDIR\licenses"
   RMDir "$INSTDIR"

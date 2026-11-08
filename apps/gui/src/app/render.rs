@@ -795,7 +795,10 @@ impl AppShell {
             let doc_id = self.docs[index].entity_id();
             let active = self.active_doc == Some(index);
             let is_external = doc.notebook_id.is_none();
-            let title = if is_external {
+            let is_official = doc.official.is_some();
+            let title = if is_official {
+                format!("官方 · {}", doc.title())
+            } else if is_external {
                 format!("外部 · {}", doc.rel_path)
             } else {
                 doc.title()
@@ -935,7 +938,7 @@ impl AppShell {
                                     });
                                 }),
                         );
-                        if is_external {
+                        if is_external && !is_official {
                             menu = menu.item(PopupMenuItem::new(adopt_label.clone()).on_click(
                                 move |_, window, cx| {
                                     adopt_shell.update(cx, |this, cx| {
@@ -1038,7 +1041,9 @@ impl AppShell {
             .map(|&index| {
                 let doc = self.docs[index].read(cx);
                 let is_external = doc.notebook_id.is_none();
-                let title = if is_external {
+                let title = if doc.official.is_some() {
+                    format!("官方 · {}", doc.title())
+                } else if is_external {
                     format!("外部 · {}", doc.rel_path)
                 } else {
                     doc.title()
@@ -1435,7 +1440,9 @@ impl AppShell {
             } else {
                 t!("status.saved").to_string()
             };
-            let notebook_label = if doc.notebook_name.is_empty() {
+            let notebook_label = if doc.official.is_some() {
+                t!("official_docs.source").to_string()
+            } else if doc.notebook_name.is_empty() {
                 t!("status.external").to_string()
             } else {
                 doc.notebook_name.clone()
@@ -1465,7 +1472,9 @@ impl AppShell {
                 .child(doc.encoding.label())
                 .child(doc.eol.label())
                 .child(saved_label)
-                .child(if doc.preview_mode {
+                .child(if doc.official.is_some() {
+                    t!("official_docs.status").to_string()
+                } else if doc.preview_mode {
                     t!("status.mode.preview").to_string()
                 } else {
                     t!("status.mode.edit").to_string()

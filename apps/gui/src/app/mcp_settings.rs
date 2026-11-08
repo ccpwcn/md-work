@@ -1,5 +1,6 @@
 use super::util::*;
 use super::*;
+use crate::official_docs::OfficialDocKind;
 use gpui_kit::component::switch::Switch;
 
 /// 令牌写入线程的返回值：提示消息、新令牌明文、新建 id、最新令牌列表。
@@ -460,13 +461,31 @@ impl AppShell {
             track,
             border,
         );
+        // 点击后先关掉设置面板，再以只读预览打开随包发布的 mcp.md。
+        let usage_doc = Button::new("mcp-usage-doc")
+            .ghost()
+            .compact()
+            .icon(IconName::BookOpen)
+            .label(t!("mcp.usage_doc").to_string())
+            .tooltip(t!("mcp.usage_doc_hint").to_string())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.close_settings(window, cx);
+                this.open_official_doc(OfficialDocKind::Mcp, window, cx);
+            }));
+        let tabs_row = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(div().flex_1().min_w_0().child(tabs))
+            .child(usage_doc)
+            .into_any_element();
 
         div()
             .v_flex()
             .flex_1()
             .min_h_0()
             .gap_3()
-            .child(tabs)
+            .child(tabs_row)
             .child(body)
             .child(footer)
             .into_any_element()

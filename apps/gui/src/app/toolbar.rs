@@ -8,11 +8,14 @@ impl AppShell {
         let index = self.active_doc?;
         let doc = self.docs.get(index)?.clone();
         let is_external = doc.read(cx).notebook_id.is_none();
+        let is_official = doc.read(cx).official.is_some();
         let preview = self.is_preview_mode(cx);
         let editing = !preview;
         let border = cx.theme().border;
         let shell = cx.entity();
-        let mode_tip = if preview {
+        let mode_tip = if is_official {
+            t!("official_docs.readonly").to_string()
+        } else if preview {
             t!("preview.edit").to_string()
         } else {
             t!("preview.show").to_string()
@@ -305,7 +308,7 @@ impl AppShell {
                                         },
                                     ),
                                 );
-                            if is_external {
+                            if is_external && !is_official {
                                 menu = menu.separator().item(
                                     PopupMenuItem::new(t!("external.save_into").to_string())
                                         .on_click(move |_, window, cx| {

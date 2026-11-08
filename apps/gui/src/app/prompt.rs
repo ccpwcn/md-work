@@ -202,6 +202,10 @@ impl AppShell {
             self.notify_warning(t!("encoding.no_doc").to_string(), cx);
             return;
         };
+        if doc.read(cx).official.is_some() {
+            self.warn_official_readonly(cx);
+            return;
+        }
         doc.update(cx, |doc, cx| doc.save_as_encoding(encoding, bom, eol, cx));
         self.notify_success(
             t!(

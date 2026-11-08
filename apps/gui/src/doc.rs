@@ -13,6 +13,7 @@ use mdwork_core::{Notebook, Result};
 use uuid::Uuid;
 
 use crate::dirty::DirtyRegistry;
+use crate::official_docs::OfficialDocKind;
 
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
 const SNAPSHOT_DELAY: Duration = Duration::from_secs(2);
@@ -54,6 +55,9 @@ pub struct Doc {
     pub conflict: Option<DiskConflict>,
     /// 编辑/预览模式属于当前标签，而不是整个窗口。
     pub preview_mode: bool,
+    /// 非 `None` 表示这是随安装包发布的官方说明文档：强制预览只读，
+    /// 正文来自编译期内置副本，任何保存/编辑路径都会被拒绝。
+    pub official: Option<OfficialDocKind>,
     pub base_hash: String,
     pub autosave: bool,
     pub registry: DirtyRegistry,
@@ -82,6 +86,7 @@ impl Doc {
         base_hash: String,
         autosave: bool,
         registry: DirtyRegistry,
+        official: Option<OfficialDocKind>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -94,9 +99,14 @@ impl Doc {
                 .replaceable(true)
                 .default_value(decoded.text.clone())
         });
+        // gpui-base 的 builder `readonly` 不对外暴露；实体创建后用公开
+        // setter 打开只读，作为「预览 + 保存拦截」之外的又一层保护。
+        if official.is_some() {
+            editor.update(cx, |editor, cx| editor.set_readonly(true, cx));
+        }
 
         cx.subscribe(&editor, |this, _, event: &InputEvent, cx| {
-            if !matches!(event, InputEvent::Change) {
+            if this.official.is_some() || !matches!(event, InputEvent::Change) {
                 return;
             }
             this.dirty = true;
@@ -126,9 +136,10 @@ impl Doc {
             dirty: false,
             error: None,
             conflict: None,
-            preview_mode: false,
+            preview_mode: official.is_some(),
+            official,
             base_hash,
-            autosave,
+            autosave: official.is_none() && autosave,
             registry,
             revision: 0,
             save_scheduled: false,
@@ -203,6 +214,9 @@ impl Doc {
     /// Inserts text at the caret (replacing a selection) and marks the doc
     /// dirty through the editor's change event.
     pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.official.is_some() {
+            return;
+        }
         self.editor.update(cx, |editor, cx| {
             editor.replace(text.to_string(), window, cx);
         });
@@ -275,6 +289,11 @@ impl Doc {
     }
 
     fn request_save(&mut self, cx: &mut Context<Self>) {
+        // 官方发布文档永不落盘：既不能写坏安装包里的只读文件，
+        // 也不能把内置权威正文另存到用户目录冒充官方版本。
+        if self.official.is_some() {
+            return;
+        }
         if self.save_hold {
             self.save_again = true;
             return;
@@ -379,6 +398,9 @@ impl Doc {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.official.is_some() {
+            return;
+        }
         self.encoding = decoded.encoding;
         self.bom = decoded.bom;
         self.eol = decoded.eol;
@@ -422,6 +444,9 @@ impl Doc {
         eol: Eol,
         cx: &mut Context<Self>,
     ) {
+        if self.official.is_some() {
+            return;
+        }
         self.encoding = encoding;
         self.bom = bom;
         self.eol = eol;
@@ -439,6 +464,9 @@ impl Doc {
     /// Swaps the whole buffer for `text`, e.g. when restoring a crash snapshot.
     /// The doc is left dirty so the user reviews and saves it explicitly.
     pub fn replace_all(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.official.is_some() {
+            return;
+        }
         self.editor
             .update(cx, |editor, cx| editor.set_value(text, window, cx));
         self.dirty = true;
@@ -450,6 +478,10 @@ impl Doc {
     }
 
     pub fn set_autosave(&mut self, autosave: bool, cx: &mut Context<Self>) {
+        if self.official.is_some() {
+            self.autosave = false;
+            return;
+        }
         if self.autosave == autosave {
             return;
         }
@@ -603,13 +635,20 @@ pub enum OpenRequest {
     External {
         path: PathBuf,
     },
+    /// 随包发布的官方说明文档。正文取自编译期内置副本，路径只作为标签身份。
+    Official {
+        kind: OfficialDocKind,
+        path: PathBuf,
+    },
 }
 
 impl OpenRequest {
     pub fn target_path(&self) -> Option<PathBuf> {
         match self {
             OpenRequest::Notebook { notebook, rel_path } => notebook.note_path(rel_path).ok(),
-            OpenRequest::External { path } => Some(path.clone()),
+            OpenRequest::External { path } | OpenRequest::Official { path, .. } => {
+                Some(path.clone())
+            }
         }
     }
 
@@ -617,6 +656,7 @@ impl OpenRequest {
         match self {
             OpenRequest::Notebook { rel_path, .. } => rel_path.clone(),
             OpenRequest::External { path } => path.display().to_string(),
+            OpenRequest::Official { kind, .. } => kind.file_name().to_string(),
         }
     }
 
@@ -627,6 +667,42 @@ impl OpenRequest {
                 let (decoded, hash) = read_external_doc(path)?;
                 Ok((path.clone(), decoded, hash))
             }
+            OpenRequest::Official { kind, path } => {
+                // 不读磁盘：安装目录里的文件只用于校验，展示与编辑缓冲区
+                // 一律来自程序内置的权威正文。
+                let bytes = kind.embedded().as_bytes();
+                tracing::info!(
+                    doc = kind.file_name(),
+                    bytes = bytes.len(),
+                    "打开官方发布文档（内置权威版本）"
+                );
+                Ok((path.clone(), doc::decode(bytes), doc::sha256_hex(bytes)))
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::OpenRequest;
+    use crate::official_docs::OfficialDocKind;
+
+    #[test]
+    fn official_open_request_never_reads_the_disk_copy() {
+        // 路径故意指向不存在的文件：如果实现改回读磁盘，这个测试会失败。
+        let path = PathBuf::from("Z:/missing-official-docs/changelog.md");
+        let request = OpenRequest::Official {
+            kind: OfficialDocKind::Changelog,
+            path: path.clone(),
+        };
+        assert_eq!(request.target_path(), Some(path.clone()));
+        let (opened, decoded, hash) = request.read().expect("内置正文必须始终可读");
+        assert_eq!(opened, path);
+        // decode 会把 CRLF 统一成 LF，比较时做同样的归一化。
+        let expected = OfficialDocKind::Changelog.embedded().replace("\r\n", "\n");
+        assert_eq!(decoded.text.as_str(), expected);
+        assert_eq!(hash, OfficialDocKind::Changelog.expected_sha256());
     }
 }

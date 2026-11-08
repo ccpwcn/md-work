@@ -1,5 +1,6 @@
 use super::util::*;
 use super::*;
+use crate::official_docs::OfficialDocKind;
 
 impl AppShell {
     /// Remembers the normal rectangle and maximized state after the frame settles.
@@ -225,6 +226,12 @@ impl AppShell {
         }
         self.pending_welcome = None;
         self.startup_first_run = false;
+        if self.pending_changelog {
+            // 只在版本升级后的第一次启动自动打开。标签被用户关闭时
+            // `remove_doc_by_id` 会写入 `shown_changelog_version`。
+            self.pending_changelog = false;
+            self.open_official_doc(OfficialDocKind::Changelog, window, cx);
+        }
         self.reveal_active(cx);
     }
 
@@ -478,11 +485,12 @@ impl AppShell {
 
         let mut jobs: Vec<(EntityId, PathBuf, String)> = Vec::new();
         for doc in &self.docs {
-            let (path, base_hash) = {
+            let (path, base_hash, official) = {
                 let doc = doc.read(cx);
-                (doc.path.clone(), doc.base_hash.clone())
+                (doc.path.clone(), doc.base_hash.clone(), doc.official.is_some())
             };
-            if paths.iter().any(|changed| paths_equal(changed, &path)) {
+            // 官方说明文档只显示内置权威正文，不参与磁盘变更重载。
+            if !official && paths.iter().any(|changed| paths_equal(changed, &path)) {
                 jobs.push((doc.entity_id(), path, base_hash));
             }
         }
@@ -652,9 +660,13 @@ impl AppShell {
             }
         }
         for path in &session.external_notes {
-            requests.push(OpenRequest::External {
-                path: PathBuf::from(path),
-            });
+            let path = PathBuf::from(path);
+            // 旧版本会话可能把官方说明文档当普通外部文档记下来；
+            // 恢复时跳过，避免它绕过只读校验并以可编辑状态复活。
+            if crate::official_docs::kind_for_path(&path).is_some() {
+                continue;
+            }
+            requests.push(OpenRequest::External { path });
         }
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
@@ -797,7 +809,9 @@ impl AppShell {
 
         for doc in &self.docs {
             let doc = doc.read(cx);
-            if doc.notebook_id.is_none() {
+            // 官方发布文档不进会话：退出时若还开着，下次启动由版本标记
+            // 决定是否自动打开，而不是被当作普通外部文档恢复成编辑态。
+            if doc.notebook_id.is_none() && doc.official.is_none() {
                 let path = doc.path.display().to_string();
                 let (line, column) = doc.cursor(cx);
                 session
@@ -810,7 +824,7 @@ impl AppShell {
             && let Some(doc) = self.docs.get(index)
         {
             let doc = doc.read(cx);
-            if doc.notebook_id.is_none() {
+            if doc.notebook_id.is_none() && doc.official.is_none() {
                 session.active_external = Some(doc.path.display().to_string());
             }
         }

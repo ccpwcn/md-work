@@ -9,6 +9,7 @@ mod file_assoc;
 mod highlight;
 mod install_hint;
 mod mcp_server;
+mod official_docs;
 mod preview;
 mod preview_selection;
 mod print;

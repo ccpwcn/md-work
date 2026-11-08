@@ -4900,6 +4900,7 @@ version = "1.2.4"
 dependencies = [
  "anyhow",
  "axum",
+ "hmac",
  "mdwork-core",
  "mdwork-export",
  "mdwork-render",
@@ -4907,7 +4908,9 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
+ "toml 0.8.23",
  "tracing",
  "uuid",
  "windows 0.61.3",

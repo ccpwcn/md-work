@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use mdwork_core::config::AppConfig;
 use mdwork_core::dirty::DirtyState;
+use mdwork_core::mcp_permissions::{NodeKey, PermLevel, PermissionTree};
 use mdwork_core::notebook::Notebook;
 use mdwork_core::permissions::{Scope, TokenRecord};
 use mdwork_core::workspace::Workspace;
@@ -23,6 +24,7 @@ use uuid::Uuid;
 
 use crate::audit::{AuditEntry, AuditLog};
 use crate::auth::TokenStore;
+use crate::perms::PermissionStore;
 
 pub const CODE_UNAUTHORIZED: i32 = -32001;
 pub const CODE_NOT_FOUND: i32 = -32002;
@@ -44,6 +46,8 @@ pub struct ServerContext {
     pub dirty_path: Option<PathBuf>,
     /// Overrides the export output folder.
     pub exports_dir: Option<PathBuf>,
+    /// Overrides the permission tree file; tests and portable runs set it.
+    pub permissions_path: Option<PathBuf>,
 }
 
 impl ServerContext {
@@ -57,6 +61,7 @@ impl ServerContext {
             stdio_token,
             dirty_path: None,
             exports_dir: None,
+            permissions_path: None,
         })
     }
 }
@@ -74,13 +79,32 @@ pub fn resolve_workspace_root() -> PathBuf {
 pub struct MdworkServer {
     pub(crate) ctx: Arc<ServerContext>,
     pub(crate) tool_router: ToolRouter<Self>,
+    /// 会话级权限快照：建立会话时加载一次，之后的权限变更只影响新会话。
+    pub(crate) perms: Arc<PermissionTree>,
 }
 
 impl MdworkServer {
     pub fn new(ctx: Arc<ServerContext>) -> Self {
+        let store = PermissionStore::new(
+            ctx.permissions_path
+                .clone()
+                .unwrap_or_else(PermissionStore::default_path),
+        );
+        let loaded = store.load();
+        if loaded.tampered {
+            tracing::warn!("MCP 权限文件校验失败，本会话按全部隐藏处理");
+            log_quietly(
+                &ctx.audit,
+                &AuditEntry::new("permissions/load", "").error("TAMPERED"),
+            );
+        }
         let mut tool_router = Self::read_router();
         tool_router.merge(Self::write_router());
-        Self { ctx, tool_router }
+        Self {
+            ctx,
+            tool_router,
+            perms: Arc::new(loaded.tree),
+        }
     }
 
     pub fn workspace(&self) -> Workspace {
@@ -147,6 +171,9 @@ impl MdworkServer {
         if !token.allows_notebook(&id) {
             return Err(forbidden("notebook is not allowed for this token"));
         }
+        if !self.perms.allows(&NodeKey::notebook(id), PermLevel::Read) {
+            return Err(forbidden("notebook is hidden by the permission tree"));
+        }
         self.workspace()
             .find_by_id(&id)
             .ok_or_else(|| not_found(format!("notebook not found: {id}")))
@@ -163,7 +190,95 @@ impl MdworkServer {
         if !token.allows_note(&notebook.marker.id, &rel) {
             return Err(forbidden("note is not allowed for this token"));
         }
+        // 缺失路径放行给下游报 NOT_FOUND；存在的隐藏笔记一律 FORBIDDEN。
+        if self.note_exists(notebook, &rel)?
+            && !self
+                .perms
+                .allows(&NodeKey::entry(notebook.marker.id, &rel), PermLevel::Read)
+        {
+            return Err(forbidden("note is hidden by the permission tree"));
+        }
         Ok(rel)
+    }
+
+    /// 路径在磁盘上是否已存在（新建与缺失走不同的授权/报错路径）。
+    /// 入参须已规范化和 ACL 检查；不能用 note_path——它会给文件夹补上 .md，
+    /// 导致父链上的文件夹永远被当作“不存在”而跳过其授权。
+    fn note_exists(&self, notebook: &Notebook, rel: &str) -> Result<bool, ErrorData> {
+        Ok(notebook.to_path(rel).map_err(core_error)?.exists())
+    }
+
+    /// 权限树门禁：有效权限（祖先链取最小）须达到指定等级。
+    pub(crate) fn require_perm(&self, key: &NodeKey, level: PermLevel) -> Result<(), ErrorData> {
+        if self.perms.allows(key, level) {
+            Ok(())
+        } else {
+            Err(forbidden(format!(
+                "permission tree requires '{}' on {key}",
+                level.as_str()
+            )))
+        }
+    }
+
+    /// 修改级授权：已存在节点查自身，新建节点沿父链找最近存在祖先。
+    pub(crate) fn require_modify(&self, notebook: &Notebook, rel: &str) -> Result<(), ErrorData> {
+        let mut target = NodeKey::entry(notebook.marker.id, rel);
+        while let Some(path) = &target.path {
+            if self.note_exists(notebook, path)? {
+                break;
+            }
+            target = target.parent().expect("非笔记本节点必有父节点");
+        }
+        self.require_perm(&target, PermLevel::Modify)
+    }
+
+    /// 删除级授权：节点存在才检查；缺失放行由下游报 NOT_FOUND。
+    pub(crate) fn require_delete(&self, notebook: &Notebook, rel: &str) -> Result<(), ErrorData> {
+        if self.note_exists(notebook, rel)? {
+            self.require_perm(&NodeKey::entry(notebook.marker.id, rel), PermLevel::Delete)?;
+        }
+        Ok(())
+    }
+
+    /// 重命名/移动后把权限记录迁移到新路径。
+    ///
+    /// 权限表按路径存储，不迁移时新路径因无记录而默认隐藏、旧路径残留授权
+    /// 可能被后来同名的新笔记继承。当前会话的 `perms` 快照不变，与新会话一致。
+    pub(crate) fn rekey_permissions(&self, notebook_id: Uuid, from: &str, to: &str) {
+        let store = PermissionStore::new(
+            self.ctx
+                .permissions_path
+                .clone()
+                .unwrap_or_else(PermissionStore::default_path),
+        );
+        let loaded = store.load();
+        if loaded.tampered {
+            return;
+        }
+        let mut tree = loaded.tree;
+        if tree.rekey(
+            &NodeKey::entry(notebook_id, from),
+            &NodeKey::entry(notebook_id, to),
+        ) == 0
+        {
+            return;
+        }
+        if let Err(err) = store.save(&tree) {
+            tracing::warn!(error = %err, "迁移 MCP 权限记录失败");
+        }
+    }
+
+    /// 令牌 ACL 与权限树的交集：笔记本是否至少可读。
+    pub(crate) fn notebook_readable(&self, token: &TokenRecord, id: &Uuid) -> bool {
+        token.allows_notebook(id) && self.perms.allows(&NodeKey::notebook(*id), PermLevel::Read)
+    }
+
+    /// 令牌 ACL 与权限树的交集：笔记是否至少可读。
+    pub(crate) fn note_readable(&self, token: &TokenRecord, id: &Uuid, rel: &str) -> bool {
+        token.allows_note(id, rel)
+            && self
+                .perms
+                .allows(&NodeKey::entry(*id, rel), PermLevel::Read)
     }
 
     /// True while the GUI still holds unsaved edits for this note. Stale
@@ -188,11 +303,11 @@ impl MdworkServer {
             let mut resources = Vec::new();
             'outer: for notebook in self.workspace().scan().notebooks {
                 let id = notebook.marker.id;
-                if !token.allows_notebook(&id) {
+                if !self.notebook_readable(token, &id) {
                     continue;
                 }
                 for entry in notebook.list_entries().unwrap_or_default() {
-                    if !token.allows_note(&id, &entry.rel_path) {
+                    if !self.note_readable(token, &id, &entry.rel_path) {
                         continue;
                     }
                     resources.push(
@@ -499,6 +614,7 @@ mod tests {
             stdio_token: None,
             dirty_path: Some(dir.join("dirty.toml")),
             exports_dir: Some(dir.join("exports")),
+            permissions_path: Some(dir.join("permissions.toml")),
         });
         let server = MdworkServer::new(ctx);
         let names: Vec<String> = server

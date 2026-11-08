@@ -161,7 +161,7 @@ impl TokenStore {
     }
 }
 
-fn protect(data: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn protect(data: &[u8]) -> Result<Vec<u8>> {
     let input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
@@ -184,7 +184,7 @@ fn protect(data: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
     let input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,

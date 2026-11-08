@@ -1,5 +1,6 @@
 use super::util::*;
 use super::*;
+use gpui_kit::component::switch::Switch;
 
 impl AppShell {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -224,7 +225,7 @@ impl AppShell {
         cx.refresh_windows();
     }
 
-    /// Docks a single panel to `dock` and makes it the active panel there.
+    /// 侧边导航项：选中项带强调条、浮起白块和箭头。
     pub(super) fn settings_nav(
         &self,
         tab: SettingsTab,
@@ -236,12 +237,7 @@ impl AppShell {
             .settings
             .as_ref()
             .is_some_and(|dialog| dialog.tab == tab);
-        let color = if active {
-            cx.theme().foreground
-        } else {
-            cx.theme().muted_foreground
-        };
-        let hover = cx.theme().list_hover;
+        let p = SettingsPalette::new(cx);
         div()
             .id(match tab {
                 SettingsTab::Workspace => "settings-nav-workspace",
@@ -252,237 +248,248 @@ impl AppShell {
                 SettingsTab::Windows => "settings-nav-windows",
             })
             .h_flex()
-            .h(px(32.))
-            .px_3()
+            .h(px(34.))
+            .items_center()
             .gap_2()
+            .px_2()
             .rounded_md()
             .cursor_pointer()
             .text_sm()
-            .text_color(if active {
-                cx.theme().foreground
-            } else {
-                cx.theme().muted_foreground
-            })
-            .bg(if active {
-                cx.theme().list_active
-            } else {
-                cx.theme().transparent
-            })
-            .hover(move |style| style.bg(hover))
+            .text_color(if active { p.foreground } else { p.muted })
+            .bg(if active { p.popover } else { p.transparent })
+            .hover(move |style| style.bg(p.hover))
             .on_click(cx.listener(move |this, _, _, cx| this.set_settings_tab(tab, cx)))
-            .child(Icon::new(icon).small().text_color(color))
-            .child(t!(key).to_string())
+            .child(
+                div()
+                    .w(px(3.))
+                    .h(px(16.))
+                    .flex_shrink_0()
+                    .rounded_full()
+                    .bg(if active { p.accent } else { p.transparent }),
+            )
+            .child(
+                Icon::new(icon)
+                    .small()
+                    .text_color(if active { p.foreground } else { p.muted }),
+            )
+            .child(div().flex_1().min_w_0().child(t!(key).to_string()))
+            .when(active, |item| {
+                item.child(
+                    Icon::new(IconName::ChevronRight)
+                        .xsmall()
+                        .text_color(p.muted),
+                )
+            })
             .into_any_element()
     }
 
     pub(super) fn render_settings_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let dangerish = cx.theme().border;
+        let p = SettingsPalette::new(cx);
+        let theme_active = |preference: ThemePreference| self.config.theme == preference;
+        let theme_track = settings_segment_track(
+            vec![
+                settings_segment(
+                    "settings-theme-system",
+                    t!("theme.system").to_string(),
+                    Some(IconName::Monitor),
+                    theme_active(ThemePreference::System),
+                    cx.listener(|this, _, window, cx| {
+                        this.set_theme_preference(ThemePreference::System, window, cx)
+                    }),
+                    p,
+                ),
+                settings_segment(
+                    "settings-theme-light",
+                    t!("theme.light").to_string(),
+                    Some(IconName::Sun),
+                    theme_active(ThemePreference::Light),
+                    cx.listener(|this, _, window, cx| {
+                        this.set_theme_preference(ThemePreference::Light, window, cx)
+                    }),
+                    p,
+                ),
+                settings_segment(
+                    "settings-theme-dark",
+                    t!("theme.dark").to_string(),
+                    Some(IconName::Moon),
+                    theme_active(ThemePreference::Dark),
+                    cx.listener(|this, _, window, cx| {
+                        this.set_theme_preference(ThemePreference::Dark, window, cx)
+                    }),
+                    p,
+                ),
+            ],
+            p,
+        );
+        let theme_card = settings_card(
+            t!("settings.theme").to_string(),
+            Some(t!("settings.theme_hint").to_string()),
+            theme_track,
+            p,
+        );
 
-        let theme_button =
-            |preference: ThemePreference, key: &'static str, cx: &mut Context<Self>| {
-                let active = self.config.theme == preference;
-                let id = match preference {
-                    ThemePreference::System => "settings-theme-system",
-                    ThemePreference::Light => "settings-theme-light",
-                    ThemePreference::Dark => "settings-theme-dark",
-                };
-                Button::new(id)
-                    .ghost()
-                    .compact()
-                    .label(t!(key).to_string())
-                    .when(active, |button| button.primary())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_theme_preference(preference, window, cx)
-                    }))
-            };
+        let language_track = settings_segment_track(
+            vec![
+                settings_segment(
+                    "settings-language-zh",
+                    "中文".to_string(),
+                    None,
+                    self.config.language == "zh-CN",
+                    cx.listener(|this, _, _, cx| this.set_language("zh-CN", cx)),
+                    p,
+                ),
+                settings_segment(
+                    "settings-language-en",
+                    "English".to_string(),
+                    None,
+                    self.config.language == "en",
+                    cx.listener(|this, _, _, cx| this.set_language("en", cx)),
+                    p,
+                ),
+            ],
+            p,
+        );
+        let language_card = settings_card(
+            t!("settings.language").to_string(),
+            None,
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(language_track)
+                .child(Icon::new(IconName::Languages).small().text_color(p.muted))
+                .into_any_element(),
+            p,
+        );
 
-        let language_button =
-            |language: &'static str, label: &'static str, cx: &mut Context<Self>| {
-                let active = self.config.language == language;
-                Button::new(match language {
-                    "zh-CN" => "settings-language-zh",
-                    _ => "settings-language-en",
-                })
-                .ghost()
-                .compact()
-                .label(label)
-                .when(active, |button| button.primary())
-                .on_click(cx.listener(move |this, _, _, cx| this.set_language(language, cx)))
-            };
-
-        div()
-            .v_flex()
-            .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_bold()
-                    .child(t!("settings.theme").to_string()),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(t!("settings.theme_hint").to_string()),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(theme_button(ThemePreference::System, "theme.system", cx))
-                    .child(theme_button(ThemePreference::Light, "theme.light", cx))
-                    .child(theme_button(ThemePreference::Dark, "theme.dark", cx)),
-            )
-            .child(div().my_2().h(px(1.)).bg(dangerish))
-            .child(
-                div()
-                    .text_sm()
-                    .font_bold()
-                    .child(t!("settings.language").to_string()),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(language_button("zh-CN", "中文", cx))
-                    .child(language_button("en", "English", cx)),
-            )
-            .child(div().my_2().h(px(1.)).bg(dangerish))
-            .child(
-                div()
-                    .text_sm()
-                    .font_bold()
-                    .child(t!("settings.typography").to_string()),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(t!("settings.typography_hint").to_string()),
-            )
-            .child({
-                let (ui_font, note_font, ui_size, note_size) = match self.settings.as_ref() {
-                    Some(dialog) => (
-                        dialog.ui_font.clone(),
-                        dialog.note_font.clone(),
-                        dialog.ui_size.clone(),
-                        dialog.note_size.clone(),
-                    ),
-                    None => return div().into_any_element(),
-                };
-                div()
-                    .v_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted)
-                                            .child(t!("settings.ui_font").to_string()),
-                                    )
-                                    .child(Input::new(&ui_font).small()),
-                            )
-                            .child(
-                                div()
-                                    .w(px(72.))
-                                    .v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted)
-                                            .child(t!("settings.size").to_string()),
-                                    )
-                                    .child(Input::new(&ui_size).small()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted)
-                                            .child(t!("settings.note_font").to_string()),
-                                    )
-                                    .child(Input::new(&note_font).small()),
-                            )
-                            .child(
-                                div()
-                                    .w(px(72.))
-                                    .v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(muted)
-                                            .child(t!("settings.size").to_string()),
-                                    )
-                                    .child(Input::new(&note_size).small()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("settings-font-apply")
-                                    .primary()
-                                    .compact()
-                                    .label(t!("settings.apply_fonts").to_string())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.apply_typography(window, cx)
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(t!("settings.fonts_empty_hint").to_string()),
-                            ),
-                    )
-                    .into_any_element()
-            })
-            .child(div().my_2().h(px(1.)).bg(dangerish))
-            .child(
-                Checkbox::new("settings-autosave")
-                    .label(t!("settings.autosave").to_string())
-                    .checked(self.config.autosave)
-                    .on_click(
-                        cx.listener(|this, checked: &bool, _, cx| this.set_autosave(*checked, cx)),
-                    ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(t!("settings.autosave_hint").to_string()),
-            )
-            .into_any_element()
-    }
-
-    pub(super) fn render_settings_workspace(&self, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
         let Some(dialog) = self.settings.as_ref() else {
             return div().into_any_element();
         };
-        let input = dialog.workspace_name.clone();
+        let font_body =
+            div()
+                .v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            div().flex_1().min_w_0().child(mcp_field(
+                                t!("settings.ui_font").to_string(),
+                                Input::new(&dialog.ui_font)
+                                    .w_full()
+                                    .small()
+                                    .into_any_element(),
+                                p.muted,
+                            )),
+                        )
+                        .child(
+                            div().w(px(76.)).child(mcp_field(
+                                t!("settings.size").to_string(),
+                                Input::new(&dialog.ui_size)
+                                    .w_full()
+                                    .small()
+                                    .into_any_element(),
+                                p.muted,
+                            )),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            div().flex_1().min_w_0().child(mcp_field(
+                                t!("settings.note_font").to_string(),
+                                Input::new(&dialog.note_font)
+                                    .w_full()
+                                    .small()
+                                    .into_any_element(),
+                                p.muted,
+                            )),
+                        )
+                        .child(
+                            div().w(px(76.)).child(mcp_field(
+                                t!("settings.size").to_string(),
+                                Input::new(&dialog.note_size)
+                                    .w_full()
+                                    .small()
+                                    .into_any_element(),
+                                p.muted,
+                            )),
+                        ),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("settings-font-apply")
+                                .primary()
+                                .compact()
+                                .icon(IconName::Type)
+                                .label(t!("settings.apply_fonts").to_string())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.apply_typography(window, cx)
+                                })),
+                        )
+                        .child(settings_hint(
+                            t!("settings.fonts_empty_hint").to_string(),
+                            p,
+                        )),
+                )
+                .into_any_element();
+        let font_card = settings_card(
+            t!("settings.typography").to_string(),
+            Some(t!("settings.typography_hint").to_string()),
+            font_body,
+            p,
+        );
+
+        let autosave_card = settings_card(
+            t!("settings.autosave").to_string(),
+            Some(t!("settings.autosave_hint").to_string()),
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Switch::new("settings-autosave")
+                        .checked(self.config.autosave)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.set_autosave(*checked, cx)
+                        })),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(if self.config.autosave {
+                            p.success
+                        } else {
+                            p.muted
+                        })
+                        .child(if self.config.autosave {
+                            t!("settings.autosave_on").to_string()
+                        } else {
+                            t!("settings.autosave_off").to_string()
+                        }),
+                )
+                .into_any_element(),
+            p,
+        );
+
+        settings_body(
+            "settings-appearance-body",
+            vec![theme_card, language_card, font_card, autosave_card],
+        )
+    }
+
+    pub(super) fn render_settings_workspace(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = SettingsPalette::new(cx);
+        let Some(dialog) = self.settings.as_ref() else {
+            return div().into_any_element();
+        };
         let root = self
             .workspace
             .as_ref()
@@ -500,158 +507,147 @@ impl AppShell {
             .unwrap_or_default();
         let registered_workspaces = self.workspace_registry.workspaces.len();
 
-        div()
-            .v_flex()
-            .gap_3()
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_bold()
-                            .child(t!("settings.workspace_name").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(t!("settings.workspace_name_hint").to_string()),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().flex_1().min_w_0().child(Input::new(&input).small()))
-                            .child(
-                                Button::new("settings-workspace-name-save")
-                                    .compact()
-                                    .label(t!("common.save").to_string())
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.apply_workspace_name(cx)),
-                                    ),
-                            ),
-                    ),
+        let name_card = settings_card(
+            t!("settings.workspace_name").to_string(),
+            Some(t!("settings.workspace_name_hint").to_string()),
+            div()
+                .h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Input::new(&dialog.workspace_name).w_full().small()),
+                )
+                .child(
+                    Button::new("settings-workspace-name-save")
+                        .primary()
+                        .compact()
+                        .icon(IconName::Save)
+                        .label(t!("common.save").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| this.apply_workspace_name(cx))),
+                )
+                .into_any_element(),
+            p,
+        );
+
+        let location_summary = if folder_name.is_empty() {
+            t!("workspace.none").to_string()
+        } else {
+            format!(
+                "{} · {}",
+                folder_name,
+                t!("settings.workspace_count", count = registered_workspaces)
             )
-            .child(div().h(px(1.)).bg(border))
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_bold()
-                            .child(t!("settings.workspace_location").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(if folder_name.is_empty() {
-                                t!("workspace.none").to_string()
-                            } else {
-                                format!(
-                                    "{} · {}",
-                                    folder_name,
-                                    t!("settings.workspace_count", count = registered_workspaces)
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .px_3()
-                            .py_2()
-                            .rounded_md()
-                            .bg(cx.theme().list_hover)
-                            .text_xs()
-                            .truncate()
-                            .child(root),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("settings-workspace-open")
-                                    .compact()
-                                    .label(t!("settings.windows_open_workspace").to_string())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_path_in_explorer(
-                                            this.current_workspace_root(),
-                                            cx,
-                                        )
-                                    })),
-                            )
-                            .child(
-                                Button::new("settings-workspace-switch")
-                                    .ghost()
-                                    .compact()
-                                    .label(t!("workspace.pick").to_string())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.pick_workspace_folder(window, cx)
-                                    })),
-                            ),
-                    ),
-            )
-            .child(div().h(px(1.)).bg(border))
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_bold()
-                            .child(t!("settings.workspace_about").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(t!("settings.workspace_about_text").to_string()),
-                    ),
-            )
-            .into_any_element()
+        };
+        let location_card = settings_card(
+            t!("settings.workspace_location").to_string(),
+            Some(location_summary),
+            div()
+                .v_flex()
+                .gap_2()
+                .child(settings_path_box(root, p))
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("settings-workspace-open")
+                                .compact()
+                                .icon(IconName::FolderOpen)
+                                .label(t!("settings.windows_open_workspace").to_string())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_path_in_explorer(this.current_workspace_root(), cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("settings-workspace-switch")
+                                .ghost()
+                                .compact()
+                                .icon(IconName::FolderCog)
+                                .label(t!("workspace.pick").to_string())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.pick_workspace_folder(window, cx)
+                                })),
+                        )
+                        .into_any_element(),
+                )
+                .into_any_element(),
+            p,
+        );
+
+        let about_card = settings_card(
+            t!("settings.workspace_about").to_string(),
+            None,
+            div()
+                .h_flex()
+                .items_start()
+                .gap_2()
+                .child(Icon::new(IconName::Info).small().text_color(p.muted))
+                .child(settings_hint(
+                    t!("settings.workspace_about_text").to_string(),
+                    p,
+                ))
+                .into_any_element(),
+            p,
+        );
+
+        settings_body(
+            "settings-workspace-body",
+            vec![name_card, location_card, about_card],
+        )
     }
 
     pub(super) fn render_settings_windows(&self, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
+        let p = SettingsPalette::new(cx);
         let workspace = self
             .workspace
             .as_ref()
             .map(|workspace| workspace.root().display().to_string())
             .unwrap_or_default();
         let registered = crate::file_assoc::is_registered();
+        let status_color = if registered { p.success } else { p.muted };
+        let status_label = if registered {
+            t!("settings.windows_assoc_on").to_string()
+        } else {
+            t!("settings.windows_assoc_off").to_string()
+        };
 
-        let mut rows = div().v_flex().gap_3();
-
-        rows =
-            rows.child(
+        let assoc_card =
+            settings_card(
+                t!("settings.windows_assoc").to_string(),
+                None,
                 div()
                     .v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_bold()
-                            .child(t!("settings.windows_assoc").to_string()),
-                    )
-                    .child(div().text_xs().text_color(muted).child(if registered {
-                        t!("settings.windows_assoc_on").to_string()
-                    } else {
-                        t!("settings.windows_assoc_off").to_string()
-                    }))
+                    .gap_2()
                     .child(
                         div()
                             .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(settings_status_badge(status_label, status_color))
+                            .child(
+                                Icon::new(if registered {
+                                    IconName::ShieldCheck
+                                } else {
+                                    IconName::Info
+                                })
+                                .small()
+                                .text_color(status_color),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
                             .gap_2()
                             .child(
                                 Button::new("settings-register-assoc")
+                                    .primary()
                                     .compact()
+                                    .icon(IconName::Link)
                                     .label(t!("settings.windows_register").to_string())
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.register_file_assoc(cx)),
@@ -661,32 +657,33 @@ impl AppShell {
                                 Button::new("settings-default-apps")
                                     .ghost()
                                     .compact()
+                                    .icon(IconName::ExternalLink)
                                     .label(t!("settings.windows_default_apps").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.open_windows_default_apps(cx)
                                     })),
                             ),
-                    ),
+                    )
+                    .into_any_element(),
+                p,
             );
 
-        rows = rows.child(div().h(px(1.)).bg(border)).child(
+        let paths_card = settings_card(
+            t!("settings.windows_workspace").to_string(),
+            Some(t!("settings.windows_paths_hint").to_string()),
             div()
                 .v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_bold()
-                        .child(t!("settings.windows_workspace").to_string()),
-                )
-                .child(div().text_xs().text_color(muted).child(workspace.clone()))
+                .gap_2()
+                .child(settings_path_box(workspace, p))
                 .child(
                     div()
                         .h_flex()
+                        .items_center()
                         .gap_2()
                         .child(
                             Button::new("settings-open-workspace")
                                 .compact()
+                                .icon(IconName::FolderOpen)
                                 .label(t!("settings.windows_open_workspace").to_string())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_path_in_explorer(
@@ -701,6 +698,7 @@ impl AppShell {
                             Button::new("settings-open-logs")
                                 .ghost()
                                 .compact()
+                                .icon(IconName::ScrollText)
                                 .label(t!("settings.windows_open_logs").to_string())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_path_in_explorer(
@@ -713,6 +711,7 @@ impl AppShell {
                             Button::new("settings-open-crashes")
                                 .ghost()
                                 .compact()
+                                .icon(IconName::Bug)
                                 .label(t!("settings.windows_open_crashes").to_string())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_path_in_explorer(
@@ -721,48 +720,86 @@ impl AppShell {
                                     )
                                 })),
                         ),
-                ),
+                )
+                .into_any_element(),
+            p,
         );
 
-        rows.into_any_element()
+        settings_body("settings-windows-body", vec![assoc_card, paths_card])
     }
 
     pub(super) fn render_settings_panels(&self, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let border = cx.theme().border;
-        let card = cx.theme().sidebar;
+        let p = SettingsPalette::new(cx);
 
-        let arrangement_button = |arrangement: PanelArrangement,
-                                  icon: IconName,
-                                  key: &'static str,
-                                  cx: &mut Context<Self>| {
-            let active = self.config.panel_arrangement == arrangement;
-            Button::new(match arrangement {
-                PanelArrangement::Horizontal => "settings-arrangement-horizontal",
-                PanelArrangement::Vertical => "settings-arrangement-vertical",
-            })
-            .ghost()
-            .compact()
-            .icon(icon)
-            .label(t!(key).to_string())
-            .when(active, |button| button.primary())
-            .on_click(
-                cx.listener(move |this, _, _, cx| this.set_panel_arrangement(arrangement, cx)),
-            )
-        };
+        let arrangement_track = settings_segment_track(
+            vec![
+                settings_segment(
+                    "settings-arrangement-horizontal",
+                    t!("settings.arrangement.horizontal").to_string(),
+                    Some(IconName::Rows3),
+                    self.config.panel_arrangement == PanelArrangement::Horizontal,
+                    cx.listener(move |this, _, _, cx| {
+                        this.set_panel_arrangement(PanelArrangement::Horizontal, cx)
+                    }),
+                    p,
+                ),
+                settings_segment(
+                    "settings-arrangement-vertical",
+                    t!("settings.arrangement.vertical").to_string(),
+                    Some(IconName::Columns3),
+                    self.config.panel_arrangement == PanelArrangement::Vertical,
+                    cx.listener(move |this, _, _, cx| {
+                        this.set_panel_arrangement(PanelArrangement::Vertical, cx)
+                    }),
+                    p,
+                ),
+            ],
+            p,
+        );
+        let arrangement_card = settings_card(
+            t!("settings.panel_arrangement").to_string(),
+            Some(t!("settings.panel_arrangement_hint").to_string()),
+            arrangement_track,
+            p,
+        );
 
-        let width_button =
-            |width: f32, id: &'static str, key: &'static str, cx: &mut Context<Self>| {
-                let active = (self.config.panel_width - width).abs() < 1.0;
-                Button::new(id)
-                    .ghost()
-                    .compact()
-                    .label(t!(key).to_string())
-                    .when(active, |button| button.primary())
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_panel_width(width, cx)))
-            };
+        let width_track = settings_segment_track(
+            vec![
+                settings_segment(
+                    "settings-width-narrow",
+                    t!("settings.width.narrow").to_string(),
+                    None,
+                    (self.config.panel_width - 240.0).abs() < 1.0,
+                    cx.listener(|this, _, _, cx| this.set_panel_width(240.0, cx)),
+                    p,
+                ),
+                settings_segment(
+                    "settings-width-standard",
+                    t!("settings.width.standard").to_string(),
+                    None,
+                    (self.config.panel_width - 300.0).abs() < 1.0,
+                    cx.listener(|this, _, _, cx| this.set_panel_width(300.0, cx)),
+                    p,
+                ),
+                settings_segment(
+                    "settings-width-wide",
+                    t!("settings.width.wide").to_string(),
+                    None,
+                    (self.config.panel_width - 380.0).abs() < 1.0,
+                    cx.listener(|this, _, _, cx| this.set_panel_width(380.0, cx)),
+                    p,
+                ),
+            ],
+            p,
+        );
+        let width_card = settings_card(
+            t!("settings.panel_width").to_string(),
+            Some(t!("settings.panel_width_hint").to_string()),
+            width_track,
+            p,
+        );
 
-        // Per-panel dock rows: each of the five panels can sit left or right.
+        // 每个面板一行：图标 + 名称 + 左/右 分段控件。
         let mut dock_list = div().v_flex().gap_1();
         for panel in SidePanel::ALL {
             let current = self.config.panel_dock_for(panel.kind());
@@ -773,186 +810,103 @@ impl AppShell {
                 SidePanel::Bookmarks => t!("panel.bookmarks"),
                 SidePanel::Trash => t!("panel.trash"),
             };
-            let side_button =
-                |dock: PanelDock,
-                 id: &'static str,
-                 panel: SidePanel,
-                 current: PanelDock,
-                 cx: &mut Context<Self>| {
-                    Button::new(id)
-                        .ghost()
-                        .compact()
-                        .icon(match dock {
-                            PanelDock::Left => IconName::PanelLeft,
-                            PanelDock::Right => IconName::PanelRight,
-                        })
-                        .label(
-                            t!(match dock {
-                                PanelDock::Left => "settings.dock.left_short",
-                                PanelDock::Right => "settings.dock.right_short",
-                            })
-                            .to_string(),
-                        )
-                        .when(current == dock, |button| button.primary())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.set_panel_kind_dock(panel, dock, cx)
-                        }))
-                };
+            let (left_id, right_id) = match panel {
+                SidePanel::Notes => ("settings-dock-notes-left", "settings-dock-notes-right"),
+                SidePanel::Outline => ("settings-dock-outline-left", "settings-dock-outline-right"),
+                SidePanel::Search => ("settings-dock-search-left", "settings-dock-search-right"),
+                SidePanel::Bookmarks => (
+                    "settings-dock-bookmarks-left",
+                    "settings-dock-bookmarks-right",
+                ),
+                SidePanel::Trash => ("settings-dock-trash-left", "settings-dock-trash-right"),
+            };
+            let dock_track = settings_segment_track(
+                vec![
+                    settings_segment(
+                        left_id,
+                        t!("settings.dock.left_short").to_string(),
+                        Some(IconName::PanelLeft),
+                        current == PanelDock::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_panel_kind_dock(panel, PanelDock::Left, cx)
+                        }),
+                        p,
+                    ),
+                    settings_segment(
+                        right_id,
+                        t!("settings.dock.right_short").to_string(),
+                        Some(IconName::PanelRight),
+                        current == PanelDock::Right,
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_panel_kind_dock(panel, PanelDock::Right, cx)
+                        }),
+                        p,
+                    ),
+                ],
+                p,
+            );
             dock_list = dock_list.child(
                 div()
                     .h_flex()
                     .items_center()
                     .gap_2()
-                    .px_3()
+                    .px_2()
                     .py_1()
                     .rounded_md()
-                    .bg(card)
-                    .child(Icon::new(Self::panel_icon(panel)).small().text_color(muted))
-                    .child(div().flex_1().min_w_0().text_sm().child(label.to_string()))
-                    .child(side_button(
-                        PanelDock::Left,
-                        match panel {
-                            SidePanel::Notes => "settings-dock-notes-left",
-                            SidePanel::Outline => "settings-dock-outline-left",
-                            SidePanel::Search => "settings-dock-search-left",
-                            SidePanel::Bookmarks => "settings-dock-bookmarks-left",
-                            SidePanel::Trash => "settings-dock-trash-left",
-                        },
-                        panel,
-                        current,
-                        cx,
-                    ))
-                    .child(side_button(
-                        PanelDock::Right,
-                        match panel {
-                            SidePanel::Notes => "settings-dock-notes-right",
-                            SidePanel::Outline => "settings-dock-outline-right",
-                            SidePanel::Search => "settings-dock-search-right",
-                            SidePanel::Bookmarks => "settings-dock-bookmarks-right",
-                            SidePanel::Trash => "settings-dock-trash-right",
-                        },
-                        panel,
-                        current,
-                        cx,
-                    )),
+                    .border_1()
+                    .border_color(p.border)
+                    .child(
+                        Icon::new(Self::panel_icon(panel))
+                            .small()
+                            .text_color(p.muted),
+                    )
+                    .child(div().flex_1().min_w_0().text_xs().child(label.to_string()))
+                    .child(dock_track),
             );
         }
-
-        let all_button = |dock: PanelDock, id: &'static str, cx: &mut Context<Self>| {
-            Button::new(id)
-                .ghost()
-                .compact()
-                .icon(match dock {
-                    PanelDock::Left => IconName::PanelLeft,
-                    PanelDock::Right => IconName::PanelRight,
-                })
-                .label(
-                    t!(match dock {
-                        PanelDock::Left => "settings.dock.left",
-                        PanelDock::Right => "settings.dock.right",
-                    })
-                    .to_string(),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| this.set_all_panel_docks(dock, cx)))
-        };
-
-        div()
+        let dock_body = div()
             .v_flex()
             .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_bold()
-                    .child(t!("settings.panel_dock").to_string()),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(t!("settings.panel_dock_hint").to_string()),
-            )
             .child(dock_list)
             .child(
                 div()
                     .h_flex()
                     .items_center()
                     .gap_2()
+                    .child(settings_hint(t!("settings.panel_dock_all").to_string(), p))
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(t!("settings.panel_dock_all").to_string()),
+                        Button::new("settings-dock-all-left")
+                            .ghost()
+                            .compact()
+                            .icon(IconName::PanelLeft)
+                            .label(t!("settings.dock.left").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_all_panel_docks(PanelDock::Left, cx)
+                            })),
                     )
-                    .child(all_button(PanelDock::Left, "settings-dock-all-left", cx))
-                    .child(all_button(PanelDock::Right, "settings-dock-all-right", cx)),
+                    .child(
+                        Button::new("settings-dock-all-right")
+                            .ghost()
+                            .compact()
+                            .icon(IconName::PanelRight)
+                            .label(t!("settings.dock.right").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_all_panel_docks(PanelDock::Right, cx)
+                            })),
+                    ),
             )
-            .child(div().my_2().h(px(1.)).bg(border))
-            .child(
-                div()
-                    .text_sm()
-                    .font_bold()
-                    .child(t!("settings.panel_arrangement").to_string()),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(t!("settings.panel_arrangement_hint").to_string()),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(arrangement_button(
-                        PanelArrangement::Horizontal,
-                        IconName::Rows3,
-                        "settings.arrangement.horizontal",
-                        cx,
-                    ))
-                    .child(arrangement_button(
-                        PanelArrangement::Vertical,
-                        IconName::Columns3,
-                        "settings.arrangement.vertical",
-                        cx,
-                    )),
-            )
-            .child(div().my_2().h(px(1.)).bg(border))
-            .child(
-                div()
-                    .text_sm()
-                    .font_bold()
-                    .child(t!("settings.panel_width").to_string()),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(t!("settings.panel_width_hint").to_string()),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(width_button(
-                        240.0,
-                        "settings-width-narrow",
-                        "settings.width.narrow",
-                        cx,
-                    ))
-                    .child(width_button(
-                        300.0,
-                        "settings-width-standard",
-                        "settings.width.standard",
-                        cx,
-                    ))
-                    .child(width_button(
-                        380.0,
-                        "settings-width-wide",
-                        "settings.width.wide",
-                        cx,
-                    )),
-            )
-            .into_any_element()
+            .into_any_element();
+        let dock_card = settings_card(
+            t!("settings.panel_dock").to_string(),
+            Some(t!("settings.panel_dock_hint").to_string()),
+            dock_body,
+            p,
+        );
+
+        settings_body(
+            "settings-panels-body",
+            vec![dock_card, arrangement_card, width_card],
+        )
     }
 
     pub(super) fn render_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -967,6 +921,7 @@ impl AppShell {
         let muted = cx.theme().muted_foreground;
         let sidebar = cx.theme().sidebar;
         let sidebar_border = cx.theme().sidebar_border;
+        let p = SettingsPalette::new(cx);
 
         let content = match tab {
             SettingsTab::Workspace => self.render_settings_workspace(cx),
@@ -976,13 +931,19 @@ impl AppShell {
             SettingsTab::Mcp => self.render_mcp_settings_page(cx),
             SettingsTab::Windows => self.render_settings_windows(cx),
         };
-        let title = match tab {
-            SettingsTab::Workspace => t!("settings.tab.workspace"),
-            SettingsTab::Appearance => t!("settings.tab.appearance"),
-            SettingsTab::Panels => t!("settings.tab.panels"),
-            SettingsTab::Images => t!("settings.tab.images"),
-            SettingsTab::Mcp => t!("settings.tab.mcp"),
-            SettingsTab::Windows => t!("settings.tab.windows"),
+        let (title, hint) = match tab {
+            SettingsTab::Workspace => (
+                t!("settings.tab.workspace"),
+                t!("settings.tab.workspace_hint"),
+            ),
+            SettingsTab::Appearance => (
+                t!("settings.tab.appearance"),
+                t!("settings.tab.appearance_hint"),
+            ),
+            SettingsTab::Panels => (t!("settings.tab.panels"), t!("settings.tab.panels_hint")),
+            SettingsTab::Images => (t!("settings.tab.images"), t!("settings.tab.images_hint")),
+            SettingsTab::Mcp => (t!("settings.tab.mcp"), t!("settings.tab.mcp_hint")),
+            SettingsTab::Windows => (t!("settings.tab.windows"), t!("settings.tab.windows_hint")),
         };
 
         div()
@@ -1015,16 +976,28 @@ impl AppShell {
                             .items_center()
                             .gap_2()
                             .px_5()
-                            .py_4()
+                            .py_3()
                             .border_b_1()
                             .border_color(sidebar_border)
+                            .child(Icon::new(IconName::Settings2).small().text_color(muted))
                             .child(
                                 div()
-                                    .flex_1()
-                                    .text_base()
-                                    .font_bold()
-                                    .child(t!("settings.title").to_string()),
+                                    .v_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_bold()
+                                            .child(t!("settings.title").to_string()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(t!("settings.dialog_hint").to_string()),
+                                    ),
                             )
+                            .child(div().flex_1())
                             .child(
                                 Button::new("settings-close")
                                     .ghost()
@@ -1043,15 +1016,19 @@ impl AppShell {
                             .child(
                                 div()
                                     .v_flex()
-                                    .w(px(176.))
+                                    .w(px(184.))
                                     .h_full()
                                     .flex_shrink_0()
-                                    .gap_1()
+                                    .gap_0p5()
                                     .px_2()
                                     .py_3()
                                     .bg(sidebar)
                                     .border_r_1()
                                     .border_color(sidebar_border)
+                                    .child(settings_group_label(
+                                        t!("settings.nav.general").to_string(),
+                                        p,
+                                    ))
                                     .child(self.settings_nav(
                                         SettingsTab::Workspace,
                                         IconName::FolderOpen,
@@ -1071,6 +1048,16 @@ impl AppShell {
                                         cx,
                                     ))
                                     .child(self.settings_nav(
+                                        SettingsTab::Windows,
+                                        IconName::Monitor,
+                                        "settings.tab.windows",
+                                        cx,
+                                    ))
+                                    .child(settings_group_label(
+                                        t!("settings.nav.integration").to_string(),
+                                        p,
+                                    ))
+                                    .child(self.settings_nav(
                                         SettingsTab::Images,
                                         IconName::Image,
                                         "settings.tab.images",
@@ -1082,20 +1069,23 @@ impl AppShell {
                                         "settings.tab.mcp",
                                         cx,
                                     ))
-                                    .child(self.settings_nav(
-                                        SettingsTab::Windows,
-                                        IconName::Monitor,
-                                        "settings.tab.windows",
-                                        cx,
-                                    ))
                                     .child(
-                                        div().mt_auto().px_2().text_xs().text_color(muted).child(
-                                            t!(
-                                                "settings.version",
-                                                version = env!("CARGO_PKG_VERSION")
-                                            )
-                                            .to_string(),
-                                        ),
+                                        div()
+                                            .mt_auto()
+                                            .h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_2()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(Icon::new(IconName::Info).xsmall())
+                                            .child(
+                                                t!(
+                                                    "settings.version",
+                                                    version = env!("CARGO_PKG_VERSION")
+                                                )
+                                                .to_string(),
+                                            ),
                                     ),
                             )
                             .child(
@@ -1105,11 +1095,27 @@ impl AppShell {
                                     .flex_1()
                                     .min_w_0()
                                     .h_full()
-                                    .overflow_y_scroll()
+                                    .overflow_hidden()
                                     .px_5()
                                     .py_4()
                                     .gap_3()
-                                    .child(div().text_sm().font_bold().child(title.to_string()))
+                                    .child(
+                                        div()
+                                            .v_flex()
+                                            .gap_0p5()
+                                            .child(
+                                                div()
+                                                    .text_base()
+                                                    .font_bold()
+                                                    .child(title.to_string()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(muted)
+                                                    .child(hint.to_string()),
+                                            ),
+                                    )
                                     .child(content),
                             ),
                     ),

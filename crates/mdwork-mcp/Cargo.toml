@@ -19,6 +19,9 @@ tokio.workspace = true
 axum.workspace = true
 uuid.workspace = true
 windows.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 rmcp = { workspace = true, features = ["client"] }

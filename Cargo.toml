@@ -35,6 +35,7 @@ thiserror = "2"
 anyhow = "1"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 sha2 = "0.10"
+hmac = "0.12"
 clap = { version = "4", features = ["derive"] }
 
 typst = "=0.15.1"

@@ -5,11 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mdwork_core::dirty::{DirtyDoc, DirtyState};
+use mdwork_core::mcp_permissions::{NodeKey, PermLevel, PermissionTree};
 use mdwork_core::notebook::Notebook;
 use mdwork_core::permissions::{Scope, TokenRecord};
 use mdwork_mcp::{
     AuditLog, CODE_CONFLICT, CODE_DOC_DIRTY, CODE_FORBIDDEN, CODE_INVALID_PATH, CODE_NOT_FOUND,
-    MdworkServer, ServerContext, TokenStore,
+    MdworkServer, PermissionStore, ServerContext, TokenStore,
 };
 use rmcp::model::{CallToolRequestParams, ErrorCode, ErrorData, ReadResourceRequestParams};
 use rmcp::service::{RunningService, ServiceError};
@@ -21,6 +22,26 @@ fn temp_root() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("mdwork-mcp-flow-{}", Uuid::new_v4()))
 }
 
+/// 权限树整树放行到删除级：本文件测试的是令牌 ACL 层，树权限不干预。
+/// 新建/移动产生新路径后需重新调用（新节点默认隐藏）。
+fn grant_all(root: &std::path::Path, notebook: &Notebook) {
+    let mut tree = PermissionTree::default();
+    let descendants: Vec<NodeKey> = notebook
+        .list_tree()
+        .unwrap()
+        .iter()
+        .map(|entry| NodeKey::entry(notebook.marker.id, &entry.rel_path))
+        .collect();
+    tree.set_level(
+        &NodeKey::notebook(notebook.marker.id),
+        PermLevel::Delete,
+        &descendants,
+    );
+    PermissionStore::new(root.join("permissions.toml"))
+        .save(&tree)
+        .unwrap();
+}
+
 fn context(root: &std::path::Path, token: TokenRecord) -> Arc<ServerContext> {
     Arc::new(ServerContext {
         workspace_root: root.to_path_buf(),
@@ -29,6 +50,7 @@ fn context(root: &std::path::Path, token: TokenRecord) -> Arc<ServerContext> {
         stdio_token: Some(token),
         dirty_path: Some(root.join("dirty.toml")),
         exports_dir: Some(root.join("exports")),
+        permissions_path: Some(root.join("permissions.toml")),
     })
 }
 
@@ -82,6 +104,22 @@ async fn expect_code(peer: &Peer<RoleClient>, tool: &str, args: Value, code: i32
 async fn write_flow_honors_acl_conflicts_and_dirty_buffers() {
     let root = temp_root();
     let notebook = Notebook::create(&root.join("集成笔记"), "集成笔记").unwrap();
+    // 预授权本测试将用到的全部路径（含尚未创建的）：会话快照在连接时固定，
+    // 中途改文件不影响本会话，而本测试自始至终只有一个会话。
+    let mut tree = PermissionTree::default();
+    tree.set_level(
+        &NodeKey::notebook(notebook.marker.id),
+        PermLevel::Delete,
+        &[
+            NodeKey::entry(notebook.marker.id, "工作"),
+            NodeKey::entry(notebook.marker.id, "工作/设计.md"),
+            NodeKey::entry(notebook.marker.id, "归档"),
+            NodeKey::entry(notebook.marker.id, "归档/设计稿.md"),
+        ],
+    );
+    PermissionStore::new(root.join("permissions.toml"))
+        .save(&tree)
+        .unwrap();
     let token = TokenRecord::new(
         "集成令牌",
         "unused".to_string(),
@@ -308,6 +346,7 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
     .unwrap();
     std::fs::write(notebook.root.join("root.md"), "# 根\n首页 GAMMA\n").unwrap();
     let _other = Notebook::create(&root.join("别的笔记本"), "别的").unwrap();
+    grant_all(&root, &notebook);
 
     let mut token = TokenRecord::new(
         "只读令牌",

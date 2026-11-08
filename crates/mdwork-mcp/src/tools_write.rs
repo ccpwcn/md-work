@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use mdwork_core::TextEncoding;
 use mdwork_core::bookmarks::Bookmarks;
 use mdwork_core::doc::{self, EncodingHint, Eol};
+use mdwork_core::mcp_permissions::{NodeKey, PermLevel};
 use mdwork_core::permissions::Scope;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorData;
@@ -181,6 +182,7 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
 
+            self.require_modify(&notebook, &rel)?;
             if self.note_is_dirty(&id, &rel) {
                 return Err(doc_dirty(&rel));
             }
@@ -259,6 +261,7 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
 
+            self.require_modify(&notebook, &rel)?;
             if self.note_is_dirty(&id, &rel) {
                 return Err(doc_dirty(&rel));
             }
@@ -346,6 +349,8 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(from.clone());
 
+            self.require_modify(&notebook, &from)?;
+            self.require_modify(&notebook, &to)?;
             if self.note_is_dirty(&id, &from) {
                 return Err(doc_dirty(&from));
             }
@@ -358,6 +363,9 @@ impl MdworkServer {
                 let _ = notebook.remember_encoding(&moved, hint);
             }
             let _ = notebook.forget_encoding(&from);
+
+            // 权限记录按路径存放：不迁移会让新路径默认隐藏、旧路径留下残留授权。
+            self.rekey_permissions(id, &from, &moved);
 
             let mut marks = Bookmarks::load(&notebook).map_err(core_error)?;
             marks.rekey(&from, &moved);
@@ -397,6 +405,7 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
 
+            self.require_delete(&notebook, &rel)?;
             if self.note_is_dirty(&id, &rel) {
                 return Err(doc_dirty(&rel));
             }
@@ -453,6 +462,8 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
 
+            // 书签写入笔记本级元数据，要求笔记本本身达到修改级。
+            self.require_perm(&NodeKey::notebook(id), PermLevel::Modify)?;
             let path = notebook.note_path(&rel).map_err(core_error)?;
             let Some(bytes) = read_existing(&path, &rel)? else {
                 return Err(not_found(format!("note not found: {rel}")));
@@ -708,6 +719,7 @@ mod tests {
             stdio_token: None,
             dirty_path: Some(root.join("dirty.toml")),
             exports_dir: Some(root.join("exports")),
+            permissions_path: Some(root.join("permissions.toml")),
         });
         (MdworkServer::new(ctx), notebook, token)
     }

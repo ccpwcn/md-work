@@ -217,7 +217,10 @@ impl AppShell {
         self.queue_workspace_presence(cx);
 
         if self.config.mcp_http {
-            self.mcp_live = self.mcp.start(self.config.mcp_port);
+            self.mcp_live = self.mcp.start(
+                self.config.mcp_port,
+                self.current_workspace_root().as_deref(),
+            );
         }
 
         let label = self

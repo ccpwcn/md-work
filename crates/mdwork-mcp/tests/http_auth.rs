@@ -21,6 +21,7 @@ fn temp_ctx() -> (std::path::PathBuf, Arc<ServerContext>, String) {
         stdio_token: None,
         dirty_path: Some(root.join("dirty.toml")),
         exports_dir: Some(root.join("exports")),
+        permissions_path: Some(root.join("permissions.toml")),
     });
     (root, ctx, wire)
 }

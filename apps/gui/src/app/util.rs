@@ -98,6 +98,186 @@ pub(super) fn empty_hint(text: String, color: gpui_kit::Hsla) -> AnyElement {
         .into_any_element()
 }
 
+/// 设置面板统一配色快照。MCP 设置页先用了这套卡片 / 分段控件 / 状态徽章，
+/// 这里抽成公共组件，让六个设置 Tab 共用同一套视觉语言。
+#[derive(Clone, Copy)]
+pub(super) struct SettingsPalette {
+    pub muted: gpui_kit::Hsla,
+    pub foreground: gpui_kit::Hsla,
+    pub border: gpui_kit::Hsla,
+    pub popover: gpui_kit::Hsla,
+    pub hover: gpui_kit::Hsla,
+    pub transparent: gpui_kit::Hsla,
+    pub track: gpui_kit::Hsla,
+    pub success: gpui_kit::Hsla,
+    pub danger: gpui_kit::Hsla,
+    pub warning: gpui_kit::Hsla,
+    pub accent: gpui_kit::Hsla,
+}
+
+impl SettingsPalette {
+    pub(super) fn new(cx: &mut Context<AppShell>) -> Self {
+        let theme = cx.theme();
+        Self {
+            muted: theme.muted_foreground,
+            foreground: theme.foreground,
+            border: theme.border,
+            popover: theme.popover,
+            hover: theme.list_hover,
+            transparent: theme.transparent,
+            track: theme.muted,
+            success: theme.success,
+            danger: theme.danger,
+            warning: theme.warning,
+            accent: theme.accent,
+        }
+    }
+}
+
+/// 带标题与说明的分区卡片，取代原来一根根 1px 分隔线。
+pub(super) fn settings_card(
+    title: String,
+    subtitle: Option<String>,
+    body: AnyElement,
+    p: SettingsPalette,
+) -> AnyElement {
+    div()
+        .v_flex()
+        .gap_2()
+        .p_3()
+        .rounded_lg()
+        .border_1()
+        .border_color(p.border)
+        .child(
+            div()
+                .v_flex()
+                .gap_0p5()
+                .child(div().text_sm().font_bold().child(title))
+                .when_some(subtitle, |header, text| {
+                    header.child(div().text_xs().text_color(p.muted).child(text))
+                }),
+        )
+        .child(body)
+        .into_any_element()
+}
+
+/// 分段控件的单个选项：选中态是浮起的白块，可带图标。
+pub(super) fn settings_segment<F>(
+    id: &'static str,
+    label: String,
+    icon: Option<IconName>,
+    active: bool,
+    on_click: F,
+    p: SettingsPalette,
+) -> AnyElement
+where
+    F: Fn(&gpui_kit::ClickEvent, &mut Window, &mut App) + 'static,
+{
+    div()
+        .id(id)
+        .h_flex()
+        .items_center()
+        .gap_1()
+        .px_3()
+        .py_1p5()
+        .rounded_md()
+        .text_xs()
+        .cursor_pointer()
+        .bg(if active { p.popover } else { p.transparent })
+        .text_color(if active { p.foreground } else { p.muted })
+        .when(active, |item| item.font_bold())
+        .hover(move |style| style.bg(p.hover))
+        .when_some(icon, |item, icon| {
+            item.child(Icon::new(icon).xsmall().text_color(if active {
+                p.foreground
+            } else {
+                p.muted
+            }))
+        })
+        .child(label)
+        .on_click(on_click)
+        .into_any_element()
+}
+
+/// 分段控件容器。
+pub(super) fn settings_segment_track(items: Vec<AnyElement>, p: SettingsPalette) -> AnyElement {
+    div()
+        .h_flex()
+        .items_center()
+        .gap_0p5()
+        .p_0p5()
+        .rounded_lg()
+        .border_1()
+        .border_color(p.border)
+        .bg(p.track)
+        .children(items)
+        .into_any_element()
+}
+
+/// 圆点状态徽章（运行中 / 已注册 / 有效等）。
+pub(super) fn settings_status_badge(label: String, color: gpui_kit::Hsla) -> AnyElement {
+    div()
+        .h_flex()
+        .items_center()
+        .gap_1p5()
+        .px_2()
+        .py_1()
+        .rounded_full()
+        .bg(color.opacity(0.12))
+        .child(div().size(px(6.)).rounded_full().bg(color))
+        .child(div().text_xs().text_color(color).child(label))
+        .into_any_element()
+}
+
+pub(super) fn settings_hint(text: String, p: SettingsPalette) -> AnyElement {
+    div()
+        .text_xs()
+        .text_color(p.muted)
+        .child(text)
+        .into_any_element()
+}
+
+/// 等宽字体的路径展示框。
+pub(super) fn settings_path_box(path: String, p: SettingsPalette) -> AnyElement {
+    div()
+        .px_2()
+        .py_1p5()
+        .rounded_md()
+        .border_1()
+        .border_color(p.border)
+        .bg(p.track.opacity(0.5))
+        .font_family("Consolas")
+        .text_xs()
+        .truncate()
+        .child(path)
+        .into_any_element()
+}
+
+/// 侧边导航的分组小标题。
+pub(super) fn settings_group_label(text: String, p: SettingsPalette) -> AnyElement {
+    div()
+        .px_2()
+        .pt_2()
+        .pb_1()
+        .text_xs()
+        .text_color(p.muted)
+        .child(text)
+        .into_any_element()
+}
+
+/// 各 Tab 统一的滚动容器，卡片再多也不会把对话框撑破。
+pub(super) fn settings_body(id: &'static str, cards: Vec<AnyElement>) -> AnyElement {
+    div()
+        .id(id)
+        .v_flex()
+        .gap_3()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .children(cards)
+        .into_any_element()
+}
+
 pub(super) fn notice_icon(kind: NoticeKind) -> IconName {
     match kind {
         NoticeKind::Info => IconName::Info,
@@ -482,6 +662,31 @@ pub(super) fn path_under(rel: &str, prefix: &str) -> bool {
 
 pub(super) fn token_store() -> TokenStore {
     TokenStore::new(TokenStore::default_path())
+}
+
+/// 重命名/移动后把 MCP 权限记录迁到新路径，避免新路径默认隐藏、旧路径残留授权。
+///
+/// 在写线程调用：读文件、重签、落盘都是阻塞 I/O。
+pub(super) fn rekey_mcp_permissions(notebook_id: Uuid, from: &str, to: &str) {
+    if from.eq_ignore_ascii_case(to) {
+        return;
+    }
+    let store = PermissionStore::new(PermissionStore::default_path());
+    let loaded = store.load();
+    if loaded.tampered {
+        return;
+    }
+    let mut tree = loaded.tree;
+    if tree.rekey(
+        &NodeKey::entry(notebook_id, from),
+        &NodeKey::entry(notebook_id, to),
+    ) == 0
+    {
+        return;
+    }
+    if let Err(err) = store.save(&tree) {
+        tracing::warn!(error = %err, "迁移 MCP 权限记录失败");
+    }
 }
 
 pub(super) fn split_globs(raw: &str) -> Vec<String> {

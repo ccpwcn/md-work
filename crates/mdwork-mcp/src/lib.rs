@@ -2,6 +2,7 @@
 
 mod audit;
 mod auth;
+mod perms;
 mod process;
 mod server;
 mod tools_read;
@@ -9,6 +10,7 @@ mod tools_write;
 
 pub use audit::{AuditEntry, AuditLog};
 pub use auth::TokenStore;
+pub use perms::{LoadedPermissions, PermissionStore};
 pub use server::resolve_workspace_root;
 pub use server::{
     CODE_CONFLICT, CODE_DOC_DIRTY, CODE_EXPORT_FAILED, CODE_FORBIDDEN, CODE_INVALID_PATH,

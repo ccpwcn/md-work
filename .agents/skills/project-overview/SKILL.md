@@ -8,6 +8,7 @@ description: 在软件开发中全局使用此技能。
 - 代码中的注释，尽可能的使用简体中文。
 - 需要本地工具支持，如Python、Java、nodejs等，本文档提供了参考 [references/local-program.md](references/local-program.md)。
 - 执行代码审查时，生成一份代码审查报告，放到doc/cr_report目录中，列出代码审查执行的基本信息，以及发现了哪些问题，修复了哪些问题，结论如何等等，具体模板见 [references/cr_report.md](references/cr_report.md)。代码审查报告的文件名上带上日期时间，能用写法 `cr_YYYY-MM-DD_HH-MM-SS.md` 。
+- 保存软件状态、各种配置的配置文件，格式尽可能的都用toml，除非有特殊需求。
 
 # 版本号
 - 唯一权威来源：根目录 `Cargo.toml` 的 `[workspace.package].version`（`X.Y.Z`）。

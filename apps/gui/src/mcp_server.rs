@@ -1,6 +1,7 @@
 //! Keeps the loopback MCP HTTP server (`md-work-cli mcp serve --http`) alive
 //! for as long as the GUI runs, and stops it when md-work exits.
 
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 #[cfg(windows)]
@@ -23,7 +24,12 @@ impl McpHttp {
         }
     }
 
-    pub fn start(&mut self, port: u16) -> bool {
+    /// Starts `md-work-cli mcp serve --http` on `port` for `workspace`.
+    ///
+    /// The workspace root is passed explicitly: the child would otherwise read
+    /// it from `config/runtime.toml`, which the GUI saves asynchronously, so a
+    /// freshly switched workspace could serve the previous root.
+    pub fn start(&mut self, port: u16, workspace: Option<&Path>) -> bool {
         self.stop();
         self.port = port;
         match std::net::TcpListener::bind(("127.0.0.1", port)) {
@@ -54,6 +60,9 @@ impl McpHttp {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if let Some(workspace) = workspace {
+            command.env("MDWORK_WORKSPACE", workspace);
+        }
         #[cfg(windows)]
         command.creation_flags(CREATE_NO_WINDOW);
         match command.spawn() {

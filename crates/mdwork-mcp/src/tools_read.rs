@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 
 use mdwork_core::bookmarks::Bookmarks;
 use mdwork_core::doc;
+use mdwork_core::mcp_permissions::{NodeKey, PermLevel};
 use mdwork_core::notebook::EntryKind;
 use mdwork_core::permissions::Scope;
 use mdwork_core::search::{SearchQuery, search_notebook_filtered};
@@ -204,7 +205,7 @@ impl MdworkServer {
                 .scan()
                 .notebooks
                 .iter()
-                .filter(|notebook| token.allows_notebook(&notebook.marker.id))
+                .filter(|notebook| self.notebook_readable(token, &notebook.marker.id))
                 .count();
             Ok(Json(ServerStatusOut {
                 name: mdwork_core::APP_NAME.to_string(),
@@ -236,15 +237,25 @@ impl MdworkServer {
                 .scan()
                 .notebooks
                 .into_iter()
-                .filter(|notebook| token.allows_notebook(&notebook.marker.id))
-                .map(|notebook| NotebookSummary {
-                    id: notebook.marker.id.to_string(),
-                    name: notebook.display_name().to_string(),
-                    path: notebook.root.display().to_string(),
-                    note_count: notebook
+                .filter(|notebook| self.notebook_readable(token, &notebook.marker.id))
+                .map(|notebook| {
+                    let id = notebook.marker.id;
+                    // 只统计可见笔记：隐藏笔记的条数与名字一样属于越权信息。
+                    let note_count = notebook
                         .list_entries()
-                        .map(|entries| entries.len())
-                        .unwrap_or(0),
+                        .map(|entries| {
+                            entries
+                                .iter()
+                                .filter(|entry| self.note_readable(token, &id, &entry.rel_path))
+                                .count()
+                        })
+                        .unwrap_or(0);
+                    NotebookSummary {
+                        id: id.to_string(),
+                        name: notebook.display_name().to_string(),
+                        path: notebook.root.display().to_string(),
+                        note_count,
+                    }
                 })
                 .collect();
             Ok(Json(ListNotebooksOut { notebooks }))
@@ -264,18 +275,29 @@ impl MdworkServer {
             require_scope(token, Scope::Read)?;
             let notebook = self.notebook(token, &args.notebook_id)?;
             let tree = notebook.list_tree().map_err(core_error)?;
-            entry.notebook = Some(notebook.marker.id);
+            let id = notebook.marker.id;
+            entry.notebook = Some(id);
             entry.notebook_name = Some(notebook.display_name().to_string());
-            let note_count = tree
+            let visible_notes: Vec<_> = tree
                 .iter()
-                .filter(|item| item.kind == EntryKind::Note)
+                .filter(|item| {
+                    item.kind == EntryKind::Note
+                        && self
+                            .perms
+                            .allows(&NodeKey::entry(id, &item.rel_path), PermLevel::Read)
+                })
+                .collect();
+            let note_count = visible_notes.len();
+            let folder_count = tree
+                .iter()
+                .filter(|item| {
+                    item.kind == EntryKind::Folder
+                        && visible_notes
+                            .iter()
+                            .any(|note| note.rel_path.starts_with(&format!("{}/", item.rel_path)))
+                })
                 .count();
-            let folder_count = tree.len() - note_count;
-            let note_bytes = tree
-                .iter()
-                .filter(|item| item.kind == EntryKind::Note)
-                .map(|item| item.size)
-                .sum();
+            let note_bytes = visible_notes.iter().map(|item| item.size).sum();
             Ok(Json(NotebookInfoOut {
                 id: notebook.marker.id.to_string(),
                 name: notebook.display_name().to_string(),
@@ -310,7 +332,7 @@ impl MdworkServer {
             let allowed_notes: Vec<&mdwork_core::Entry> = tree
                 .iter()
                 .filter(|item| {
-                    item.kind == EntryKind::Note && token.allows_note(&id, &item.rel_path)
+                    item.kind == EntryKind::Note && self.note_readable(token, &id, &item.rel_path)
                 })
                 .collect();
             let entries: Vec<NoteEntryOut> = tree
@@ -320,7 +342,7 @@ impl MdworkServer {
                     None => true,
                 })
                 .filter(|item| match item.kind {
-                    EntryKind::Note => token.allows_note(&id, &item.rel_path),
+                    EntryKind::Note => self.note_readable(token, &id, &item.rel_path),
                     EntryKind::Folder => allowed_notes
                         .iter()
                         .any(|note| note.rel_path.starts_with(&format!("{}/", item.rel_path))),
@@ -454,7 +476,7 @@ impl MdworkServer {
             let bookmarks = marks
                 .entries
                 .into_iter()
-                .filter(|mark| token.allows_note(&id, &mark.rel_path))
+                .filter(|mark| self.note_readable(token, &id, &mark.rel_path))
                 .map(|mark| BookmarkOut {
                     path: mark.rel_path,
                     title: mark.title,
@@ -499,7 +521,7 @@ impl MdworkServer {
                     .scan()
                     .notebooks
                     .into_iter()
-                    .filter(|notebook| token.allows_notebook(&notebook.marker.id))
+                    .filter(|notebook| self.notebook_readable(token, &notebook.marker.id))
                     .collect(),
             };
 
@@ -518,7 +540,7 @@ impl MdworkServer {
                     &query,
                     &cancel,
                     max_hits - hits.len(),
-                    |rel_path| token.allows_note(&id, rel_path),
+                    |rel_path| self.note_readable(token, &id, rel_path),
                 )
                 .map_err(core_error)?;
                 files += outcome.files as u64;

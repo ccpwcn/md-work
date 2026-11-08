@@ -25,6 +25,7 @@ use mdwork_core::config::{
 };
 use mdwork_core::doc::{Eol, TextEncoding};
 use mdwork_core::image::{self, ImageHost, ImageKind};
+use mdwork_core::mcp_permissions::{ChildAggregate, GrantMode, NodeKey, PermLevel, PermissionTree};
 use mdwork_core::notebook::{Entry, EntryKind, Notebook, TrashItem};
 use mdwork_core::order::{self, TreeOrder, file_name, parent_rel, sibling_rank};
 use mdwork_core::permissions::{self as perms, Scope, TokenRecord};
@@ -36,7 +37,7 @@ use mdwork_export::{
     ExportEvent, ExportFormat, ExportJob, ExportOptions, ExportRequest, NotebookPrefs, PaperSize,
     TableWidth,
 };
-use mdwork_mcp::{AuditEntry, AuditLog, TokenStore};
+use mdwork_mcp::{AuditEntry, AuditLog, PermissionStore, TokenStore};
 use mdwork_render::preview::{OutlineItem, PreviewIr};
 use rust_i18n::t;
 use uuid::Uuid;
@@ -334,6 +335,8 @@ struct ImageSettingsDialog {
     http_url_path: Entity<InputState>,
     http_headers: Entity<TextareaState>,
     error: Option<String>,
+    /// 保存成功提示；保存后保留对话框，避免页面退回「加载中」无法再编辑。
+    message: Option<String>,
 }
 
 struct ZipDialog {
@@ -502,7 +505,15 @@ struct Palette {
 enum McpTab {
     Server,
     Tokens,
+    Permissions,
     Audit,
+}
+
+/// 客户端接入片段的传输方式：GUI 起的是 HTTP 服务，stdio 只在命令行使用。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SnippetKind {
+    Http,
+    Stdio,
 }
 
 struct McpSettingsDialog {
@@ -524,6 +535,15 @@ struct McpSettingsDialog {
     pending_delete: bool,
     audit: Vec<AuditEntry>,
     audit_error: Option<String>,
+    /// 权限树编辑态：每次变更即时保存，仅对新 MCP 会话生效。
+    perms: PermissionTree,
+    /// 权限文件签名校验失败：已按全部隐藏处理，需重新授权重建签名。
+    perms_tampered: bool,
+    /// 权限树中已展开的节点（`NodeKey` 字符串），默认展开笔记本根。
+    perms_expanded: HashSet<String>,
+    perms_scroll: UniformListScrollHandle,
+    /// 「服务」页接入片段当前展示的传输方式。
+    snippet: SnippetKind,
     message: Option<String>,
     error: Option<String>,
 }
@@ -980,7 +1000,9 @@ impl AppShell {
         this.spawn_poller(cx);
 
         if mcp_enabled {
-            this.mcp_live = this.mcp.start(mcp_port);
+            this.mcp_live = this
+                .mcp
+                .start(mcp_port, this.current_workspace_root().as_deref());
         }
 
         let weak = cx.entity().downgrade();

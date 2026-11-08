@@ -260,6 +260,42 @@ settings.width.standard:
 settings.width.wide:
   en: "Wide"
   zh-CN: "宽"
+settings.dialog_hint:
+  en: "Workspace, appearance, panels, image hosting and MCP integration"
+  zh-CN: "工作区、外观、面板、图床与 MCP 服务设置"
+settings.nav.general:
+  en: "GENERAL"
+  zh-CN: "通用"
+settings.nav.integration:
+  en: "INTEGRATIONS"
+  zh-CN: "集成服务"
+settings.tab.workspace_hint:
+  en: "Name the current workspace and manage where your notebooks live."
+  zh-CN: "为工作区命名，管理笔记本存放位置。"
+settings.tab.appearance_hint:
+  en: "Theme, language, editor fonts and autosave preferences."
+  zh-CN: "主题、语言、字体与自动保存偏好。"
+settings.tab.panels_hint:
+  en: "Choose which side each panel docks to and how wide they are."
+  zh-CN: "设置侧边面板的停靠位置、排列方式与宽度。"
+settings.tab.images_hint:
+  en: "Choose where pasted images are stored, or upload them to a host."
+  zh-CN: "设置粘贴图片的保存位置或上传到图床。"
+settings.tab.mcp_hint:
+  en: "Local MCP server, access tokens, note permissions and audit log."
+  zh-CN: "本地 MCP 服务、访问令牌、笔记权限与审计日志。"
+settings.tab.windows_hint:
+  en: "Windows file associations and quick access to app folders."
+  zh-CN: "Windows 文件关联与应用目录快捷入口。"
+settings.autosave_on:
+  en: "Autosave is on"
+  zh-CN: "自动保存已开启"
+settings.autosave_off:
+  en: "Autosave is off"
+  zh-CN: "自动保存已关闭"
+settings.windows_paths_hint:
+  en: "Open the notebook folder, logs and crash reports in Explorer."
+  zh-CN: "在资源管理器中打开笔记本目录、日志与崩溃报告。"
 image.loading:
   en: "Loading image settings…"
   zh-CN: "正在加载图床设置…"
@@ -860,6 +896,9 @@ image.http_hint:
 image.save:
   en: "Save"
   zh-CN: "保存"
+image.saved:
+  en: "Image host settings saved."
+  zh-CN: "图床设置已保存。"
 image.failed:
   en: "Image could not be saved: %{message}"
   zh-CN: "图片保存失败：%{message}"
@@ -870,8 +909,8 @@ mcp.settings:
   en: "MCP"
   zh-CN: "MCP"
 mcp.settings_hint:
-  en: "Local MCP server, access tokens and audit log"
-  zh-CN: "本地 MCP 服务、访问令牌与审计日志"
+  en: "Local MCP server, access tokens, note permissions and audit log"
+  zh-CN: "本地 MCP 服务、访问令牌、笔记权限与审计日志"
 mcp.title:
   en: "MCP server and tokens"
   zh-CN: "MCP 服务与令牌"
@@ -884,6 +923,54 @@ mcp.tab.tokens:
 mcp.tab.audit:
   en: "Audit"
   zh-CN: "审计"
+mcp.tab.permissions:
+  en: "Permissions"
+  zh-CN: "权限"
+mcp.perm.mode:
+  en: "Grant mode"
+  zh-CN: "授权方式"
+mcp.perm.mode.single:
+  en: "Independent"
+  zh-CN: "单独授权"
+mcp.perm.mode.linked:
+  en: "Parent-child linked"
+  zh-CN: "父子联动"
+mcp.perm.mode_hint:
+  en: "Linked: changing a node updates its whole subtree, and a parent shows the aggregate of its children. Independent: each node is granted on its own."
+  zh-CN: "父子联动：修改节点会同步整棵子树，父节点展示子项聚合状态；单独授权：每个节点独立设置，互不影响。"
+mcp.perm.hint:
+  en: "Changes save immediately and apply to new MCP sessions only; connected sessions keep their current access. New notebooks, folders and notes are hidden by default."
+  zh-CN: "变更即时保存，仅对新会话生效；已连接的会话不受影响。新建笔记本、文件夹和笔记默认隐藏。"
+mcp.perm.level.hidden:
+  en: "Hidden"
+  zh-CN: "隐藏"
+mcp.perm.level.read:
+  en: "Read"
+  zh-CN: "只读"
+mcp.perm.level.modify:
+  en: "Modify"
+  zh-CN: "修改"
+mcp.perm.level.delete:
+  en: "Delete"
+  zh-CN: "删除"
+mcp.perm.mixed:
+  en: "Mixed"
+  zh-CN: "子项不同"
+mcp.perm.all_hidden:
+  en: "All hidden"
+  zh-CN: "全部隐藏"
+mcp.perm.tampered:
+  en: "The permission file failed verification and is treated as all-hidden. Granting any node rebuilds the signature."
+  zh-CN: "权限文件校验失败，已按全部隐藏处理；重新授权任意节点将重建签名。"
+mcp.perm.saved:
+  en: "Permissions saved; they apply to new sessions."
+  zh-CN: "权限已保存，对新会话生效。"
+mcp.perm.save_error:
+  en: "Could not save permissions: %{message}"
+  zh-CN: "权限保存失败：%{message}"
+mcp.perm.empty:
+  en: "No notebooks in this workspace."
+  zh-CN: "当前工作区没有笔记本。"
 mcp.enable:
   en: "Run the local MCP server while MoJiān is open"
   zh-CN: "打开墨笺时启动本地 MCP 服务"
@@ -1067,6 +1154,63 @@ mcp.scope.export:
 mcp.scope.admin:
   en: "Admin"
   zh-CN: "管理员"
+mcp.section.server:
+  en: "Server status"
+  zh-CN: "服务状态"
+mcp.section.clients:
+  en: "Client configuration"
+  zh-CN: "客户端接入"
+mcp.token.list_title:
+  en: "Tokens"
+  zh-CN: "令牌"
+mcp.token.editor_title:
+  en: "Token settings"
+  zh-CN: "令牌配置"
+mcp.audit.title:
+  en: "Recent calls"
+  zh-CN: "调用记录"
+mcp.snippet.http:
+  en: "HTTP"
+  zh-CN: "HTTP"
+mcp.snippet.stdio:
+  en: "stdio"
+  zh-CN: "stdio"
+mcp.snippet_hint_http:
+  en: "The GUI runs an HTTP server at %{url}; paste a token into the Authorization header."
+  zh-CN: "GUI 启动的是 HTTP 服务 %{url}，把令牌填进 Authorization 头即可。"
+mcp.snippet_hint_stdio:
+  en: "stdio is launched directly by the client and does not use the switch above."
+  zh-CN: "stdio 由客户端直接拉起命令行，不受上方开关控制。"
+mcp.apply_port:
+  en: "Apply port"
+  zh-CN: "应用端口"
+mcp.port_hint:
+  en: "Click Apply port to restart the service after changing the port; connected clients will disconnect."
+  zh-CN: "修改端口后点「应用端口」重启服务，已连接的客户端会断开。"
+mcp.status.running_short:
+  en: "Running"
+  zh-CN: "运行中"
+mcp.status.stopped_short:
+  en: "Stopped"
+  zh-CN: "未运行"
+mcp.scope.admin_hint:
+  en: "Admin already includes every other scope; the rest are disabled."
+  zh-CN: "管理员已包含其它全部权限，其余选项自动失效。"
+mcp.perm.expand_all:
+  en: "Expand all"
+  zh-CN: "展开全部"
+mcp.perm.collapse_all:
+  en: "Collapse all"
+  zh-CN: "收起全部"
+mcp.perm.capped:
+  en: "Capped by parent"
+  zh-CN: "受上级限制"
+mcp.perm.node_count:
+  en: "%{count} visible"
+  zh-CN: "可见 %{count} 项"
+mcp.perm.tree_hint:
+  en: "Use the arrow to expand a folder; the label on the right sets its permission level."
+  zh-CN: "点击左侧箭头展开文件夹，右侧标签用于设置授权等级。"
 common.ok:
   en: "OK"
   zh-CN: "确定"

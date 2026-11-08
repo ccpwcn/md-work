@@ -50,6 +50,7 @@ impl AppShell {
             http_url_path,
             http_headers,
             error: None,
+            message: None,
         });
         cx.notify();
     }
@@ -63,6 +64,7 @@ impl AppShell {
         }
         dialog.mode = mode;
         dialog.error = None;
+        dialog.message = None;
         cx.notify();
     }
 
@@ -85,13 +87,19 @@ impl AppShell {
         if let Err(err) = image::validate_host(&host) {
             if let Some(dialog) = self.image_settings.as_mut() {
                 dialog.error = Some(err.to_string());
+                dialog.message = None;
             }
             cx.notify();
             return;
         }
         self.config.image_host = host;
         self.save_config(cx);
-        self.image_settings = None;
+        // 保存后保留对话框：以前置 None 会让页面退回「加载中」，必须关闭
+        // 整个设置窗口再打开才能继续编辑。
+        if let Some(dialog) = self.image_settings.as_mut() {
+            dialog.error = None;
+            dialog.message = Some(t!("image.saved").to_string());
+        }
         cx.notify();
     }
 
@@ -99,173 +107,161 @@ impl AppShell {
         let Some(dialog) = self.image_settings.as_ref() else {
             return empty_hint(t!("image.loading").to_string(), cx.theme().muted_foreground);
         };
-        let muted = cx.theme().muted_foreground;
-        let danger = cx.theme().danger;
-        let label = |text: String| {
-            div()
-                .w(px(96.))
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(muted)
-                .child(text)
-        };
-        let mode_button = |mode: ImageHostMode, key: &'static str, cx: &mut Context<Self>| {
-            let active = dialog.mode == mode;
-            Button::new(match mode {
-                ImageHostMode::Local => "image-mode-local",
-                ImageHostMode::PicGo => "image-mode-picgo",
-                ImageHostMode::Http => "image-mode-http",
-            })
-            .ghost()
-            .compact()
-            .label(t!(key).to_string())
-            .when(active, |button| button.primary())
-            .on_click(cx.listener(move |this, _, _, cx| this.set_image_host_mode(mode, cx)))
-        };
+        let p = SettingsPalette::new(cx);
 
-        let mut body: Vec<AnyElement> = Vec::new();
-        body.push(
-            div()
+        let mode_track = settings_segment_track(
+            vec![
+                settings_segment(
+                    "image-mode-local",
+                    t!("image.mode.local").to_string(),
+                    Some(IconName::HardDrive),
+                    dialog.mode == ImageHostMode::Local,
+                    cx.listener(move |this, _, _, cx| {
+                        this.set_image_host_mode(ImageHostMode::Local, cx)
+                    }),
+                    p,
+                ),
+                settings_segment(
+                    "image-mode-picgo",
+                    t!("image.mode.picgo").to_string(),
+                    Some(IconName::CloudUpload),
+                    dialog.mode == ImageHostMode::PicGo,
+                    cx.listener(move |this, _, _, cx| {
+                        this.set_image_host_mode(ImageHostMode::PicGo, cx)
+                    }),
+                    p,
+                ),
+                settings_segment(
+                    "image-mode-http",
+                    t!("image.mode.http").to_string(),
+                    Some(IconName::Globe),
+                    dialog.mode == ImageHostMode::Http,
+                    cx.listener(move |this, _, _, cx| {
+                        this.set_image_host_mode(ImageHostMode::Http, cx)
+                    }),
+                    p,
+                ),
+            ],
+            p,
+        );
+        let mode_card = settings_card(
+            t!("image.mode").to_string(),
+            Some(t!("image.host_hint").to_string()),
+            mode_track,
+            p,
+        );
+
+        let config_body: AnyElement = match dialog.mode {
+            ImageHostMode::Local => div()
                 .h_flex()
-                .items_center()
+                .items_start()
                 .gap_2()
-                .child(label(t!("image.mode").to_string()))
-                .child(mode_button(ImageHostMode::Local, "image.mode.local", cx))
-                .child(mode_button(ImageHostMode::PicGo, "image.mode.picgo", cx))
-                .child(mode_button(ImageHostMode::Http, "image.mode.http", cx))
+                .child(Icon::new(IconName::FolderOpen).small().text_color(p.muted))
+                .child(settings_hint(t!("image.local_hint").to_string(), p))
                 .into_any_element(),
-        );
-        match dialog.mode {
-            ImageHostMode::Local => {
-                body.push(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(t!("image.local_hint").to_string())
+            ImageHostMode::PicGo => div()
+                .v_flex()
+                .gap_2()
+                .child(mcp_field(
+                    t!("image.endpoint").to_string(),
+                    Input::new(&dialog.picgo_endpoint)
+                        .w_full()
+                        .small()
                         .into_any_element(),
-                );
-            }
-            ImageHostMode::PicGo => {
-                body.push(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(label(t!("image.endpoint").to_string()))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(Input::new(&dialog.picgo_endpoint).w_full().small()),
-                        )
+                    p.muted,
+                ))
+                .child(settings_hint(t!("image.picgo_hint").to_string(), p))
+                .into_any_element(),
+            ImageHostMode::Http => div()
+                .v_flex()
+                .gap_2()
+                .child(mcp_field(
+                    t!("image.endpoint").to_string(),
+                    Input::new(&dialog.http_endpoint)
+                        .w_full()
+                        .small()
                         .into_any_element(),
-                );
-                body.push(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(t!("image.picgo_hint").to_string())
-                        .into_any_element(),
-                );
-            }
-            ImageHostMode::Http => {
-                body.push(
+                    p.muted,
+                ))
+                .child(
                     div()
                         .h_flex()
-                        .items_center()
                         .gap_2()
-                        .child(label(t!("image.endpoint").to_string()))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(Input::new(&dialog.http_endpoint).w_full().small()),
+                            div().flex_1().min_w_0().child(mcp_field(
+                                t!("image.field").to_string(),
+                                Input::new(&dialog.http_field)
+                                    .w_full()
+                                    .small()
+                                    .into_any_element(),
+                                p.muted,
+                            )),
                         )
-                        .into_any_element(),
-                );
-                body.push(
-                    div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(label(t!("image.field").to_string()))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(Input::new(&dialog.http_field).w_full().small()),
-                        )
-                        .into_any_element(),
-                );
-                body.push(
+                            div().flex_1().min_w_0().child(mcp_field(
+                                t!("image.url_path").to_string(),
+                                Input::new(&dialog.http_url_path)
+                                    .w_full()
+                                    .small()
+                                    .into_any_element(),
+                                p.muted,
+                            )),
+                        ),
+                )
+                .child(mcp_field(
+                    t!("image.headers").to_string(),
                     div()
-                        .h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(label(t!("image.url_path").to_string()))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(Input::new(&dialog.http_url_path).w_full().small()),
-                        )
+                        .v_flex()
+                        .gap_1()
+                        .child(Textarea::new(&dialog.http_headers).h(px(64.)).w_full())
+                        .child(settings_hint(t!("image.headers_hint").to_string(), p))
                         .into_any_element(),
-                );
-                body.push(
-                    div()
-                        .h_flex()
-                        .items_start()
-                        .gap_2()
-                        .child(label(t!("image.headers").to_string()))
-                        .child(
-                            div()
-                                .v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .gap_1()
-                                .child(Textarea::new(&dialog.http_headers).h(px(64.)).w_full())
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child(t!("image.headers_hint").to_string()),
-                                ),
-                        )
-                        .into_any_element(),
-                );
-                body.push(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(t!("image.http_hint").to_string())
-                        .into_any_element(),
-                );
-            }
-        }
+                    p.muted,
+                ))
+                .child(settings_hint(t!("image.http_hint").to_string(), p))
+                .into_any_element(),
+        };
+        let config_card = settings_card(t!("image.host_title").to_string(), None, config_body, p);
 
-        let mut footer = div().h_flex().items_center().gap_2().min_h(px(24.)).child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_xs()
-                .text_color(danger)
-                .when_some(dialog.error.clone(), |element, error| element.child(error)),
-        );
-        footer = footer.child(
-            Button::new("image-save")
-                .primary()
-                .compact()
-                .label(t!("image.save").to_string())
-                .on_click(cx.listener(|this, _, _, cx| this.save_image_settings(cx))),
-        );
+        let (notice, notice_color) = if let Some(error) = dialog.error.clone() {
+            (error, p.danger)
+        } else if let Some(message) = dialog.message.clone() {
+            (message, p.success)
+        } else {
+            (String::new(), p.muted)
+        };
+        let footer = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .min_h(px(24.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(notice_color)
+                    .child(notice),
+            )
+            .child(
+                Button::new("image-save")
+                    .primary()
+                    .compact()
+                    .icon(IconName::Save)
+                    .label(t!("image.save").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| this.save_image_settings(cx))),
+            );
 
         div()
             .v_flex()
             .flex_1()
             .min_h_0()
             .gap_3()
-            .children(body)
+            .child(settings_body(
+                "settings-images-body",
+                vec![mode_card, config_card],
+            ))
             .child(footer)
             .into_any_element()
     }

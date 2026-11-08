@@ -9,6 +9,7 @@ pub mod crash;
 pub mod dirty;
 pub mod doc;
 pub mod image;
+pub mod mcp_permissions;
 pub mod notebook;
 pub mod order;
 pub mod paths;

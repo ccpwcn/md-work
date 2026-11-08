@@ -1215,8 +1215,10 @@ impl AppShell {
             }
         }
         let submitted_from = from.clone();
+        let perm_notebook = notebook_id;
         let receiver = disk::submit(move || -> mdwork_core::Result<String> {
             let new_rel = notebook.rename_entry(&submitted_from, &to)?;
+            rekey_mcp_permissions(perm_notebook, &submitted_from, &new_rel);
             if let Some((parent, names)) = placement {
                 let mut order = notebook.load_tree_order();
                 order.set_names(parent, names);

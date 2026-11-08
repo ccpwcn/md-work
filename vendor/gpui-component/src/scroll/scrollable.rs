@@ -69,6 +69,11 @@ pub struct Scrollable<E: InteractiveElement + Styled + ParentElement + Element> 
     element: E,
     axis: ScrollbarAxis,
     scroll_bounce: Option<bool>,
+    /// Let a plain vertical mouse wheel scroll a horizontal area sideways.
+    /// Right for standalone strips (tabs, toolbars), wrong for a horizontal
+    /// area inside a vertically scrolling document: the wheel is consumed
+    /// until the horizontal edge, so the surrounding page cannot scroll.
+    vertical_wheel: bool,
 }
 
 impl<E> Scrollable<E>
@@ -82,6 +87,7 @@ where
             element,
             axis: axis.into(),
             scroll_bounce: None,
+            vertical_wheel: true,
         }
     }
 
@@ -98,6 +104,15 @@ where
     /// macOS, off elsewhere; horizontal-only areas do not bounce.
     pub fn scroll_bounce(mut self, enabled: bool) -> Self {
         self.scroll_bounce = Some(enabled);
+        self
+    }
+
+    /// Whether a plain vertical mouse wheel scrolls this horizontal area
+    /// sideways (default `true`). Turn it off when the area is nested inside a
+    /// vertically scrolling document, so the wheel reaches that ancestor
+    /// instead of being consumed until the horizontal edge is reached.
+    pub fn vertical_wheel(mut self, enabled: bool) -> Self {
+        self.vertical_wheel = enabled;
         self
     }
 }
@@ -193,10 +208,12 @@ where
                 .when_some(self.scroll_bounce, |bounce, on| bounce.enabled(on)),
             )
             // A plain mouse wheel has only a vertical axis, which the locked
-            // horizontal area above would ignore.
-            .when(self.axis == ScrollbarAxis::Horizontal, |this| {
-                this.child(ScrollableMask::vertical_wheel(&scroll_handle))
-            })
+            // horizontal area above would ignore. Areas nested in a vertically
+            // scrolling document opt out so the wheel bubbles to that page.
+            .when(
+                self.axis == ScrollbarAxis::Horizontal && self.vertical_wheel,
+                |this| this.child(ScrollableMask::vertical_wheel(&scroll_handle)),
+            )
             .child(render_scrollbar(
                 scrollbar_id,
                 &scroll_handle,

@@ -468,10 +468,16 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
                     .child(styled)
                     .into_any_element()
             } else {
+                // 代码块内嵌在纵向滚动的正文里，不能让「垂直滚轮转横向滚动」
+                // 的默认行为抢走滚轮：向下的 delta 会先被拿去横滚代码块并
+                // 阻止冒泡，直到横向到边界正文才继续下翻（向上的 delta 被
+                // clamp 回 0 反而能冒泡，于是表现为只有向下失灵）。横向
+                // 滚动仍可用滚动条、触控板横滑或 Shift + 滚轮。
                 div()
                     .id(code_block_id(&code_text, false))
                     .w_full()
                     .overflow_x_scrollbar()
+                    .vertical_wheel(false)
                     .whitespace_nowrap()
                     .child(styled)
                     .into_any_element()
@@ -1681,5 +1687,108 @@ mod tests {
         let flat = flatten_highlights(text, bad);
         assert_valid_highlight_partition(text, &flat);
         assert!(!flat.is_empty());
+    }
+
+    /// 回归用例：鼠标停在代码块上向下滚轮，正文必须继续向下滚动。
+    /// 修复前 `overflow_x_scrollbar()` 附带的 `vertical_wheel` mask 会先把
+    /// 向下的 delta 拿去横向滚动代码块并阻止冒泡，直到横滚到边界正文才
+    /// 能继续下翻；向上的 delta 被 clamp 回 0 反而能冒泡，于是表现为
+    /// 「只有向下不灵，且时灵时不灵」。
+    #[gpui::test]
+    fn wheel_over_code_block_still_scrolls_the_preview(cx: &mut gpui_kit::TestAppContext) {
+        use std::collections::HashMap;
+
+        use super::{PreviewOutlineTracker, new_frame_headings, render};
+        use crate::preview_selection::{SharedPreviewSelection, new_frame_selection};
+        use gpui::{ScrollDelta, ScrollWheelEvent};
+        use gpui_kit::{
+            Context, IntoElement, ParentElement as _, Render, ScrollHandle, Styled as _, Window,
+            div, point, px,
+        };
+        use mdwork_render::preview::{Block, PreviewIr};
+
+        struct CodeBlockPreview {
+            frame: SharedPreviewSelection,
+            tracker: PreviewOutlineTracker,
+        }
+
+        impl Render for CodeBlockPreview {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let mut code = "x".repeat(400);
+                for _ in 0..8 {
+                    code.push('\n');
+                    code.push_str("short line");
+                }
+                let ir = PreviewIr {
+                    blocks: vec![
+                        Block::CodeBlock {
+                            language: Some("rust".into()),
+                            text: code,
+                            line: 1,
+                        },
+                        Block::Blank {
+                            lines: 100,
+                            line: 2,
+                        },
+                    ],
+                    styles: Default::default(),
+                };
+                // 固定视口：真实窗口有确定尺寸，否则代码块会把内容层撑宽、
+                // 纵向也没有可滚动余量，测不出嵌套滚动区的抢滚轮行为。
+                div().w(px(400.)).h(px(240.)).child(render(
+                    &ir,
+                    None,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    false,
+                    "",
+                    16.0,
+                    self.frame.clone(),
+                    Some(self.tracker.clone()),
+                    cx,
+                ))
+            }
+        }
+
+        let tracker = PreviewOutlineTracker {
+            headings: new_frame_headings(),
+            scroll_handle: ScrollHandle::new(),
+        };
+        let handle = tracker.scroll_handle.clone();
+        cx.update(|cx| gpui_kit::init(cx));
+        let (_, cx) = cx.add_window_view(|_, _| CodeBlockPreview {
+            frame: new_frame_selection(),
+            tracker,
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(handle.offset().y, px(0.));
+
+        // 位置落在代码块正文内：向下滚轮必须滚动正文，而不是被拿去横滚代码块。
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(60.), px(80.)),
+            delta: ScrollDelta::Lines(point(0., -3.)),
+            ..Default::default()
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let down = handle.offset().y;
+        assert!(
+            down < px(0.),
+            "向下滚轮应滚动正文，实际 offset.y = {down:?}"
+        );
+
+        // 向上滚动同样不能受影响。
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(60.), px(80.)),
+            delta: ScrollDelta::Lines(point(0., 1.)),
+            ..Default::default()
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(handle.offset().y > down, "向上滚轮应回滚正文");
     }
 }

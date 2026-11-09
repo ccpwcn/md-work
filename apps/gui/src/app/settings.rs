@@ -583,13 +583,14 @@ impl AppShell {
             None,
             div()
                 .h_flex()
+                .w_full()
                 .items_start()
                 .gap_2()
                 .child(Icon::new(IconName::Info).small().text_color(p.muted))
-                .child(settings_hint(
+                .child(div().v_flex().flex_1().min_w_0().child(settings_hint(
                     t!("settings.workspace_about_text").to_string(),
                     p,
-                ))
+                )))
                 .into_any_element(),
             p,
         );

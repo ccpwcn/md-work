@@ -1408,17 +1408,24 @@ impl AppShell {
     }
 
     pub(super) fn render_status(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let border = cx.theme().border;
+        let danger = cx.theme().danger;
         let mut status = div()
             .h(px(26.))
             .px_3()
             .flex()
             .items_center()
-            .gap_3()
+            .gap_2()
             .border_t_1()
-            .border_color(cx.theme().border)
+            .border_color(border)
             .bg(cx.theme().background)
             .text_xs()
             .text_color(cx.theme().muted_foreground);
+
+        // 同类信息排成一组，组间用细竖线隔开（与 Windows 记事本状态栏同理）。
+        // 竖线取状态栏边框色，亮/暗主题下都能区分层次又不抢文字。
+        let group = || div().flex().items_center().gap_2().flex_shrink_0();
+        let divider = || div().w(px(1.)).h(px(12.)).bg(border).flex_shrink_0();
 
         if let Some(doc) = self.active_doc_entity().cloned() {
             let entity_id = doc.entity_id();
@@ -1450,47 +1457,58 @@ impl AppShell {
             let (line, column) = doc.cursor(cx);
             let cursor_label =
                 t!("status.cursor", line = line + 1, column = column + 1).to_string();
-            status = status
-                .child(notebook_label)
-                .child(cursor_label)
-                .child(t!("status.lines", count = stats.lines).to_string())
-                .child(t!("status.words", count = stats.words).to_string())
-                .child(t!("status.chars", count = stats.chars).to_string());
             let selection = doc.editor.read(cx).selected_value();
-            if !selection.trim().is_empty() {
+            let selection_label = (!selection.trim().is_empty()).then(|| {
                 let selected = text_stats(&selection);
-                status = status.child(
-                    t!(
-                        "status.selection",
-                        chars = selected.chars,
-                        words = selected.words
-                    )
-                    .to_string(),
-                );
-            }
+                t!(
+                    "status.selection",
+                    chars = selected.chars,
+                    words = selected.words
+                )
+                .to_string()
+            });
+            let mode_label = if doc.official.is_some() {
+                t!("official_docs.status").to_string()
+            } else if doc.preview_mode {
+                t!("status.mode.preview").to_string()
+            } else {
+                t!("status.mode.edit").to_string()
+            };
+            let error_label = doc
+                .error
+                .as_ref()
+                .map(|err| format!("{}: {err}", t!("status.error")));
+            let autosave_label = doc.autosave.then(|| t!("status.autosave").to_string());
+
             status = status
-                .child(doc.encoding.label())
-                .child(doc.eol.label())
-                .child(saved_label)
-                .child(if doc.official.is_some() {
-                    t!("official_docs.status").to_string()
-                } else if doc.preview_mode {
-                    t!("status.mode.preview").to_string()
-                } else {
-                    t!("status.mode.edit").to_string()
-                });
-            if let Some(err) = &doc.error {
-                status = status.child(
-                    div()
-                        .text_color(cx.theme().danger)
-                        .child(format!("{}: {err}", t!("status.error"))),
+                // 当前笔记本 / 文件来源
+                .child(group().child(notebook_label))
+                .child(divider())
+                // 光标位置
+                .child(group().child(cursor_label))
+                .child(divider())
+                // 全文统计与选区统计
+                .child(
+                    group()
+                        .child(t!("status.lines", count = stats.lines).to_string())
+                        .child(t!("status.words", count = stats.words).to_string())
+                        .child(t!("status.chars", count = stats.chars).to_string())
+                        .children(selection_label.map(|label| div().child(label))),
+                )
+                .child(divider())
+                // 文件编码与换行符
+                .child(group().child(doc.encoding.label()).child(doc.eol.label()))
+                .child(divider())
+                // 保存状态、编辑/预览模式、异常提示与自动保存
+                .child(
+                    group()
+                        .child(saved_label)
+                        .child(mode_label)
+                        .children(error_label.map(|err| div().text_color(danger).child(err)))
+                        .children(autosave_label.map(|label| div().child(label))),
                 );
-            }
-            if doc.autosave {
-                status = status.child(t!("status.autosave").to_string());
-            }
         } else {
-            status = status.child(t!("status.no_doc").to_string());
+            status = status.child(group().child(t!("status.no_doc").to_string()));
         }
 
         let mcp_status: AnyElement = if self.mcp_live {
@@ -1499,7 +1517,7 @@ impl AppShell {
                 .into_any_element()
         } else if self.config.mcp_http && self.mcp.error.is_some() {
             div()
-                .text_color(cx.theme().danger)
+                .text_color(danger)
                 .child(t!("status.mcp.error").to_string())
                 .into_any_element()
         } else {
@@ -1507,7 +1525,11 @@ impl AppShell {
                 .child(t!("status.mcp.off").to_string())
                 .into_any_element()
         };
-        status = status.child(div().flex_1()).child(mcp_status);
+        // MCP 服务状态自成一组，分隔线始终贴着它靠右显示。
+        status = status
+            .child(div().flex_1())
+            .child(divider())
+            .child(group().child(mcp_status));
 
         status.into_any_element()
     }

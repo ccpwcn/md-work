@@ -154,7 +154,14 @@ pub(super) fn settings_card(
                 .gap_0p5()
                 .child(div().text_sm().font_bold().child(title))
                 .when_some(subtitle, |header, text| {
-                    header.child(div().text_xs().text_color(p.muted).child(text))
+                    header.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(p.muted)
+                            .child(text),
+                    )
                 }),
         )
         .child(body)
@@ -229,8 +236,11 @@ pub(super) fn settings_status_badge(label: String, color: gpui_kit::Hsla) -> Any
         .into_any_element()
 }
 
+/// 次要说明文字。`min_w_0` 解除 flex 项默认的 min-content 约束；放在 `h_flex`
+/// 中时还需用 `v_flex().flex_1().min_w_0()` 包一层，长文本才会按可用宽度换行。
 pub(super) fn settings_hint(text: String, p: SettingsPalette) -> AnyElement {
     div()
+        .min_w_0()
         .text_xs()
         .text_color(p.muted)
         .child(text)

@@ -147,7 +147,7 @@
             "color": "#333333"
           },
           "emphasis": {
-            "font_style": "italic"
+            "font_style": "normal"
           },
           "emphasis.strong": {
             "font_weight": 700
@@ -164,7 +164,7 @@
           },
           "link_uri": {
             "color": "#6A7293",
-            "font_style": "italic"
+            "font_style": "normal"
           },
           "number": {
             "color": "#0433ff"
@@ -359,7 +359,7 @@
             "color": "#CACCCA"
           },
           "emphasis": {
-            "font_style": "italic"
+            "font_style": "normal"
           },
           "emphasis.strong": {
             "font_weight": 700
@@ -376,7 +376,7 @@
           },
           "link_uri": {
             "color": "#7faef9",
-            "font_style": "italic"
+            "font_style": "normal"
           },
           "number": {
             "color": "#CC9E00"

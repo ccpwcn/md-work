@@ -806,12 +806,52 @@ fn render_image(
     }
 }
 
-/// 左对齐。
+/// 自然尺寸探测失败（SVG / 加载中）时使用的固定占位高度。
+const UNKNOWN_IMAGE_HEIGHT: f32 = 240.0;
+
+fn percent(cents: u32) -> f32 {
+    (cents as f32 / 10_000.0).clamp(0.01, 1.0)
+}
+
+/// 高度由 `aspect_ratio` 从**实际使用宽度**推导的图片盒子。
 ///
-/// GPUI `Img` 在宽/高为 `Auto` 时会写成**原图像素绝对尺寸**；之后即便有
-/// `max_w` / `Contain`，高度仍按原图像素占位，看起来就是大片空白。
-/// 有自然尺寸时：外层 `div` 负责宽约束 + `aspect_ratio`，内层 `Img` 用
-/// `w_full().h_full()` 填满（Relative 不会被改写成原图像素）。
+/// 宽度必须用 `relative()`（相对父级宽度）表达，原图宽度只作为 `max_w`
+/// 上限。GPUI/taffy 在 flex 容器里会先按声明的绝对宽度算出
+/// `aspect_ratio` 的高度，再应用 `max_w` 钳制宽度：如果像以前那样写
+/// `.w(px(原图宽)).max_w_full()`，元素就始终按原图像素高度占位，而
+/// `ObjectFit::Contain` 只按可用宽度缩放绘制，窄窗口下会空出一大片
+/// 随屏幕宽度变化的空白。
+fn aspect_box(
+    image: Img,
+    width_fraction: f32,
+    max_width: Option<f32>,
+    ratio: f32,
+) -> AnyElement {
+    let mut box_ = div()
+        .w(relative(width_fraction.max(0.01)))
+        .aspect_ratio(ratio.max(0.01));
+    if let Some(width) = max_width {
+        box_ = box_.max_w(gpui_kit::px(width.max(1.0)));
+    }
+    // 内层宽高都是 Relative，Img 不会把它们改写成原图像素绝对尺寸。
+    box_.child(image.w_full().h_full()).into_any_element()
+}
+
+fn fixed_box(
+    image: Img,
+    width_fraction: f32,
+    max_width: Option<f32>,
+    height_px: f32,
+) -> AnyElement {
+    let mut box_ = div()
+        .w(relative(width_fraction.max(0.01)))
+        .h(gpui_kit::px(height_px.max(1.0)));
+    if let Some(width) = max_width {
+        box_ = box_.max_w(gpui_kit::px(width.max(1.0)));
+    }
+    box_.child(image.w_full().h_full()).into_any_element()
+}
+
 fn sized_image(
     image: Img,
     width: Option<Length>,
@@ -820,65 +860,60 @@ fn sized_image(
 ) -> AnyElement {
     let image = image.object_fit(ObjectFit::Contain);
     let ratio = natural.and_then(|(w, h)| (w > 0.0 && h > 0.0).then_some(w / h));
+    let natural_width = natural.map(|(w, _)| w).unwrap_or(0.0);
 
-    match (width, height, ratio) {
-        (Some(Length::Px(w)), Some(Length::Px(h)), _) => image
-            .w(gpui_kit::px(w as f32))
-            .h(gpui_kit::px(h as f32))
-            .max_w_full()
-            .into_any_element(),
-        // 绝对宽度：Img 只在绝对宽度时才会按比例推算高度
-        (Some(Length::Px(w)), _, _) => image
+    // 宽高都明确给了像素值：保持用户指定的固定盒子。
+    if let (Some(Length::Px(w)), Some(Length::Px(h))) = (width, height) {
+        return div()
             .w(gpui_kit::px(w as f32))
             .max_w_full()
-            .into_any_element(),
-        (Some(Length::PercentCents(cents)), Some(Length::Px(h)), Some(ratio)) => div()
-            .w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
             .h(gpui_kit::px(h as f32))
-            .aspect_ratio(ratio)
             .child(image.w_full().h_full())
-            .into_any_element(),
-        (Some(Length::PercentCents(cents)), _, Some(ratio)) => div()
-            .w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
-            .aspect_ratio(ratio)
-            .child(image.w_full().h_full())
-            .into_any_element(),
-        (None, Some(Length::Px(h)), Some(ratio)) => div()
-            .h(gpui_kit::px(h as f32))
-            .max_w_full()
-            .aspect_ratio(ratio)
-            .child(image.w_full().h_full())
-            .into_any_element(),
-        (None, Some(Length::PercentCents(cents)), Some(ratio)) => div()
-            .max_h(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
-            .max_w_full()
-            .aspect_ratio(ratio)
-            .child(image.w_full().h_full())
-            .into_any_element(),
-        // 未指定尺寸：按原图宽，但不超过父级；高度由 aspect_ratio 随 used width 缩放
-        (None, None, Some(ratio)) => div()
-            .w(gpui_kit::px(natural.map(|(w, _)| w).unwrap_or(1.0)))
-            .max_w_full()
-            .aspect_ratio(ratio)
-            .child(image.w_full().h_full())
-            .into_any_element(),
-        // 尚无自然尺寸时的降级（加载中 / SVG 等）
-        (Some(Length::PercentCents(cents)), Some(Length::Px(h)), None) => image
-            .max_w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
-            .h(gpui_kit::px(h as f32))
-            .into_any_element(),
-        (Some(Length::PercentCents(cents)), _, None) => image
-            .max_w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
-            .into_any_element(),
-        (None, Some(Length::Px(h)), None) => image
-            .h(gpui_kit::px(h as f32))
-            .max_w_full()
-            .into_any_element(),
-        (None, Some(Length::PercentCents(cents)), None) => image
-            .max_h(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
-            .max_w_full()
-            .into_any_element(),
-        (None, None, None) => image.max_w_full().into_any_element(),
+            .into_any_element();
+    }
+
+    let (mut fraction, mut max_width) = match width {
+        Some(Length::Px(w)) => (1.0, Some(w as f32)),
+        Some(Length::PercentCents(cents)) => (percent(cents), None),
+        None => (1.0, (natural_width > 0.0).then_some(natural_width)),
+    };
+    let height_pct = match height {
+        Some(Length::PercentCents(cents)) => Some(percent(cents)),
+        _ => None,
+    };
+    let height_px = match height {
+        Some(Length::Px(h)) => Some(h as f32),
+        _ => None,
+    };
+
+    match ratio {
+        Some(ratio) => {
+            // 给定像素高度时，用「高度 × 宽高比」限制宽度，避免超高盒子
+            // 在窄窗口里被 max_w 截短后留下 letterbox 空白。
+            if let Some(h) = height_px {
+                let cap = h * ratio;
+                max_width = Some(max_width.map_or(cap, |w| w.min(cap)));
+            }
+            // `height: N%` 在文档里是相对内容区宽度，换算成宽度占比。
+            if let Some(pct) = height_pct {
+                fraction = fraction.min((pct * ratio).min(1.0));
+            }
+            aspect_box(image, fraction, max_width, ratio)
+        }
+        None => {
+            if let Some(pct) = height_pct {
+                // 没有原图比例时同样不能把 relative() 用在高度上（那会按
+                // 视口高度取百分比）；用等效宽高比得到「宽度 × N%」的高度。
+                aspect_box(image, fraction, max_width, fraction / pct)
+            } else {
+                fixed_box(
+                    image,
+                    fraction,
+                    max_width,
+                    height_px.unwrap_or(UNKNOWN_IMAGE_HEIGHT),
+                )
+            }
+        }
     }
 }
 
@@ -925,19 +960,33 @@ fn apply_text_style<E: Styled>(mut el: E, style: &StyleDecls, context: &RenderCt
 }
 
 fn apply_box_length<E: Styled>(mut el: E, width: Option<Length>, height: Option<Length>) -> E {
-    match width {
-        Some(Length::Px(px)) => el = el.w(gpui_kit::px(px as f32)).max_w_full(),
-        Some(Length::PercentCents(cents)) => {
-            el = el
-                .w(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)))
-                .max_w_full();
+    let width_fraction = match width {
+        Some(Length::Px(px)) => {
+            el = el.w(gpui_kit::px(px as f32)).max_w_full();
+            None
         }
-        None => {}
-    }
+        Some(Length::PercentCents(cents)) => {
+            let fraction = percent(cents);
+            el = el.w(relative(fraction)).max_w_full();
+            Some(fraction)
+        }
+        None => Some(1.0),
+    };
     match height {
         Some(Length::Px(px)) => el = el.h(gpui_kit::px(px as f32)),
         Some(Length::PercentCents(cents)) => {
-            el = el.h(relative((cents as f32 / 10_000.0).clamp(0.01, 1.0)));
+            let pct = percent(cents);
+            // 百分比按文档约定相对内容区宽度，而不是 GPUI `relative()`
+            // 高度所相对的父容器高度（视口高）；用等效宽高比换算。
+            if let Some(fraction) = width_fraction {
+                el = el.w(relative(fraction)).aspect_ratio(fraction / pct);
+            } else {
+                let width_px = match width {
+                    Some(Length::Px(w)) => w as f32,
+                    _ => 1.0,
+                };
+                el = el.h(gpui_kit::px((pct * width_px).max(1.0)));
+            }
         }
         None => {}
     }
@@ -1790,5 +1839,74 @@ mod tests {
             let _ = window.draw(cx);
         });
         assert!(handle.offset().y > down, "向上滚轮应回滚正文");
+    }
+
+    /// 回归：图片盒子的高度必须由**实际可用宽度**推导。
+    ///
+    /// 旧实现写 `.w(px(原图宽)).max_w_full().aspect_ratio(ratio)`，在 flex
+    /// 容器里 taffy 先按原图宽度算高度再钳制宽度，元素始终按原图像素高度
+    /// 占位；窗口越窄，图片下方被 `ObjectFit::Contain` 空出来的部分越大。
+    #[gpui::test]
+    fn image_box_height_tracks_available_width(cx: &mut gpui_kit::TestAppContext) {
+        use super::{img, sized_image};
+        use gpui_kit::{
+            Bounds, Context, IntoElement, ParentElement as _, Pixels, Render, Styled as _, Window,
+            div, px,
+        };
+        use gpui_kit::base::StyledExt as _;
+        use std::{cell::RefCell, path::PathBuf, rc::Rc};
+
+        struct Probe {
+            width: f32,
+            bounds: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+        }
+
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let bounds = self.bounds.clone();
+                let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../doc/images/readme-in-mojian-preview.png");
+                div().w(px(self.width)).h(px(900.)).child(
+                    div()
+                        .w_full()
+                        .v_flex()
+                        .on_children_prepainted(move |children, _, _| {
+                            *bounds.borrow_mut() = children;
+                        })
+                        .child(sized_image(
+                            img(path.clone()),
+                            None,
+                            None,
+                            Some((1550.0, 838.0)),
+                        )),
+                )
+            }
+        }
+
+        cx.update(|cx| gpui_kit::init(cx));
+        let mut heights = Vec::new();
+        for width in [700.0f32, 1400.0] {
+            let bounds = Rc::new(RefCell::new(Vec::new()));
+            let (_, window_cx) = cx.add_window_view(|_, _| Probe {
+                width,
+                bounds: bounds.clone(),
+            });
+            window_cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let measured = bounds.borrow();
+            assert_eq!(measured.len(), 1, "width {width}");
+            let expected = width.min(1550.0) / (1550.0 / 838.0);
+            let height = f32::from(measured[0].size.height);
+            assert!(
+                (height - expected).abs() < 2.0,
+                "width {width}: height {height}, expected {expected}"
+            );
+            heights.push(height);
+        }
+        assert!(
+            heights[1] > heights[0],
+            "图片高度必须随可用宽度变化：{heights:?}"
+        );
     }
 }

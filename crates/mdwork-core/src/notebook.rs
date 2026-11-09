@@ -897,14 +897,12 @@ fn normalize_relative(raw: &str, is_note: bool) -> Result<String> {
 
     if is_note {
         let lower = rel.to_lowercase();
-        if lower.ends_with(".md") || lower.ends_with(".markdown") {
-            // keep the caller's spelling
-        } else if Path::new(&rel).extension().is_none() {
+        // 笔记名中的点只是普通字符（如「v1.2 计划」「第1.章」）。只有显式以
+        // .md / .markdown 结尾时才算带扩展名，其余一律补 .md。此前用
+        // Path::extension() 判断，会把中间的点误当成扩展名并拒绝改名，导致
+        // 新建笔记输入带点的名称后回车没有任何效果。
+        if !lower.ends_with(".md") && !lower.ends_with(".markdown") {
             rel.push_str(".md");
-        } else {
-            return Err(Error::InvalidPath(format!(
-                "{raw}: notes must end with .md or .markdown"
-            )));
         }
     }
     Ok(rel)
@@ -1209,6 +1207,35 @@ mod tests {
         assert_eq!(notebook.list_entries().unwrap().len(), 2);
         assert_eq!(tree[0].name, "工作");
         assert_eq!(tree[2].name, "设计");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 回归：新建笔记的名称里带点（不是扩展名分隔符）时，回车重命名必须生效。
+    #[test]
+    fn note_names_with_inner_dots_are_normalized_to_md() {
+        let (root, notebook) = temp_notebook();
+        assert_eq!(
+            notebook.normalize_note_rel("v1.2 计划").unwrap(),
+            "v1.2 计划.md"
+        );
+        assert_eq!(
+            notebook.normalize_note_rel("第1.章").unwrap(),
+            "第1.章.md"
+        );
+        assert_eq!(
+            notebook.normalize_note_rel("报告.final.MD").unwrap(),
+            "报告.final.MD"
+        );
+
+        let created = notebook.create_note("v1.2 计划", "内容").unwrap();
+        assert_eq!(created, "v1.2 计划.md");
+        assert!(root.join(&created).is_file());
+
+        let renamed = notebook
+            .rename_entry(&created, "第1.章")
+            .unwrap();
+        assert_eq!(renamed, "第1.章.md");
+        assert!(root.join(&renamed).is_file());
         fs::remove_dir_all(root).unwrap();
     }
 

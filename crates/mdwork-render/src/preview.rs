@@ -3,6 +3,8 @@
 //! The GUI and the exporters both consume this tree instead of re-parsing
 //! Markdown, so headings, tables and code blocks stay consistent everywhere.
 
+use std::borrow::Cow;
+
 use comrak::nodes::{AstNode, ListType, NodeList, NodeTable, NodeValue, TableAlignment};
 use comrak::{Arena, Options, parse_document};
 
@@ -146,8 +148,117 @@ pub struct OutlineItem {
     pub line: usize,
 }
 
+/// CommonMark 要求列表项的续行至少缩进到标记之后的内容列：`1. ` 是第 3 列，
+/// `- ` 是第 2 列。编辑器里用户习惯只敲两个空格——普通文字和图片行能靠
+/// 「惰性续行」留在列表项内，围栏代码块却不行，会被解析成顶层块；结果列表
+/// 被拆成几段，代码块与同级图片在预览里缩进不一致。
+///
+/// 解析前把这些「看起来缩进了、但没缩进够」的续行补齐到列表内容列，使
+/// 预览/导出与编辑器里的视觉层级一致。只增补行首空格，行数与行号不变，
+/// 因此大纲跳转、`sourcepos.line` 和代码块内容都不受影响（comrak 会把
+/// 列表项的缩进从代码内容里剥掉）。
+fn normalize_list_continuations(markdown: &str) -> Cow<'_, str> {
+    let mut out = String::with_capacity(markdown.len());
+    let mut changed = false;
+    // 当前列表项要求的内容缩进；None 表示不在列表里。
+    let mut required: Option<usize> = None;
+    // 围栏代码块：(标记字符, 标记长度, 需要补齐到的缩进)。
+    let mut fence: Option<(u8, usize, Option<usize>)> = None;
+
+    for (index, line) in markdown.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        let trimmed = line.trim_start_matches(' ');
+        let spaces = line.len() - trimmed.len();
+        let mut pad_to: Option<usize> = None;
+
+        if let Some((marker, len, fence_base)) = fence {
+            let closes = fence_marker(trimmed).is_some_and(|(ch, count)| {
+                ch == marker && count >= len && trimmed[count..].trim().is_empty()
+            });
+            if closes {
+                fence = None;
+            }
+            pad_to = fence_base;
+        } else if trimmed.trim().is_empty() {
+            // 空行不结束列表项，缩进补齐也无需处理。
+        } else if let Some(indent) = list_content_indent(line) {
+            required = Some(indent);
+        } else if let Some((marker, len)) = fence_marker(trimmed) {
+            let limit = required.filter(|limit| spaces > 0 && spaces < *limit);
+            fence = Some((marker, len, limit));
+            pad_to = limit;
+            if spaces == 0 {
+                // 顶格的围栏代码块确实结束列表。
+                required = None;
+            }
+        } else if spaces == 0 {
+            required = None;
+        } else if let Some(limit) = required {
+            if spaces < limit {
+                pad_to = Some(limit);
+            }
+        }
+
+        match pad_to {
+            Some(limit) if spaces < limit => {
+                for _ in spaces..limit {
+                    out.push(' ');
+                }
+                out.push_str(line);
+                changed = true;
+            }
+            _ => out.push_str(line),
+        }
+    }
+
+    if changed {
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(markdown)
+    }
+}
+
+/// 顶格列表标记之后的内容列，例如 `1. 文本` → 3，`10. 文本` → 4，`- 文本` → 2。
+fn list_content_indent(line: &str) -> Option<usize> {
+    if line.starts_with(' ') {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let mut digits = 0;
+    while digits < bytes.len() && bytes[digits].is_ascii_digit() {
+        digits += 1;
+    }
+    let after_marker = if digits > 0
+        && digits < bytes.len()
+        && matches!(bytes[digits], b'.' | b')')
+    {
+        digits + 1
+    } else if digits == 0 && matches!(bytes.first(), Some(b'-' | b'*' | b'+')) {
+        1
+    } else {
+        return None;
+    };
+    matches!(bytes.get(after_marker), Some(b' ' | b'\t')).then_some(after_marker + 1)
+}
+
+fn fence_marker(trimmed: &str) -> Option<(u8, usize)> {
+    let bytes = trimmed.as_bytes();
+    let marker = *bytes.first()?;
+    if marker != b'`' && marker != b'~' {
+        return None;
+    }
+    let len = bytes.iter().take_while(|&&byte| byte == marker).count();
+    (len >= 3).then_some((marker, len))
+}
+
 impl PreviewIr {
     pub fn from_markdown(markdown: &str) -> Self {
+        // 让「看起来缩进了、但按 CommonMark 没缩进够」的列表续行留在列表项里，
+        // 预览的层级才会与编辑器里看到的一致。见 normalize_list_continuations。
+        let normalized = normalize_list_continuations(markdown);
+        let markdown = normalized.as_ref();
         let arena = Arena::new();
         let root = parse_document(&arena, markdown, &options());
         let lines: Vec<&str> = markdown.lines().collect();
@@ -1003,6 +1114,57 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(aligns, &[Align::Left, Align::Right]);
         assert_eq!(ir.to_plain_text(), "a\tb\n1\t2");
+    }
+
+    /// 编辑器里列表项下的图片与代码围栏都只缩进了两个空格；预览里它们
+    /// 必须留在同一个列表项内，缩进才会一致。CommonMark 原本会把围栏
+    /// 代码块解析成顶层块并把列表拆断。
+    #[test]
+    fn under_indented_code_fence_stays_in_list_item() {
+        let markdown = "1. 第一步\n2. 日志断言\n  ```text\n  2026-11-09 ERROR 日志\n  ```\n3. 第三步\n  ![图](assets/a.png)\n";
+        let ir = PreviewIr::from_markdown(markdown);
+        assert_eq!(ir.blocks.len(), 1, "{:?}", ir.blocks);
+        let Block::List { items, .. } = &ir.blocks[0] else {
+            panic!("expected one list, got {:?}", ir.blocks[0]);
+        };
+        assert_eq!(items.len(), 3, "{items:?}");
+        let code = items[1]
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                Block::CodeBlock { text, line, .. } => Some((text, *line)),
+                _ => None,
+            })
+            .expect("code block must be inside item 2");
+        assert_eq!(code.0.trim(), "2026-11-09 ERROR 日志");
+        assert_eq!(code.0.lines().next().unwrap(), "2026-11-09 ERROR 日志");
+        assert_eq!(code.1, 3, "源码行号不能因补齐缩进而改变");
+        assert!(
+            items[2].blocks.iter().any(|block| matches!(block, Block::Paragraph { .. })),
+            "图片行仍应留在列表项里"
+        );
+    }
+
+    #[test]
+    fn list_continuation_padding_preserves_other_content() {
+        // 顶格围栏代码块、普通段落、已经缩进够的列表都不应被改写。
+        assert!(matches!(
+            normalize_list_continuations("```\na\n```\n"),
+            Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            normalize_list_continuations("- 甲\n  - 乙\n"),
+            Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            normalize_list_continuations("正文\n\n更多正文\n"),
+            Cow::Borrowed(_)
+        ));
+        let normalized = normalize_list_continuations("1. 甲\n  ```\n  a\n  ```\n");
+        assert_eq!(normalized.as_ref(), "1. 甲\n   ```\n   a\n   ```\n");
+        // CRLF 行尾与行数保持不变。
+        let crlf = normalize_list_continuations("1. 甲\r\n  ```\r\n  a\r\n  ```\r\n");
+        assert_eq!(crlf.as_ref(), "1. 甲\r\n   ```\r\n   a\r\n   ```\r\n");
     }
 
     #[test]

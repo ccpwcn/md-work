@@ -1343,6 +1343,29 @@ mod tests {
         );
     }
 
+    /// 补齐缩进后代码块落在列表项内，导出也要保持同一个 enum，不能变成
+    /// 顶层代码块或给代码内容补上多余的前导空格。
+    #[test]
+    fn under_indented_code_fence_exports_inside_enum_item() {
+        let ir = PreviewIr::from_markdown(
+            "1. 第一步\n2. 日志\n  ```text\n  ERROR 日志\n  ```\n3. 第三步\n",
+        );
+        let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
+        assert_eq!(
+            doc.source.matches("#enum(").count(),
+            1,
+            "{}",
+            doc.source
+        );
+        assert!(doc.source.contains("#raw("), "{}", doc.source);
+        assert!(doc.source.contains("ERROR 日志"), "{}", doc.source);
+        assert!(
+            !doc.source.contains("\"  ERROR 日志"),
+            "代码内容不能被补上多余空格：{}",
+            doc.source
+        );
+    }
+
     #[test]
     fn renders_headings_and_paragraphs() {
         let ir = PreviewIr::from_markdown("# 标题\n\n正文 **加粗** 和 `代码`。\n");

@@ -79,6 +79,44 @@ pub(super) fn format_age(seconds: u64) -> String {
     }
 }
 
+/// 在文件管理器中定位文件；对目录则直接打开目录。
+pub(super) fn reveal_path_in_explorer_sync(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = std::process::Command::new("explorer.exe");
+        if path.is_dir() {
+            command.arg(path);
+        } else {
+            // `/select,` 与路径分成两个参数即可，Windows 会自行加引号；
+            // 这样路径里带空格或逗号也不会被拆开。
+            command.arg("/select,").arg(path);
+        }
+        command.creation_flags(CREATE_NO_WINDOW).spawn().map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let target = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        std::process::Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .map(|_| ())
+    }
+}
+
 pub(super) fn mcp_field(label: String, control: AnyElement, muted: gpui_kit::Hsla) -> AnyElement {
     div()
         .v_flex()
@@ -338,9 +376,10 @@ pub(super) fn write_math_cache(key: u64, svg: &str) -> Option<PathBuf> {
         .map(|_| path)
 }
 
+/// 全新工作区只放一个空笔记本：入门说明由随包发布的官方只读文档
+/// 《欢迎使用墨笺.md》承担，不在用户笔记里生成可编辑的示例文件。
 pub(super) fn seed_workspace(workspace: &Workspace) -> mdwork_core::Result<()> {
-    let notebook = workspace.create_notebook("我的笔记本")?;
-    notebook.create_note("欢迎使用墨笺.md", WELCOME_NOTE)?;
+    workspace.create_notebook("我的笔记本")?;
     Ok(())
 }
 

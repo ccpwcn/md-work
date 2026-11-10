@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod archive;
+pub mod asset_cleanup;
 pub mod atomic;
 pub mod bookmarks;
 pub mod config;

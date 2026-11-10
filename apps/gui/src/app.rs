@@ -79,33 +79,6 @@ const PANEL_MAX_WIDTH: f32 = 560.0;
 /// 行/标签下标及其最近一次绘制区域，供拖拽命中测试使用。
 type PaintedBounds = Arc<Mutex<Vec<(usize, Bounds<Pixels>)>>>;
 
-const WELCOME_NOTE: &str = r#"# 欢迎使用墨笺
-
-墨笺是一个轻量的 Markdown 笔记本：笔记就是磁盘上的 `.md` 文件，可以直接用资源管理器管理。
-
-## 工作区
-
-工作区是磁盘上的一个普通文件夹，默认是「我的文档」下的 `md-work`。一个工作区里可以放多个笔记本，每个笔记本用子目录保存笔记。
-
-- 点击标题栏左上角的工作区名称，可以在多个工作区之间切换
-- 「选择文件夹…」可以把任意文件夹作为工作区，也可以把导出的笔记本 zip 导入进来
-- 切换工作区不会移动或删除任何文件；下次启动会自动打开上次的工作区、笔记本和笔记
-- 在「设置 → 工作区」里可以给工作区起一个别名，文件夹本身的名称不变
-
-## 已经具备
-
-- 每个子目录都是一个笔记本，复制进工作区即可自动识别
-- 打开多个笔记本，每个笔记本记住自己的标签页
-- UTF-8 / GB18030 等编码往返保存
-- Markdown 语法高亮与软换行
-- 自动保存（停止输入 800 毫秒后）
-- 标题栏通知中心：普通消息、警告和错误分色显示，可全部已读或清空
-
-## 接下来
-
-选中左侧的笔记开始编辑。按 `Ctrl+S` 立即保存。
-"#;
-
 struct NotebookEntry {
     notebook: Notebook,
     tree: Vec<Entry>,
@@ -329,6 +302,35 @@ enum ImageHostMode {
     Http,
 }
 
+/// 本地 assets 清理的进度。扫描与删除都在后台线程执行。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AssetCleanupPhase {
+    Scanning,
+    Ready,
+    Cleaning,
+}
+
+struct AssetCleanupState {
+    phase: AssetCleanupPhase,
+    files: Vec<PathBuf>,
+    bytes: u64,
+    error: Option<String>,
+    /// 二次确认弹窗；点击确认时会重新扫描一次再删除。
+    confirm: bool,
+}
+
+impl Default for AssetCleanupState {
+    fn default() -> Self {
+        Self {
+            phase: AssetCleanupPhase::Scanning,
+            files: Vec::new(),
+            bytes: 0,
+            error: None,
+            confirm: false,
+        }
+    }
+}
+
 struct ImageSettingsDialog {
     mode: ImageHostMode,
     picgo_endpoint: Entity<InputState>,
@@ -339,6 +341,19 @@ struct ImageSettingsDialog {
     error: Option<String>,
     /// 保存成功提示；保存后保留对话框，避免页面退回「加载中」无法再编辑。
     message: Option<String>,
+    cleanup: AssetCleanupState,
+}
+
+/// 字体设置里正在给哪一栏选字体。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FontPickerTarget {
+    Ui,
+    Note,
+}
+
+struct FontPicker {
+    target: FontPickerTarget,
+    query: Entity<InputState>,
 }
 
 struct ZipDialog {
@@ -368,6 +383,7 @@ enum SettingsTab {
     Images,
     Mcp,
     Windows,
+    About,
 }
 
 struct SettingsDialog {
@@ -377,6 +393,10 @@ struct SettingsDialog {
     note_font: Entity<InputState>,
     ui_size: Entity<InputState>,
     note_size: Entity<InputState>,
+    /// 已安装字体选择面板；`None` 表示收起。
+    font_picker: Option<FontPicker>,
+    /// 「关于」页里的许可协议全文是否展开。
+    show_license: bool,
 }
 
 #[derive(Clone)]
@@ -644,6 +664,12 @@ pub struct AppShell {
     export: Option<ExportDialog>,
     zip: Option<ZipDialog>,
     image_settings: Option<ImageSettingsDialog>,
+    /// 每次发起 assets 扫描/清理都递增，丢弃过期任务的回调。
+    asset_cleanup_generation: u64,
+    /// 本机已安装字体；首次打开字体选择面板时异步枚举一次并缓存。
+    installed_fonts: Option<Arc<Vec<String>>>,
+    fonts_loading: bool,
+    font_list_scroll: UniformListScrollHandle,
     mcp_settings: Option<McpSettingsDialog>,
     settings: Option<SettingsDialog>,
     prompt: Option<PromptDialog>,
@@ -686,8 +712,14 @@ pub struct AppShell {
     pending_startup_path: Option<String>,
     startup_first_run: bool,
     pending_welcome: Option<(Uuid, String)>,
+    /// 安装新版本后第一次启动，自动打开随包的《欢迎使用墨笺.md》。
+    pending_welcome_doc: bool,
     /// 当前版本更新说明尚未被用户关闭：启动末尾自动以只读预览打开。
     pending_changelog: bool,
+    /// 打开笔记后让编辑区获得输入焦点，避免还要再点一下才能打字。
+    pending_editor_focus: bool,
+    /// 异步打开尚未落地、但落地后应获得焦点的笔记路径。
+    focus_on_open_path: Option<PathBuf>,
     /// 启动时的多个异步打开任务可能后到的把 changelog 挤到后台；
     /// 等所有打开任务结束后再把它设为活动标签。
     pending_official_focus: Option<OfficialDocKind>,
@@ -874,6 +906,9 @@ impl AppShell {
         } = startup;
 
         let pending_changelog = config.shown_changelog_version != mdwork_core::version();
+        // 每次安装新版本后第一次启动都展示一次随包的欢迎文档；
+        // 全新安装时配置文件还不存在，这个字段也是空串。
+        let pending_welcome_doc = config.shown_welcome_version != mdwork_core::version();
         let official_doc_warned = official_doc_alerts
             .iter()
             .map(|alert| alert.kind)
@@ -967,6 +1002,10 @@ impl AppShell {
             export: None,
             zip: None,
             image_settings: None,
+            asset_cleanup_generation: 0,
+            installed_fonts: None,
+            fonts_loading: false,
+            font_list_scroll: UniformListScrollHandle::new(),
             mcp_settings: None,
             settings: None,
             prompt: None,
@@ -999,7 +1038,10 @@ impl AppShell {
             pending_startup_path: initial_path,
             startup_first_run: !root_exists,
             pending_welcome: None,
+            pending_welcome_doc,
             pending_changelog,
+            pending_editor_focus: false,
+            focus_on_open_path: None,
             pending_official_focus: None,
             official_doc_alerts,
             official_doc_warned,
@@ -1076,6 +1118,12 @@ impl Render for AppShell {
         }
 
         self.ensure_bookmarks(cx);
+        // 笔记打开/切换后把焦点交给编辑区；放在 render 里能保证编辑器
+        // 实体已经创建，且这一帧的元素树会注册它的 focus handle。
+        if self.pending_editor_focus {
+            self.pending_editor_focus = false;
+            self.focus_active_editor(window, cx);
+        }
         let has_left = !self.panels_in_dock(PanelDock::Left).is_empty();
         let has_right = !self.panels_in_dock(PanelDock::Right).is_empty();
         // The workspace-path footer lives on the left sidebar, or on the right
@@ -1210,6 +1258,14 @@ impl Render for AppShell {
         }
         if self.settings.is_some() {
             root = root.child(self.render_settings(cx));
+        }
+        // 清理确认框盖在设置面板之上；设置关闭时它随对话框一起消失。
+        if self
+            .image_settings
+            .as_ref()
+            .is_some_and(|dialog| dialog.cleanup.confirm)
+        {
+            root = root.child(self.render_image_cleanup_confirm(cx));
         }
         if self.recovery.is_some() {
             root = root.child(self.render_recovery(cx));

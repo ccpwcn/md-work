@@ -469,6 +469,8 @@ pub struct AppConfig {
     /// 用户已关闭的随包更新说明所属版本。升级后与当前版本不一致时，
     /// 启动时会自动以预览模式打开一次新版本的 changelog。
     pub shown_changelog_version: String,
+    /// 已经展示过随包《欢迎使用墨笺.md》的版本；安装新版本后首次启动再展示一次。
+    pub shown_welcome_version: String,
     /// Where pasted/dropped images go; `Local` keeps them in the notebook.
     pub image_host: ImageHost,
     /// Keeps the loopback MCP server running while md-work is open.
@@ -503,6 +505,7 @@ impl Default for AppConfig {
             autosave: true,
             code_wrap: true,
             shown_changelog_version: String::new(),
+            shown_welcome_version: String::new(),
             image_host: ImageHost::Local,
             mcp_http: false,
             mcp_port: 11026,
@@ -788,6 +791,12 @@ impl AppConfig {
                 "shown_changelog_version",
                 &mut config.shown_changelog_version,
             );
+            loader.string(
+                general,
+                "general",
+                "shown_welcome_version",
+                &mut config.shown_welcome_version,
+            );
         }
         apply_window(&mut loader, &root, config);
         match loader.table(&root, "panels") {
@@ -944,6 +953,11 @@ impl AppConfig {
         out.push_str(&format!(
             "shown_changelog_version = {}\n",
             toml_string(&self.shown_changelog_version)
+        ));
+        out.push_str("# 已展示过《欢迎使用墨笺.md》的版本；安装新版本后首次启动会再展示一次。\n");
+        out.push_str(&format!(
+            "shown_welcome_version = {}\n",
+            toml_string(&self.shown_welcome_version)
         ));
 
         if let Some(window) = self.window {
@@ -1508,6 +1522,22 @@ mod tests {
         assert_eq!(
             AppConfig::load_from(&path).unwrap().shown_changelog_version,
             "1.2.5"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn shown_welcome_version_round_trip() {
+        let dir = temp_dir();
+        let path = dir.join("runtime.toml");
+        let config = AppConfig {
+            shown_welcome_version: "1.2.6".to_string(),
+            ..Default::default()
+        };
+        config.save_to(&path).unwrap();
+        assert_eq!(
+            AppConfig::load_from(&path).unwrap().shown_welcome_version,
+            "1.2.6"
         );
         fs::remove_dir_all(dir).unwrap();
     }

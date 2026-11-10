@@ -1068,7 +1068,16 @@ impl AppShell {
             state.select_all(window, cx);
         });
         cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
-            InputEvent::PressEnter { .. } | InputEvent::Blur => this.commit_rename(cx),
+            InputEvent::PressEnter { .. } => {
+                let was_renaming = this.renaming.is_some();
+                this.commit_rename(cx);
+                // 起完名按回车直接回到正文，不必再点一下编辑区。
+                if was_renaming {
+                    this.request_editor_focus(cx);
+                }
+            }
+            // 点别处导致的失焦也要提交；此时不抢焦点，尊重用户刚点的位置。
+            InputEvent::Blur => this.commit_rename(cx),
             _ => {}
         })
         .detach();
@@ -1078,6 +1087,13 @@ impl AppShell {
             rel_path: rel_path.to_string(),
             input,
         });
+        // 新建笔记是「先 open_note 打开文档、再进入树上的起名输入框」。
+        // 那次打开留下的编辑器聚焦请求必须撤掉：同步分支的
+        // pending_editor_focus 会在下一帧 render 时抢焦点，异步读盘分支的
+        // focus_on_open_path 会在落地后再抢一次；输入框一旦 Blur，默认名
+        // 「新笔记」就被直接提交，用户根本来不及起名。
+        self.pending_editor_focus = false;
+        self.focus_on_open_path = None;
         // Drop a scan that is already in flight. Applying it would rebuild the
         // row under the caret and the field's blur handler would commit.
         self.defer_entries_reload();

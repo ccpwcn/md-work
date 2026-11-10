@@ -135,8 +135,65 @@ settings.tab.windows:
   en: "Windows"
   zh-CN: "Windows"
 settings.version:
-  en: "MoJiān %{version} · MIT"
-  zh-CN: "墨笺 %{version} · MIT"
+  en: "Version %{version}"
+  zh-CN: "版本 %{version}"
+settings.open_welcome:
+  en: "Open welcome guide"
+  zh-CN: "查看欢迎文档"
+settings.open_welcome_hint:
+  en: "Reopen the bundled read-only welcome guide"
+  zh-CN: "重新打开随包的只读欢迎文档"
+settings.tab.about:
+  en: "About"
+  zh-CN: "关于"
+settings.tab.about_hint:
+  en: "Version, software license, project links and the welcome guide."
+  zh-CN: "版本信息、软件授权许可协议、项目链接与欢迎文档。"
+settings.nav.about:
+  en: "ABOUT"
+  zh-CN: "关于应用"
+settings.about.app_name:
+  en: "MoJiān"
+  zh-CN: "墨笺 (MoJiān)"
+settings.about.tagline:
+  en: "A lightweight local Markdown notebook for the AI era."
+  zh-CN: "为 AI 时代而生的轻量本地 Markdown 笔记本。"
+settings.about.license:
+  en: "Software license"
+  zh-CN: "软件授权许可协议"
+settings.about.license_summary:
+  en: "MIT License · Copyright (c) 2026 lidawei"
+  zh-CN: "MIT License · Copyright (c) 2026 lidawei"
+settings.about.license_show:
+  en: "View full license"
+  zh-CN: "查看完整协议"
+settings.about.license_hide:
+  en: "Hide license"
+  zh-CN: "收起协议"
+settings.about.github:
+  en: "GitHub repository"
+  zh-CN: "GitHub 仓库"
+settings.about.github_hint:
+  en: "Source code, issues and releases"
+  zh-CN: "源码、问题反馈与版本发布"
+settings.about.github_open:
+  en: "Open in browser"
+  zh-CN: "在浏览器中打开"
+settings.about.commit:
+  en: "Build commit"
+  zh-CN: "构建提交"
+settings.about.commit_hint:
+  en: "Last commit in the source repository. Copy the hash when reporting an issue."
+  zh-CN: "源码仓库最后一次提交，反馈问题时可复制此哈希定位版本。"
+settings.about.commit_copy:
+  en: "Copy commit hash"
+  zh-CN: "复制提交哈希"
+settings.about.commit_copied:
+  en: "Commit hash copied to clipboard"
+  zh-CN: "已复制提交哈希"
+settings.about.commit_unknown:
+  en: "Unavailable"
+  zh-CN: "未知"
 settings.typography:
   en: "Fonts"
   zh-CN: "字体"
@@ -158,6 +215,36 @@ settings.apply_fonts:
 settings.fonts_empty_hint:
   en: "Takes effect immediately; closing settings also applies."
   zh-CN: "立即生效；关闭设置时也会自动应用。"
+settings.font_choose:
+  en: "Browse fonts"
+  zh-CN: "选择字体"
+settings.restore_defaults:
+  en: "Restore default fonts"
+  zh-CN: "恢复默认字体"
+settings.font_picker:
+  en: "Installed fonts"
+  zh-CN: "本机已安装字体"
+settings.font_picker_loading:
+  en: "Reading installed fonts…"
+  zh-CN: "正在读取本机已安装字体…"
+settings.font_picker_count:
+  en: "%{count} fonts installed · %{shown} shown"
+  zh-CN: "本机共 %{count} 个字体，当前显示 %{shown} 个"
+settings.font_picker_search:
+  en: "Type to filter fonts"
+  zh-CN: "输入名称筛选字体"
+settings.font_picker_default:
+  en: "System default (leave empty)"
+  zh-CN: "系统默认（留空）"
+settings.font_picker_empty:
+  en: "No installed fonts were found. You can still type a font name above."
+  zh-CN: "未读取到已安装字体，也可以在上方直接输入字体名称。"
+settings.font_picker_no_match:
+  en: "No font matches the filter."
+  zh-CN: "没有匹配的字体。"
+settings.font_picker_close:
+  en: "Close"
+  zh-CN: "收起"
 settings.autosave:
   en: "Autosave after 800 ms of inactivity"
   zh-CN: "停止输入 800 毫秒后自动保存"
@@ -905,6 +992,54 @@ image.failed:
 image.upload_failed:
   en: "Image upload failed, saved to the notebook assets instead: %{message}"
   zh-CN: "图床上传失败，已保存到本地 assets：%{message}"
+image.cleanup_title:
+  en: "Unused local images"
+  zh-CN: "清理本地未引用图片"
+image.cleanup_hint:
+  en: "Scans the assets folders of every notebook in this workspace. Save all notes before cleaning; a file still open in an unsaved note may look unused."
+  zh-CN: "扫描本工作区各笔记本 assets 目录里没有被任何笔记引用的图片。清理前请先保存全部笔记，未保存的引用可能暂时无法识别。"
+image.cleanup_scanning:
+  en: "Scanning local assets…"
+  zh-CN: "正在扫描本地 assets…"
+image.cleanup_cleaning:
+  en: "Cleaning…"
+  zh-CN: "正在清理…"
+image.cleanup_ready:
+  en: "%{count} unused images (%{size}) can be removed."
+  zh-CN: "发现 %{count} 个未引用图片，共 %{size}。"
+image.cleanup_empty:
+  en: "No unused images found. Local assets are tidy."
+  zh-CN: "没有发现未引用图片，本地 assets 很干净。"
+image.cleanup_error:
+  en: "Could not scan local assets: %{message}"
+  zh-CN: "扫描本地 assets 失败：%{message}"
+image.cleanup_rescan:
+  en: "Rescan"
+  zh-CN: "重新扫描"
+image.cleanup_button:
+  en: "Clean up"
+  zh-CN: "一键清理"
+image.cleanup_done:
+  en: "Removed %{count} unused images (%{size})."
+  zh-CN: "已清理 %{count} 个未引用图片，释放 %{size}。"
+image.cleanup_partial:
+  en: "Removed %{count} images; %{failed} files could not be deleted."
+  zh-CN: "已清理 %{count} 个图片，%{failed} 个文件删除失败。"
+image.cleanup_confirm_title:
+  en: "Clean up unused images"
+  zh-CN: "清理未引用图片"
+image.cleanup_confirm:
+  en: "Deleted resources cannot be recovered. Continue?"
+  zh-CN: "被删除清理的资源将无法恢复，是否继续？"
+image.cleanup_confirm_detail:
+  en: "%{count} unused images (%{size}) in the assets folders will be permanently deleted."
+  zh-CN: "assets 目录中 %{count} 个未引用图片（共 %{size}）将被永久删除。"
+image.cleanup_confirm_no:
+  en: "Cancel"
+  zh-CN: "取消"
+image.cleanup_confirm_yes:
+  en: "Delete them"
+  zh-CN: "确认清理"
 mcp.usage_doc:
   en: "Detailed guide"
   zh-CN: "使用详细说明"
@@ -1403,6 +1538,24 @@ tabs.switch:
 tabs.switch_empty:
   en: "No open tabs"
   zh-CN: "没有打开的页签"
+note.copy_path:
+  en: "Copy path"
+  zh-CN: "复制路径"
+note.open_folder:
+  en: "Open containing folder"
+  zh-CN: "打开所在文件夹"
+note.path_copied:
+  en: "Path copied to clipboard"
+  zh-CN: "路径已复制到剪贴板"
+note.path_unavailable:
+  en: "The note path is unavailable"
+  zh-CN: "无法获取笔记路径"
+note.open_folder_failed:
+  en: "Could not open the containing folder: %{message}"
+  zh-CN: "打开所在文件夹失败：%{message}"
+official_docs.welcome_title:
+  en: "Welcome to MoJiān"
+  zh-CN: "欢迎使用墨笺"
 toolbar.image:
   en: "Insert image"
   zh-CN: "插入图片"

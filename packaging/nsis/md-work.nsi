@@ -4,7 +4,7 @@
 ;   cargo run -p xtask -- package
 ;   cargo run -p xtask -- installer
 ; or manually:
-;   makensis /DVERSION=1.2.6 /DDIST=<workspace>\dist\md-work-1.2.6-win64 md-work.nsi
+;   makensis /DVERSION=1.2.7 /DDIST=<workspace>\dist\md-work-1.2.7-win64 md-work.nsi
 ;
 ; Only HKCU is written and nothing is installed machine-wide, so no elevation
 ; is required. The app's own "用墨笺打开" verb (HKCU\Software\Classes) is left
@@ -21,7 +21,7 @@ Var WORKSPACE_DIR
 Var WORKSPACE_DIR_FIELD
 
 !ifndef VERSION
-  !define VERSION "1.2.6"
+  !define VERSION "1.2.7"
 !endif
 !ifndef DIST
   !error "Pass /DDIST=<path to dist\md-work-<ver>-win64>"
@@ -138,14 +138,19 @@ Section "主程序" SEC_MAIN
   ${If} ${FileExists} "$INSTDIR\mcp.md"
     SetFileAttributes "$INSTDIR\mcp.md" NORMAL
   ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\欢迎使用墨笺.md"
+    SetFileAttributes "$INSTDIR\欢迎使用墨笺.md" NORMAL
+  ${EndIf}
   File "${DIST}\${APP_EXE}"
   File "${DIST}\${APP_CLI}"
   File "${DIST}\changelog.md"
   File "${DIST}\mcp.md"
-  ; 安装目录里的两份官方文档设为只读；应用内还会用 SHA-256 校验，
+  File "${DIST}\欢迎使用墨笺.md"
+  ; 安装目录里的三份官方文档设为只读；应用内还会用 SHA-256 校验，
   ; 并始终以只读预览模式显示程序内置的权威版本。
   SetFileAttributes "$INSTDIR\changelog.md" READONLY
   SetFileAttributes "$INSTDIR\mcp.md" READONLY
+  SetFileAttributes "$INSTDIR\欢迎使用墨笺.md" READONLY
   SetOutPath "$INSTDIR\licenses"
   File "${DIST}\LICENSE"
   File "${DIST}\THIRD-PARTY-NOTICES.md"
@@ -198,8 +203,12 @@ Section "Uninstall"
   ${If} ${FileExists} "$INSTDIR\mcp.md"
     SetFileAttributes "$INSTDIR\mcp.md" NORMAL
   ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\欢迎使用墨笺.md"
+    SetFileAttributes "$INSTDIR\欢迎使用墨笺.md" NORMAL
+  ${EndIf}
   Delete "$INSTDIR\changelog.md"
   Delete "$INSTDIR\mcp.md"
+  Delete "$INSTDIR\欢迎使用墨笺.md"
   Delete "$INSTDIR\uninstall.exe"
   RMDir /r "$INSTDIR\licenses"
   RMDir "$INSTDIR"

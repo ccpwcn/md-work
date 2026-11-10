@@ -52,11 +52,12 @@ fn official_doc_sources(root: &Path, version: &str) -> Vec<(&'static str, PathBu
                 .join(format!("v{version}.md")),
         ),
         ("mcp.md", root.join("doc").join("mcp.md")),
+        ("欢迎使用墨笺.md", root.join("doc").join("欢迎使用墨笺.md")),
     ]
 }
 
 fn is_official_doc_name(name: &str) -> bool {
-    matches!(name, "changelog.md" | "mcp.md")
+    matches!(name, "changelog.md" | "mcp.md" | "欢迎使用墨笺.md")
 }
 
 fn parse_icon(svg: &[u8]) -> Result<usvg::Tree> {
@@ -119,9 +120,24 @@ fn icon() -> Result<()> {
     Ok(())
 }
 
+/// 打包那一刻仓库的 HEAD；发布物里没有 `.git`，只能在编译时取。
+fn current_git_commit(root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let hash = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (!hash.is_empty()).then_some(hash)
+}
+
 fn build_release(root: &Path) -> Result<()> {
     println!("building release binaries…");
-    let status = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .args([
             "build",
             "--release",
@@ -130,9 +146,17 @@ fn build_release(root: &Path) -> Result<()> {
             "-p",
             "md-work-cli",
         ])
-        .current_dir(root)
-        .status()
-        .context("spawn cargo build")?;
+        .current_dir(root);
+    // 传给 md-work-gui 的 build script；哈希变化会让 Cargo 重跑它，保证安装包
+    // 里记录的是本次打包的提交，而不是上一次 release 构建的旧值。
+    match current_git_commit(root) {
+        Some(commit) => {
+            println!("git commit: {commit}");
+            command.env("MDWORK_GIT_COMMIT", commit);
+        }
+        None => println!("警告：无法读取 git 提交哈希，本次构建不含提交信息"),
+    }
+    let status = command.status().context("spawn cargo build")?;
     if !status.success() {
         bail!("cargo build --release failed with {status}");
     }
@@ -159,12 +183,12 @@ fn copy_binaries(root: &Path, bundle: &Path) -> Result<()> {
     copy_official_docs(root, bundle, VERSION)
 }
 
-/// 把当前版本发版说明与 MCP 说明复制进便携目录；NSIS 与 zip 都从这里取文件。
+/// 把发版说明、MCP 说明与欢迎文档复制进便携目录；NSIS 与 zip 都从这里取文件。
 fn copy_official_docs(root: &Path, bundle: &Path, version: &str) -> Result<()> {
     for (name, source) in official_doc_sources(root, version) {
         if !source.is_file() {
             bail!(
-                "缺少随包发布的官方说明文档 {}；请先补齐当前版本发版说明与 doc/mcp.md",
+                "缺少随包发布的官方说明文档 {}；请补齐发版说明、doc/mcp.md 与 doc/欢迎使用墨笺.md",
                 source.display()
             );
         }
@@ -176,11 +200,7 @@ fn copy_official_docs(root: &Path, bundle: &Path, version: &str) -> Result<()> {
 
 /// 递归收集便携目录里的所有文件。原来只遍历顶层，子目录会被静默丢掉；
 /// 官方说明文档将来若移入资源子目录，也不会再漏包。
-fn collect_bundle_files(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<(String, PathBuf)>,
-) -> Result<()> {
+fn collect_bundle_files(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<()> {
     for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
         let entry = entry?;
         let kind = entry.file_type()?;
@@ -321,13 +341,17 @@ mod tests {
     fn official_doc_sources_exist_for_the_current_version() {
         let root = workspace_root().expect("workspace root");
         let sources = official_doc_sources(&root, VERSION);
-        assert_eq!(sources.len(), 2);
+        assert_eq!(sources.len(), 3);
         assert_eq!(
             sources.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-            vec!["changelog.md", "mcp.md"]
+            vec!["changelog.md", "mcp.md", "欢迎使用墨笺.md"]
         );
         for (name, source) in sources {
-            assert!(source.is_file(), "缺少官方说明文档 {name}: {}", source.display());
+            assert!(
+                source.is_file(),
+                "缺少官方说明文档 {name}: {}",
+                source.display()
+            );
         }
     }
 
@@ -343,12 +367,13 @@ mod tests {
         copy_official_docs(&root, &bundle, VERSION).unwrap();
         assert!(bundle.join("changelog.md").is_file());
         assert!(bundle.join("mcp.md").is_file());
+        assert!(bundle.join("欢迎使用墨笺.md").is_file());
 
         let zip_path = zip_bundle(&bundle).unwrap();
         let archive_file = fs::File::open(&zip_path).unwrap();
         let mut archive = zip::ZipArchive::new(archive_file).unwrap();
         let prefix = bundle.file_name().unwrap().to_string_lossy();
-        for name in ["changelog.md", "mcp.md"] {
+        for name in ["changelog.md", "mcp.md", "欢迎使用墨笺.md"] {
             let entry = archive
                 .by_name(&format!("{prefix}/{name}"))
                 .unwrap_or_else(|_| panic!("zip 中缺少 {name}"));
@@ -376,8 +401,14 @@ mod tests {
         }
         buf.set_position(0);
         let mut archive = zip::ZipArchive::new(buf).unwrap();
-        let official = archive.by_name("changelog.md").unwrap().external_attributes();
-        let executable = archive.by_name("md-work.exe").unwrap().external_attributes();
+        let official = archive
+            .by_name("changelog.md")
+            .unwrap()
+            .external_attributes();
+        let executable = archive
+            .by_name("md-work.exe")
+            .unwrap()
+            .external_attributes();
         assert_eq!(official & 0x01, 0x01, "DOS 只读位必须置位");
         assert_eq!(official >> 16, 0o100444, "Unix 权限为只读");
         assert_eq!(executable, 0o100644 << 16, "普通文件保持可写");

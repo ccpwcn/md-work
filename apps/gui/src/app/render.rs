@@ -754,6 +754,8 @@ impl AppShell {
         let close_right_label = t!("tabs.close_right").to_string();
         let close_all_label = t!("tabs.close_all").to_string();
         let adopt_label = t!("external.save_into").to_string();
+        let copy_path_label = t!("note.copy_path").to_string();
+        let open_folder_label = t!("note.open_folder").to_string();
         let drag_from = self.tab_drag.as_ref().map(|d| d.from);
         let insert_at = self
             .tab_drag
@@ -811,6 +813,16 @@ impl AppShell {
             } else {
                 title
             };
+            // 页签标题会被截断；悬浮提示给出完整名称与绝对路径。
+            let tooltip_name = if is_official {
+                doc.title()
+            } else if doc.notebook_id.is_some() {
+                doc.rel_path.clone()
+            } else {
+                doc.path.display().to_string()
+            };
+            let tooltip_path = doc.path.display().to_string();
+            let doc_path = doc.path.clone();
             let label_color = if active {
                 cx.theme().foreground
             } else {
@@ -836,6 +848,12 @@ impl AppShell {
             let close_right_label = close_right_label.clone();
             let close_all_label = close_all_label.clone();
             let adopt_label = adopt_label.clone();
+            let path_copy_label = copy_path_label.clone();
+            let path_reveal_label = open_folder_label.clone();
+            let path_copy_shell = shell.clone();
+            let path_reveal_shell = shell.clone();
+            let path_copy_target = doc_path.clone();
+            let path_reveal_target = doc_path.clone();
             let dragging = drag_from == Some(index);
             let show_insert_before = insert_at == Some(position);
 
@@ -872,6 +890,19 @@ impl AppShell {
                         cx.theme().transparent
                     })
                     .hover(move |style| style.bg(hover))
+                    .tooltip(move |window, cx| {
+                        let name = tooltip_name.clone();
+                        let path = tooltip_path.clone();
+                        Tooltip::element(move |_, cx| {
+                            let muted = cx.theme().muted_foreground;
+                            div()
+                                .v_flex()
+                                .gap_0p5()
+                                .child(div().child(name.clone()))
+                                .child(div().text_xs().text_color(muted).child(path.clone()))
+                        })
+                        .build(window, cx)
+                    })
                     .on_prepaint({
                         let bounds_store = bounds_store.clone();
                         move |bounds, _, _| {
@@ -919,6 +950,10 @@ impl AppShell {
                         let right_shell = shell.clone();
                         let all_shell = shell.clone();
                         let adopt_shell = shell.clone();
+                        let copy_path_shell = path_copy_shell.clone();
+                        let reveal_path_shell = path_reveal_shell.clone();
+                        let copy_target = path_copy_target.clone();
+                        let reveal_target = path_reveal_target.clone();
                         let rename_target = rename_target.clone();
                         let other_tabs = other_tabs.clone();
                         let left_tabs = left_tabs.clone();
@@ -948,6 +983,25 @@ impl AppShell {
                                 },
                             ));
                         }
+                        menu = menu
+                            .item(
+                                PopupMenuItem::new(path_copy_label.clone())
+                                    .disabled(is_official)
+                                    .on_click(move |_, _, cx| {
+                                        copy_path_shell.update(cx, |this, cx| {
+                                            this.copy_note_path(Some(copy_target.clone()), cx)
+                                        });
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new(path_reveal_label.clone())
+                                    .disabled(is_official)
+                                    .on_click(move |_, _, cx| {
+                                        reveal_path_shell.update(cx, |this, cx| {
+                                            this.reveal_note_path(Some(reveal_target.clone()), cx)
+                                        });
+                                    }),
+                            );
                         menu.separator()
                             .item(PopupMenuItem::new(close_label.clone()).on_click(
                                 move |_, _, cx| {

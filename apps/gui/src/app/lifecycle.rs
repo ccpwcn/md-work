@@ -232,6 +232,15 @@ impl AppShell {
             self.pending_changelog = false;
             self.open_official_doc(OfficialDocKind::Changelog, window, cx);
         }
+        if self.pending_welcome_doc {
+            // 安装完成后的首次启动打开随包的《欢迎使用墨笺.md》；它是和
+            // changelog、mcp 一样的官方只读文档，不在工作区生成示例笔记。
+            // 打开时立即记下版本，保证每个安装版本只展示这一次。
+            self.pending_welcome_doc = false;
+            self.config.shown_welcome_version = mdwork_core::version().to_string();
+            self.save_config(cx);
+            self.open_official_doc(OfficialDocKind::Welcome, window, cx);
+        }
         self.reveal_active(cx);
     }
 
@@ -487,7 +496,11 @@ impl AppShell {
         for doc in &self.docs {
             let (path, base_hash, official) = {
                 let doc = doc.read(cx);
-                (doc.path.clone(), doc.base_hash.clone(), doc.official.is_some())
+                (
+                    doc.path.clone(),
+                    doc.base_hash.clone(),
+                    doc.official.is_some(),
+                )
             };
             // 官方说明文档只显示内置权威正文，不参与磁盘变更重载。
             if !official && paths.iter().any(|changed| paths_equal(changed, &path)) {

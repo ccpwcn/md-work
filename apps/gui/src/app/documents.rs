@@ -72,6 +72,49 @@ impl AppShell {
         self.open_external(&path, window, cx);
     }
 
+    /// 笔记树里某个条目的绝对磁盘路径；笔记本不存在时返回 `None`。
+    pub(super) fn tree_entry_path(&self, notebook_id: Uuid, rel_path: &str) -> Option<PathBuf> {
+        self.notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == notebook_id)
+            .and_then(|entry| entry.notebook.note_path(rel_path).ok())
+    }
+
+    /// 把笔记的绝对路径写入系统剪贴板（区别于笔记树内部的应用内剪贴板）。
+    pub(super) fn copy_note_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        let Some(path) = path else {
+            self.notify_error(t!("note.path_unavailable").to_string(), cx);
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+        self.notify_success(t!("note.path_copied").to_string(), cx);
+    }
+
+    /// 在文件管理器中定位笔记（Windows 会选中该文件）。
+    pub(super) fn reveal_note_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        let Some(path) = path else {
+            self.notify_error(t!("note.path_unavailable").to_string(), cx);
+            return;
+        };
+        let receiver = disk::submit(move || reveal_path_in_explorer_sync(&path));
+        cx.spawn(async move |this, cx| {
+            let result = match receiver.await {
+                Ok(result) => result,
+                Err(_) => return,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Err(err) = result {
+                    this.notify_error(
+                        t!("note.open_folder_failed", message = err.to_string()).to_string(),
+                        cx,
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn apply_pending_jump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((path, line)) = self.pending_jump.take() else {
             return;
@@ -109,9 +152,12 @@ impl AppShell {
             self.persist_session(cx);
             self.reveal_active(cx);
             self.apply_pending_jump(window, cx);
+            self.request_editor_focus(cx);
             cx.notify();
             return;
         }
+        // 异步读盘结束后再聚焦编辑器（此时实体还没创建）。
+        self.focus_on_open_path = notebook.note_path(rel_path).ok();
         let request = OpenRequest::Notebook {
             notebook: notebook.clone(),
             rel_path: rel_path.to_string(),
@@ -276,6 +322,14 @@ impl AppShell {
         {
             self.active_doc = Some(index);
             changed = true;
+        }
+        // 从笔记树点开的笔记此时才真正落地，交给下一帧聚焦编辑区。
+        if self.focus_on_open_path.as_ref().is_some_and(|path| {
+            self.active_doc_entity()
+                .is_some_and(|doc| doc.read(cx).path == *path)
+        }) {
+            self.focus_on_open_path = None;
+            self.request_editor_focus(cx);
         }
         if changed {
             self.reveal_active(cx);
@@ -525,7 +579,47 @@ impl AppShell {
     pub(super) fn activate_doc_by_id(&mut self, id: EntityId, cx: &mut Context<Self>) {
         if let Some(index) = self.doc_index(id) {
             self.activate_doc(index, cx);
+            self.request_editor_focus(cx);
         }
+    }
+
+    /// 请求下一帧把输入焦点交给当前编辑区；render 里执行，保证编辑器已创建。
+    pub(super) fn request_editor_focus(&mut self, cx: &mut Context<Self>) {
+        self.pending_editor_focus = true;
+        cx.notify();
+    }
+
+    /// 从笔记树打开笔记 / 切换页签后，让默认编辑态直接可以打字。
+    /// 预览态、官方只读文档、笔记树上的命名输入框以及任何模态对话框
+    /// 打开时都不抢焦点。
+    pub(super) fn focus_active_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
+        // 新建笔记 / 重命名 / 新建笔记本时，名称输入框优先。抢走焦点不仅
+        // 打不了字，输入框的 Blur 还会被当成「确认」直接提交默认名。
+        if self.renaming.is_some() || self.renaming_notebook.is_some() {
+            return;
+        }
+        if self.settings.is_some()
+            || self.palette.is_some()
+            || self.prompt.is_some()
+            || self.move_picker.is_some()
+            || self.export.is_some()
+            || self.zip.is_some()
+            || self.recovery.is_some()
+            || self.delete_confirm.is_some()
+            || self.workspace_confirm.is_some()
+            || !self.official_doc_alerts.is_empty()
+        {
+            return;
+        }
+        let Some(doc) = self.active_doc_entity() else {
+            return;
+        };
+        let state = doc.read(cx);
+        if state.preview_mode || state.official.is_some() {
+            return;
+        }
+        let handle = state.editor.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
     }
 
     pub(super) fn close_doc(&mut self, index: usize, cx: &mut Context<Self>) {

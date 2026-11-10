@@ -370,6 +370,21 @@ impl Render for MarkdownPreview {
     }
 }
 
+/// 六级标题的字号：相对正文的倍率严格递减，h5/h6 也不再与正文同号。
+/// 参考导出侧 20/16/14pt 相对 11pt 正文的比例，并给不同级别配上
+/// 不同的上下留白，让层次不只靠字号。
+fn heading_size(level: u8, body_size: f32) -> f32 {
+    let scale = match level {
+        1 => 1.875,
+        2 => 1.5,
+        3 => 1.3,
+        4 => 1.16,
+        5 => 1.07,
+        _ => 1.0,
+    };
+    (body_size * scale).max(10.0)
+}
+
 fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let style = &context.style;
@@ -379,24 +394,24 @@ fn render_block(block: &Block, context: &RenderCtx<'_>, cx: &App) -> AnyElement 
             content,
             line,
         } => {
-            let size = context.body_size
-                * match level {
-                    1 => 1.875,
-                    2 => 1.5,
-                    3 => 1.25,
-                    4 => 1.125,
-                    _ => 1.0,
-                };
+            let size = heading_size(*level, context.body_size);
             let heading_style = InlineStyle {
                 size,
                 foreground: theme.foreground,
                 ..clone_style(style)
             };
             let text = styled_inlines(content, &heading_style, FontWeight::BOLD);
+            // GPUI 的 `TextStyle::to_run` 不带 font_size，字号只在布局时从
+            // `window.text_style()` 读取；因此 `styled_inlines` 里的 size 不会
+            // 真正生效。必须在外层元素上 `.text_size()` 让标题继承正确字号，
+            // 否则六级标题都会渲染成父容器的正文字号，只剩粗体差别。
+            // 这里只改标题容器，不动 HeadingAnchor / 选区帧 / 正文结构。
             let heading = div()
                 .w_full()
-                .pt(px(2.))
-                .line_height(relative(1.2))
+                .text_size(px(size))
+                .pt(px(2.0 + size * 0.22))
+                .pb(px(size * 0.1))
+                .line_height(relative(1.25))
                 .child(selectable_styled_text(text, &heading_style))
                 .into_any_element();
             match &context.outline {
@@ -821,12 +836,7 @@ fn percent(cents: u32) -> f32 {
 /// `.w(px(原图宽)).max_w_full()`，元素就始终按原图像素高度占位，而
 /// `ObjectFit::Contain` 只按可用宽度缩放绘制，窄窗口下会空出一大片
 /// 随屏幕宽度变化的空白。
-fn aspect_box(
-    image: Img,
-    width_fraction: f32,
-    max_width: Option<f32>,
-    ratio: f32,
-) -> AnyElement {
+fn aspect_box(image: Img, width_fraction: f32, max_width: Option<f32>, ratio: f32) -> AnyElement {
     let mut box_ = div()
         .w(relative(width_fraction.max(0.01)))
         .aspect_ratio(ratio.max(0.01));
@@ -1636,9 +1646,25 @@ mod tests {
     // shadow the std `#[test]` attribute and recurse during expansion.
     use super::{
         FontStyle, FontWeight, HighlightStyle, Inline, InlineStyle, SharedString,
-        flatten_highlights, styled_inlines,
+        flatten_highlights, heading_size, styled_inlines,
     };
     use std::ops::Range;
+
+    /// 预览里 h1~h6 必须严格递减；以前 h5/h6 与正文同号，看起来全都一样。
+    #[test]
+    fn heading_sizes_are_strictly_hierarchical() {
+        for body in [10.0_f32, 16.0, 24.0, 32.0] {
+            let sizes: Vec<f32> = (1..=6).map(|level| heading_size(level, body)).collect();
+            for pair in sizes.windows(2) {
+                assert!(
+                    pair[0] > pair[1],
+                    "正文 {body} 时标题字号必须递减，实际 {sizes:?}"
+                );
+            }
+            assert!(sizes[0] > body, "一级标题必须明显大于正文");
+            assert!(sizes.iter().all(|size| *size >= 10.0));
+        }
+    }
 
     fn sample_style() -> InlineStyle {
         InlineStyle {
@@ -1849,11 +1875,11 @@ mod tests {
     #[gpui::test]
     fn image_box_height_tracks_available_width(cx: &mut gpui_kit::TestAppContext) {
         use super::{img, sized_image};
+        use gpui_kit::base::StyledExt as _;
         use gpui_kit::{
             Bounds, Context, IntoElement, ParentElement as _, Pixels, Render, Styled as _, Window,
             div, px,
         };
-        use gpui_kit::base::StyledExt as _;
         use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
         struct Probe {

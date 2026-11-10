@@ -1,6 +1,7 @@
 //! 随安装包 / zip 包发布的官方说明文档。
 //!
-//! `changelog.md` 与 `mcp.md` 的权威正文在编译期就嵌入了可执行文件；运行时
+//! `changelog.md`、`mcp.md` 与 `欢迎使用墨笺.md` 的权威正文在编译期就嵌入了
+//! 可执行文件；运行时
 //! 打开的是这份内置正文，磁盘上的副本只用来做 SHA-256 校验。因此：
 //!
 //! - 用户可以阅读、复制、打印，但无法切换编辑模式、无法保存、不会写回磁盘；
@@ -20,16 +21,19 @@ pub enum OfficialDocKind {
     Changelog,
     /// MCP 服务使用说明（`doc/mcp.md`）。
     Mcp,
+    /// 面向用户的入门说明（`doc/欢迎使用墨笺.md`）；安装后首次启动时打开。
+    Welcome,
 }
 
 impl OfficialDocKind {
-    pub const ALL: [Self; 2] = [Self::Changelog, Self::Mcp];
+    pub const ALL: [Self; 3] = [Self::Changelog, Self::Mcp, Self::Welcome];
 
     /// 部署到 exe 同目录后的固定文件名。
     pub fn file_name(self) -> &'static str {
         match self {
             Self::Changelog => "changelog.md",
             Self::Mcp => "mcp.md",
+            Self::Welcome => "欢迎使用墨笺.md",
         }
     }
 
@@ -38,6 +42,7 @@ impl OfficialDocKind {
         match self {
             Self::Changelog => CHANGELOG_MD,
             Self::Mcp => MCP_MD,
+            Self::Welcome => WELCOME_MD,
         }
     }
 
@@ -48,6 +53,7 @@ impl OfficialDocKind {
                 t!("official_docs.changelog_title", version = CHANGELOG_VERSION).to_string()
             }
             Self::Mcp => t!("official_docs.mcp_title").to_string(),
+            Self::Welcome => t!("official_docs.welcome_title").to_string(),
         }
     }
 
@@ -102,7 +108,10 @@ pub fn kind_for_path(path: &Path) -> Option<OfficialDocKind> {
 pub enum OfficialDocStatus {
     Intact,
     /// 磁盘副本的 SHA-256 与内置权威正文不一致。
-    Modified { expected: String, actual: String },
+    Modified {
+        expected: String,
+        actual: String,
+    },
     Missing(PathBuf),
 }
 
@@ -130,7 +139,7 @@ fn log_alert(alert: &OfficialDocAlert) {
     );
 }
 
-/// 启动时校验两份官方说明文档。
+/// 启动时校验全部官方说明文档。
 pub fn check_deployed_docs() -> Vec<OfficialDocAlert> {
     OfficialDocKind::ALL
         .into_iter()
@@ -166,6 +175,11 @@ mod tests {
         assert_eq!(CHANGELOG_VERSION, mdwork_core::version());
         assert!(!CHANGELOG_MD.trim().is_empty(), "当前版本发版说明不能为空");
         assert!(!MCP_MD.trim().is_empty(), "mcp.md 不能为空");
+        assert!(!WELCOME_MD.trim().is_empty(), "欢迎使用墨笺.md 不能为空");
+        assert!(
+            WELCOME_MD.lines().count() <= 40,
+            "欢迎文档应保持简短，不要超过小屏幕的三分之二"
+        );
     }
 
     #[test]
@@ -180,6 +194,7 @@ mod tests {
     fn deployed_file_names_are_stable() {
         assert_eq!(OfficialDocKind::Changelog.file_name(), "changelog.md");
         assert_eq!(OfficialDocKind::Mcp.file_name(), "mcp.md");
+        assert_eq!(OfficialDocKind::Welcome.file_name(), "欢迎使用墨笺.md");
     }
 
     #[test]
@@ -190,5 +205,6 @@ mod tests {
             "更新说明标题应带版本号，实际为 {changelog}"
         );
         assert!(!OfficialDocKind::Mcp.title().is_empty());
+        assert!(!OfficialDocKind::Welcome.title().is_empty());
     }
 }

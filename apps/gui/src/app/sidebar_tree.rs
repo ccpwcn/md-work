@@ -496,6 +496,9 @@ impl AppShell {
                             let child_note_label = t!("tree.new_child_note").to_string();
                             let sibling_note_label = t!("tree.new_sibling_note").to_string();
                             let sibling_folder_label = t!("tree.new_sibling_folder").to_string();
+                            let note_copy_path_label = t!("note.copy_path").to_string();
+                            let note_open_folder_label = t!("note.open_folder").to_string();
+                            let note_path_shell = shell.clone();
                             let tooltip_rel = rel_path.clone();
                             let tooltip_folder = is_folder;
                             let tooltip_count = row.note_count;
@@ -522,6 +525,9 @@ impl AppShell {
                                 let child_note_label = child_note_label.clone();
                                 let sibling_note_label = sibling_note_label.clone();
                                 let sibling_folder_label = sibling_folder_label.clone();
+                                let note_copy_path_label = note_copy_path_label.clone();
+                                let note_open_folder_label = note_open_folder_label.clone();
+                                let note_path_shell = note_path_shell.clone();
                                 move |menu: gpui_kit::component::menu::PopupMenu, cx: &App| {
                                     let rename_shell = rename_shell.clone();
                                     let delete_shell = delete_shell.clone();
@@ -738,6 +744,30 @@ impl AppShell {
                                             move_shell.update(cx, |this, cx| {
                                                 this.begin_move(notebook_id, &move_rel, window, cx)
                                             });
+                                        },
+                                    ))
+                                    .item(PopupMenuItem::new(note_copy_path_label.clone()).on_click(
+                                        {
+                                            let path_shell = note_path_shell.clone();
+                                            let path_rel = create_rel.clone();
+                                            move |_, _, cx| {
+                                                path_shell.update(cx, |this, cx| {
+                                                    let path = this.tree_entry_path(notebook_id, &path_rel);
+                                                    this.copy_note_path(path, cx);
+                                                });
+                                            }
+                                        },
+                                    ))
+                                    .item(PopupMenuItem::new(note_open_folder_label.clone()).on_click(
+                                        {
+                                            let path_shell = note_path_shell.clone();
+                                            let path_rel = create_rel.clone();
+                                            move |_, _, cx| {
+                                                path_shell.update(cx, |this, cx| {
+                                                    let path = this.tree_entry_path(notebook_id, &path_rel);
+                                                    this.reveal_note_path(path, cx);
+                                                });
+                                            }
                                         },
                                     ))
                                     .separator()

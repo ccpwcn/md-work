@@ -145,6 +145,31 @@ impl PanelArrangement {
     }
 }
 
+/// How a bookmarked note is marked in the note tree.
+///
+/// The default is deliberately the weakest option: a small dot keeps the tree
+/// quiet while still making bookmarked notes scannable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BookmarkMarker {
+    /// No marker at all; bookmarks remain reachable from the Bookmarks panel.
+    None,
+    #[default]
+    Dot,
+    /// A small bookmark icon, same size and colour as the file-type icon.
+    Bookmark,
+}
+
+impl BookmarkMarker {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BookmarkMarker::None => "none",
+            BookmarkMarker::Dot => "dot",
+            BookmarkMarker::Bookmark => "bookmark",
+        }
+    }
+}
+
 /// Whether the main window is restored or maximized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -466,6 +491,8 @@ pub struct AppConfig {
     pub note_font_size: f32,
     pub autosave: bool,
     pub code_wrap: bool,
+    /// How bookmarked notes are marked in the note tree.
+    pub bookmark_marker: BookmarkMarker,
     /// 用户已关闭的随包更新说明所属版本。升级后与当前版本不一致时，
     /// 启动时会自动以预览模式打开一次新版本的 changelog。
     pub shown_changelog_version: String,
@@ -476,6 +503,9 @@ pub struct AppConfig {
     /// Keeps the loopback MCP server running while md-work is open.
     pub mcp_http: bool,
     pub mcp_port: u16,
+    /// Whether MCP connections must present a valid token. Defaults to false:
+    /// stdio and loopback HTTP are local-only transports.
+    pub mcp_require_token: bool,
     pub crash_report: CrashReportConfig,
     pub theme_colors: ThemeColors,
     /// Last main-window placement. `None` leaves size and state to the toolkit.
@@ -504,11 +534,13 @@ impl Default for AppConfig {
             note_font_size: 16.0,
             autosave: true,
             code_wrap: true,
+            bookmark_marker: BookmarkMarker::Dot,
             shown_changelog_version: String::new(),
             shown_welcome_version: String::new(),
             image_host: ImageHost::Local,
             mcp_http: false,
             mcp_port: 11026,
+            mcp_require_token: false,
             crash_report: CrashReportConfig::default(),
             theme_colors: ThemeColors::default(),
             window: None,
@@ -606,6 +638,7 @@ impl AppConfig {
                 image_host = ?self.image_host,
                 mcp_http = self.mcp_http,
                 mcp_port = self.mcp_port,
+                mcp_require_token = self.mcp_require_token,
                 workspace_root = %self.workspace_root,
                 "保存设置"
             ),
@@ -784,7 +817,19 @@ impl AppConfig {
         if let Some(general) = loader.table(&root, "general") {
             loader.boolean(general, "general", "autosave", &mut config.autosave);
             loader.boolean(general, "general", "code_wrap", &mut config.code_wrap);
+            loader.parsed(
+                general,
+                "general",
+                "bookmark_marker",
+                &mut config.bookmark_marker,
+            );
             loader.boolean(general, "general", "mcp_http", &mut config.mcp_http);
+            loader.boolean(
+                general,
+                "general",
+                "mcp_require_token",
+                &mut config.mcp_require_token,
+            );
             loader.string(
                 general,
                 "general",
@@ -947,8 +992,17 @@ impl AppConfig {
         out.push_str(&format!("autosave = {}\n", self.autosave));
         out.push_str("# 预览区代码块自动换行。\n");
         out.push_str(&format!("code_wrap = {}\n", self.code_wrap));
+        out.push_str(
+            "# 笔记树中已收藏笔记的标记：none（不显示）| dot（小圆点）| bookmark（书签图标）\n",
+        );
+        out.push_str(&format!(
+            "bookmark_marker = \"{}\"\n",
+            self.bookmark_marker.as_str()
+        ));
         out.push_str("# 应用运行期间保持本地 MCP 服务。\n");
         out.push_str(&format!("mcp_http = {}\n", self.mcp_http));
+        out.push_str("# MCP 连接是否必须携带有效令牌；关闭时本地连接拥有工作区全部权限。\n");
+        out.push_str(&format!("mcp_require_token = {}\n", self.mcp_require_token));
         out.push_str("# 已关闭的随包更新说明版本；升级后首次启动会再次自动打开。\n");
         out.push_str(&format!(
             "shown_changelog_version = {}\n",
@@ -1505,6 +1559,58 @@ mod tests {
         config.save_to(&path).unwrap();
         let loaded = AppConfig::load_from(&path).unwrap();
         assert_eq!(loaded, config);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn mcp_require_token_round_trip() {
+        let dir = temp_dir();
+        let path = dir.join("runtime.toml");
+        // Token-less local connections are the default.
+        assert!(!AppConfig::default().mcp_require_token);
+        let config = AppConfig {
+            mcp_require_token: true,
+            ..Default::default()
+        };
+        config.save_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("mcp_require_token = true"));
+        assert!(AppConfig::load_from(&path).unwrap().mcp_require_token);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn bookmark_marker_round_trip() {
+        let dir = temp_dir();
+        let path = dir.join("runtime.toml");
+        let config = AppConfig {
+            bookmark_marker: BookmarkMarker::Bookmark,
+            ..Default::default()
+        };
+        config.save_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("bookmark_marker = \"bookmark\""));
+        assert_eq!(
+            AppConfig::load_from(&path).unwrap().bookmark_marker,
+            BookmarkMarker::Bookmark
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_bookmark_marker_keeps_default() {
+        let dir = temp_dir();
+        let path = dir.join("runtime.toml");
+        fs::write(&path, "[general]\nbookmark_marker = \"triangle\"\n").unwrap();
+        let config = AppConfig::load_from(&path).unwrap();
+        assert_eq!(config.bookmark_marker, BookmarkMarker::Dot);
+        assert_eq!(AppConfig::default().bookmark_marker, BookmarkMarker::Dot);
+        assert!(
+            config
+                .issues
+                .iter()
+                .any(|issue| issue.key == "general.bookmark_marker")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

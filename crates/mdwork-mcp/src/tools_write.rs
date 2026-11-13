@@ -182,7 +182,7 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
 
-            self.require_modify(&notebook, &rel)?;
+            self.require_modify(token, &notebook, &rel)?;
             if self.note_is_dirty(&id, &rel) {
                 return Err(doc_dirty(&rel));
             }
@@ -261,7 +261,7 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
 
-            self.require_modify(&notebook, &rel)?;
+            self.require_modify(token, &notebook, &rel)?;
             if self.note_is_dirty(&id, &rel) {
                 return Err(doc_dirty(&rel));
             }
@@ -349,8 +349,8 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(from.clone());
 
-            self.require_modify(&notebook, &from)?;
-            self.require_modify(&notebook, &to)?;
+            self.require_modify(token, &notebook, &from)?;
+            self.require_modify(token, &notebook, &to)?;
             if self.note_is_dirty(&id, &from) {
                 return Err(doc_dirty(&from));
             }
@@ -405,7 +405,7 @@ impl MdworkServer {
             entry.notebook_name = Some(notebook.display_name().to_string());
             entry.path = Some(rel.clone());
 
-            self.require_delete(&notebook, &rel)?;
+            self.require_delete(token, &notebook, &rel)?;
             if self.note_is_dirty(&id, &rel) {
                 return Err(doc_dirty(&rel));
             }
@@ -463,7 +463,7 @@ impl MdworkServer {
             entry.path = Some(rel.clone());
 
             // 书签写入笔记本级元数据，要求笔记本本身达到修改级。
-            self.require_perm(&NodeKey::notebook(id), PermLevel::Modify)?;
+            self.require_perm(token, &NodeKey::notebook(id), PermLevel::Modify)?;
             let path = notebook.note_path(&rel).map_err(core_error)?;
             let Some(bytes) = read_existing(&path, &rel)? else {
                 return Err(not_found(format!("note not found: {rel}")));
@@ -717,6 +717,7 @@ mod tests {
             tokens: Arc::new(TokenStore::new(root.join("tokens.bin"))),
             audit: Arc::new(AuditLog::new(root.join("audit"))),
             stdio_token: None,
+            token_policy: crate::TokenPolicy::Required,
             dirty_path: Some(root.join("dirty.toml")),
             exports_dir: Some(root.join("exports")),
             permissions_path: Some(root.join("permissions.toml")),

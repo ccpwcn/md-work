@@ -1,14 +1,14 @@
-//! Streamable HTTP auth: every request needs a valid bearer token.
+//! Streamable HTTP auth: token policy enforcement.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use mdwork_core::permissions::Scope;
-use mdwork_mcp::{AuditLog, ServerContext, TokenStore, serve_http_with_ctx};
+use mdwork_mcp::{AuditLog, ServerContext, TokenPolicy, TokenStore, serve_http_with_ctx};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-fn temp_ctx() -> (std::path::PathBuf, Arc<ServerContext>, String) {
+fn temp_ctx(policy: TokenPolicy) -> (std::path::PathBuf, Arc<ServerContext>, String) {
     let root = std::env::temp_dir().join(format!("mdwork-mcp-http-{}", Uuid::new_v4()));
     let tokens = TokenStore::new(root.join("tokens.bin"));
     let (_, wire) = tokens
@@ -19,6 +19,7 @@ fn temp_ctx() -> (std::path::PathBuf, Arc<ServerContext>, String) {
         tokens: Arc::new(tokens),
         audit: Arc::new(AuditLog::new(root.join("audit"))),
         stdio_token: None,
+        token_policy: policy,
         dirty_path: Some(root.join("dirty.toml")),
         exports_dir: Some(root.join("exports")),
         permissions_path: Some(root.join("permissions.toml")),
@@ -31,19 +32,49 @@ fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
+/// Starts a server and waits until the listener accepts connections.
+async fn spawn_server(ctx: Arc<ServerContext>, port: u16) -> tokio::task::JoinHandle<()> {
+    let server = tokio::spawn(async move { serve_http_with_ctx(ctx, port).await.unwrap() });
+    let mut ready = false;
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(ready, "server did not start");
+    server
+}
+
 async fn request(port: u16, authorization: Option<&str>, body: &str) -> String {
+    request_with_session(port, authorization, None, body).await
+}
+
+async fn request_with_session(
+    port: u16,
+    authorization: Option<&str>,
+    session: Option<&str>,
+    body: &str,
+) -> String {
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("connect");
     let auth = authorization
         .map(|value| format!("Authorization: {value}\r\n"))
         .unwrap_or_default();
+    let session = session
+        .map(|value| format!("Mcp-Session-Id: {value}\r\n"))
+        .unwrap_or_default();
     let raw = format!(
         "POST /mcp HTTP/1.1\r\n\
          Host: 127.0.0.1:{port}\r\n\
          Content-Type: application/json\r\n\
          Accept: application/json, text/event-stream\r\n\
-         {auth}Content-Length: {}\r\n\
+         {auth}{session}Content-Length: {}\r\n\
          Connection: close\r\n\r\n{body}",
         body.len()
     );
@@ -69,23 +100,9 @@ fn initialize_body() -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn http_requires_a_valid_bearer_token() {
-    let (root, ctx, wire) = temp_ctx();
+    let (root, ctx, wire) = temp_ctx(TokenPolicy::Required);
     let port = free_port();
-    let server = tokio::spawn(async move { serve_http_with_ctx(ctx, port).await });
-
-    // Wait until the listener accepts connections.
-    let mut ready = false;
-    for _ in 0..100 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_ok()
-        {
-            ready = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(ready, "server did not start");
+    let server = spawn_server(ctx, port).await;
 
     let missing = request(port, None, &initialize_body()).await;
     assert!(missing.starts_with("HTTP/1.1 401"), "{missing}");
@@ -98,6 +115,72 @@ async fn http_requires_a_valid_bearer_token() {
     assert!(
         !good.starts_with("HTTP/1.1 401"),
         "valid token rejected: {good}"
+    );
+
+    server.abort();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn http_accepts_tokenless_calls_when_policy_is_optional() {
+    let (root, ctx, wire) = temp_ctx(TokenPolicy::Optional);
+    let port = free_port();
+    let server = spawn_server(ctx, port).await;
+
+    let missing = request(port, None, &initialize_body()).await;
+    assert!(
+        !missing.starts_with("HTTP/1.1 401"),
+        "token-less local call rejected: {missing}"
+    );
+    assert!(!missing.is_empty(), "empty response: {missing}");
+
+    // A wrong token must never silently fall back to the trusted identity.
+    let bad = request(port, Some("Bearer mdt_bogus_secret"), &initialize_body()).await;
+    assert!(bad.starts_with("HTTP/1.1 401"), "{bad}");
+
+    let good = request(port, Some(&format!("Bearer {wire}")), &initialize_body()).await;
+    assert!(
+        !good.starts_with("HTTP/1.1 401"),
+        "valid token rejected: {good}"
+    );
+
+    server.abort();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn header_value(response: &str, name: &str) -> Option<String> {
+    response.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case(name)
+            .then(|| value.trim().to_string())
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn http_tokenless_tool_call_uses_local_identity() {
+    let (root, ctx, _) = temp_ctx(TokenPolicy::Optional);
+    let port = free_port();
+    let server = spawn_server(ctx, port).await;
+
+    let init = request(port, None, &initialize_body()).await;
+    assert!(!init.starts_with("HTTP/1.1 401"), "{init}");
+    let session = header_value(&init, "mcp-session-id");
+
+    let initialized = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+    let _ = request_with_session(port, None, session.as_deref(), initialized).await;
+
+    let call = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "server_status", "arguments": {} }
+    })
+    .to_string();
+    let response = request_with_session(port, None, session.as_deref(), &call).await;
+    assert!(!response.starts_with("HTTP/1.1 401"), "{response}");
+    assert!(
+        response.contains("local (no token)"),
+        "tool call did not see the local identity: {response}"
     );
 
     server.abort();

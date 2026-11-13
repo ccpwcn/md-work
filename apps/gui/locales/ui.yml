@@ -296,6 +296,111 @@ settings.theme:
 settings.theme_hint:
   en: "Choose a light, dark or system-following theme."
   zh-CN: "选择亮色、暗色或跟随系统。"
+theme_ext.active:
+  en: "Active theme"
+  zh-CN: "当前激活的主题"
+theme_ext.active_hint:
+  en: "Built-in themes and themes from the extension directory. Switching takes effect immediately. This is the active key in theme_extension.toml."
+  zh-CN: "包含内置主题与扩展目录中的主题，切换立即生效。对应 theme_extension.toml 中的 active 项。"
+theme_ext.builtin_light:
+  en: "Built-in Light"
+  zh-CN: "内置浅色"
+theme_ext.builtin_dark:
+  en: "Built-in Dark"
+  zh-CN: "内置深色"
+theme_ext.no_themes:
+  en: "No extension themes yet. Put a .toml theme file in %{path}"
+  zh-CN: "暂无扩展主题，把 .toml 主题文件放入 %{path} 即可自动载入"
+theme_ext.load_policy:
+  en: "Extension loading policy"
+  zh-CN: "扩展主题加载策略"
+theme_ext.load_policy_hint:
+  en: "How theme files in the extension directory are picked up. This is the load_policy key in theme_extension.toml."
+  zh-CN: "决定扩展目录中的主题文件何时被载入。对应 theme_extension.toml 中的 load_policy 项。"
+theme_ext.policy.auto:
+  en: "Auto (hot reload)"
+  zh-CN: "自动（立即载入）"
+theme_ext.policy.startup:
+  en: "Startup only"
+  zh-CN: "仅启动时"
+theme_ext.policy.disabled:
+  en: "Disabled"
+  zh-CN: "禁用扩展"
+theme_ext.fallback_policy:
+  en: "Error fallback policy"
+  zh-CN: "错误回退策略"
+theme_ext.fallback_policy_hint:
+  en: "What to do when the active theme fails to load or its file is removed. This is the fallback key in theme_extension.toml."
+  zh-CN: "激活的主题载入失败或文件被删除时如何处理。对应 theme_extension.toml 中的 fallback 项。"
+theme_ext.fallback.builtin:
+  en: "Built-in theme"
+  zh-CN: "回退内置主题"
+theme_ext.fallback.keep_current:
+  en: "Keep last good theme"
+  zh-CN: "保留上次有效主题"
+theme_ext.fallback.system:
+  en: "Follow system"
+  zh-CN: "跟随系统"
+theme_ext.tools:
+  en: "Theme tools"
+  zh-CN: "主题工具"
+theme_ext.tools_hint:
+  en: "Extension theme directory: %{path}"
+  zh-CN: "扩展主题目录：%{path}"
+theme_ext.import_zed:
+  en: "Import Zed theme"
+  zh-CN: "导入 Zed 主题"
+theme_ext.open_dir:
+  en: "Open theme folder"
+  zh-CN: "打开主题目录"
+theme_ext.rescan:
+  en: "Rescan"
+  zh-CN: "重新扫描"
+theme_ext.example:
+  en: "Create example theme"
+  zh-CN: "生成示例主题"
+theme_ext.found_ok:
+  en: "Found new theme \"%{name}\", loaded successfully"
+  zh-CN: "发现新主题「%{name}」，载入成功"
+theme_ext.found_fail:
+  en: "Found new theme \"%{name}\", failed to load: %{message}"
+  zh-CN: "发现新主题「%{name}」，载入失败：%{message}"
+theme_ext.removed:
+  en: "Extension theme \"%{name}\" was removed"
+  zh-CN: "扩展主题「%{name}」已移除"
+theme_ext.fallback_applied:
+  en: "The active theme is unavailable, the configured fallback was applied"
+  zh-CN: "当前主题不可用，已按错误回退策略切换"
+theme_ext.config_issue:
+  en: "theme_extension.toml: %{message}"
+  zh-CN: "theme_extension.toml：%{message}"
+theme_ext.config_reloaded:
+  en: "theme_extension.toml was updated and applied"
+  zh-CN: "theme_extension.toml 已更新并生效"
+theme_ext.save_failed:
+  en: "Could not save theme_extension.toml: %{message}"
+  zh-CN: "保存 theme_extension.toml 失败：%{message}"
+theme_ext.watch_failed:
+  en: "Theme directory watching unavailable: %{message}"
+  zh-CN: "主题目录监听不可用：%{message}"
+theme_ext.not_found:
+  en: "That extension theme is not loaded"
+  zh-CN: "该扩展主题尚未载入"
+theme_ext.import_prompt:
+  en: "Choose a Zed theme (.json)"
+  zh-CN: "选择 Zed 主题文件（.json）"
+theme_ext.import_ok:
+  en: "Imported %{count} Zed theme(s), converted to TOML"
+  zh-CN: "已导入 %{count} 个 Zed 主题并转换为 TOML"
+theme_ext.import_failed:
+  en: "Zed theme import failed: %{message}"
+  zh-CN: "导入 Zed 主题失败：%{message}"
+theme_ext.example_ok:
+  en: "Example theme created: %{path}"
+  zh-CN: "已生成示例主题：%{path}"
+theme_ext.example_failed:
+  en: "Could not create the example theme: %{message}"
+  zh-CN: "生成示例主题失败：%{message}"
 settings.language:
   en: "Interface language"
   zh-CN: "界面语言"
@@ -380,6 +485,21 @@ settings.autosave_on:
 settings.autosave_off:
   en: "Autosave is off"
   zh-CN: "自动保存已关闭"
+settings.bookmark_marker:
+  en: "Bookmark marker in the note tree"
+  zh-CN: "在笔记树中标记已收藏笔记"
+settings.bookmark_marker_hint:
+  en: "Choose how bookmarked notes are marked in the tree. The dot is the quietest option."
+  zh-CN: "选择已收藏笔记在笔记树中的标记方式。小圆点最不显眼。"
+settings.bookmark_marker.none:
+  en: "Hidden"
+  zh-CN: "不显示"
+settings.bookmark_marker.dot:
+  en: "Small dot"
+  zh-CN: "小圆点"
+settings.bookmark_marker.bookmark:
+  en: "Bookmark icon"
+  zh-CN: "书签图标"
 settings.windows_paths_hint:
   en: "Open the notebook folder, logs and crash reports in Explorer."
   zh-CN: "在资源管理器中打开笔记本目录、日志与崩溃报告。"
@@ -1149,8 +1269,14 @@ mcp.enable:
   en: "Run the local MCP server while MoJiān is open"
   zh-CN: "打开墨笺时启动本地 MCP 服务"
 mcp.enable_hint:
-  en: "Listens on 127.0.0.1 only. Requests without a valid bearer token are rejected with 401."
-  zh-CN: "只监听 127.0.0.1；没有有效令牌的请求一律返回 401。"
+  en: "Listens on 127.0.0.1 only. The switch below decides whether a token is mandatory; any presented token is always verified."
+  zh-CN: "只监听 127.0.0.1；是否强制令牌由下方开关决定，只要带了令牌就一定会校验。"
+mcp.require_token:
+  en: "Require a valid token for MCP connections"
+  zh-CN: "MCP 连接必须携带有效令牌"
+mcp.require_token_hint:
+  en: "Off by default: local stdio/loopback clients get full workspace access without a token, and token ACLs plus the permission tree do not apply. Turn it on to enforce token scopes and the permission tree. Changing it restarts the service."
+  zh-CN: "默认关闭：本地 stdio / 回环 HTTP 客户端无需令牌即可访问整个工作区，令牌 ACL 与权限树不再生效；开启后按令牌 scopes 与权限树限制。切换会重启服务。"
 mcp.port:
   en: "Port"
   zh-CN: "端口"
@@ -1302,8 +1428,8 @@ mcp.clients:
   en: "Client configuration"
   zh-CN: "客户端配置"
 mcp.snippet_hint:
-  en: "HTTP endpoint %{url} with an Authorization: Bearer header; stdio example below."
-  zh-CN: "HTTP 端点为 %{url}，需携带 Authorization: Bearer 头；stdio 示例见下。"
+  en: "HTTP endpoint %{url}; the stdio example is below. Token fields are included only when the server requires one."
+  zh-CN: "HTTP 端点为 %{url}，stdio 示例见下；仅当服务要求令牌时片段才带令牌字段。"
 mcp.token_placeholder:
   en: "mdt_<token id>_<secret shown on creation>"
   zh-CN: "mdt_<令牌ID>_<创建时显示的密钥>"
@@ -1353,8 +1479,14 @@ mcp.snippet_hint_http:
   en: "The GUI runs an HTTP server at %{url}; paste a token into the Authorization header."
   zh-CN: "GUI 启动的是 HTTP 服务 %{url}，把令牌填进 Authorization 头即可。"
 mcp.snippet_hint_stdio:
-  en: "stdio is launched directly by the client and does not use the switch above."
-  zh-CN: "stdio 由客户端直接拉起命令行，不受上方开关控制。"
+  en: "stdio is launched directly by the client; it ignores the server on/off switch and follows the CLI's token policy."
+  zh-CN: "stdio 由客户端直接拉起命令行，不受「启动本地 MCP 服务」开关控制；令牌策略以 CLI 配置为准。"
+mcp.snippet_hint_http_no_token:
+  en: "The GUI runs an HTTP server at %{url}; no token is needed while the requirement switch is off."
+  zh-CN: "GUI 启动的是 HTTP 服务 %{url}；未开启「必须携带令牌」时无需配置令牌。"
+mcp.snippet_hint_stdio_no_token:
+  en: "stdio is launched directly by the client; no MDWORK_TOKEN is needed unless the CLI requires one."
+  zh-CN: "stdio 由客户端直接拉起命令行；未要求令牌时无需配置 MDWORK_TOKEN。"
 mcp.apply_port:
   en: "Apply port"
   zh-CN: "应用端口"
@@ -1517,6 +1649,9 @@ tree.updated_at:
 tree.contains_notes:
   en: "Contains %{count} notes"
   zh-CN: "包含 %{count} 篇笔记"
+tree.bookmarked:
+  en: "Bookmarked"
+  zh-CN: "已加入书签"
 tabs.close:
   en: "Close"
   zh-CN: "关闭"

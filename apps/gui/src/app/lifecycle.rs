@@ -297,20 +297,26 @@ impl AppShell {
                     let mut guard = pending.lock().expect("pending paths lock");
                     std::mem::take(&mut *guard)
                 };
-                let disk: Vec<PathBuf> = this
+                let (disk, theme_paths): (Vec<PathBuf>, Vec<PathBuf>) = this
                     .read_with(cx, |this, _| {
-                        let Some(rx) = &this.changed else {
-                            return Vec::new();
-                        };
-                        let rx = rx.lock().expect("watcher receiver lock");
-                        let mut paths = Vec::new();
-                        while let Ok(batch) = rx.try_recv() {
-                            paths.extend(batch);
+                        let mut disk = Vec::new();
+                        if let Some(rx) = &this.changed {
+                            let rx = rx.lock().expect("watcher receiver lock");
+                            while let Ok(batch) = rx.try_recv() {
+                                disk.extend(batch);
+                            }
                         }
-                        paths
+                        let mut theme = Vec::new();
+                        if let Some(rx) = &this.theme_changed {
+                            let rx = rx.lock().expect("theme watcher receiver lock");
+                            while let Ok(batch) = rx.try_recv() {
+                                theme.extend(batch);
+                            }
+                        }
+                        (disk, theme)
                     })
                     .unwrap_or_default();
-                if paths.is_empty() && disk.is_empty() {
+                if paths.is_empty() && disk.is_empty() && theme_paths.is_empty() {
                     continue;
                 }
                 let Ok(handle) = this.read_with(cx, |this, _| this.window_handle) else {
@@ -328,6 +334,9 @@ impl AppShell {
                         }
                         if !disk.is_empty() {
                             this.handle_external_changes(disk, window, cx);
+                        }
+                        if !theme_paths.is_empty() {
+                            this.handle_theme_paths(theme_paths, window, cx);
                         }
                         cx.notify();
                     });

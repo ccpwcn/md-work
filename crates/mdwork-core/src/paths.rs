@@ -12,6 +12,10 @@ pub const NOTEBOOK_FILE_LEGACY: &str = "notebook.json";
 pub const CORE_CONFIG_FILE: &str = "core.toml";
 pub const RUNTIME_CONFIG_FILE: &str = "runtime.toml";
 pub const THEME_CONFIG_FILE: &str = "theme.toml";
+/// Main configuration file for the pluggable theme system.
+pub const THEME_EXTENSION_FILE: &str = "theme_extension.toml";
+/// Directory (relative to the user config root) holding extension themes.
+pub const THEMES_DIR: &str = "themes";
 
 pub fn documents_dir() -> Result<PathBuf> {
     if let Some(path) = known_folders::get_known_folder_path(known_folders::KnownFolder::Documents)
@@ -52,6 +56,36 @@ pub fn runtime_config_path() -> PathBuf {
 
 pub fn theme_config_path() -> PathBuf {
     config_dir().join(THEME_CONFIG_FILE)
+}
+
+/// Cross-platform `~/.config/md-work`, the home of the theme extension system.
+///
+/// On Windows `~` is `%USERPROFILE%`; on Unix `XDG_CONFIG_HOME` wins over
+/// `$HOME/.config`. `MDWORK_THEME_HOME` overrides everything (used by tests and
+/// by users who keep their dotfiles in a custom location).
+pub fn user_config_root() -> PathBuf {
+    if let Some(dir) = std::env::var_os("MDWORK_THEME_HOME") {
+        return PathBuf::from(dir);
+    }
+    #[cfg(not(windows))]
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(dir).join(crate::APP_SLUG);
+    }
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    match home {
+        Some(home) => PathBuf::from(home).join(".config").join(crate::APP_SLUG),
+        None => PathBuf::from(".config").join(crate::APP_SLUG),
+    }
+}
+
+/// `~/.config/md-work/theme_extension.toml`.
+pub fn theme_extension_config_path() -> PathBuf {
+    user_config_root().join(THEME_EXTENSION_FILE)
+}
+
+/// `~/.config/md-work/themes` — watched for new extension theme files.
+pub fn extension_themes_dir() -> PathBuf {
+    user_config_root().join(THEMES_DIR)
 }
 
 /// Primary config path. [`crate::AppConfig::save_to`] treats it as the

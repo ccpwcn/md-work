@@ -9,7 +9,7 @@
 
 ## 一、项目简介
 
-**当前版本：1.2.7**。Windows 优先的纯 Rust Markdown 笔记本——为 AI 时代的笔记与文档工作流而生。
+**当前版本：1.3.0**。Windows 优先的纯 Rust Markdown 笔记本——为 AI 时代的笔记与文档工作流而生。
 
 版本号以根目录 `Cargo.toml` 的 `[workspace.package].version` 为唯一来源；各 crate、CLI `--version`、设置页、Windows 资源 VERSIONINFO、NSIS 安装包与标签 `v*` 均与之对齐。镜像仓库：[Gitee](https://gitee.com/ccpwcn/md-work)。
 
@@ -73,13 +73,13 @@
 
 | 产物 | 说明 |
 | --- | --- |
-| `md-work-1.2.7-setup.exe` | NSIS 安装包（推荐） |
-| `md-work-1.2.7-win64.zip` | 便携版，解压即用 |
+| `md-work-1.3.0-setup.exe` | NSIS 安装包（推荐） |
+| `md-work-1.3.0-win64.zip` | 便携版，解压即用 |
 
 ### 安装
 
 - **安装包**：双击 `md-work-*-setup.exe`，按提示选择工作区（默认 `我的文档\md-work`）。安装到当前用户目录，**不需要管理员权限**，不写 HKLM，也不会静默抢走 `.md` 的默认打开方式。
-- **静默安装**：`md-work-1.2.7-setup.exe /S`（不弹页面，使用默认工作区）。
+- **静默安装**：`md-work-1.3.0-setup.exe /S`（不弹页面，使用默认工作区）。
 - **便携版**：解压 zip 后直接运行 `md-work.exe`。
 
 安装目录（按用户）：`%LOCALAPPDATA%\Programs\md-work`。
@@ -89,7 +89,7 @@
 1. 启动后选择或确认工作区（磁盘上的普通文件夹）。
 2. 在工作区里新建笔记本与笔记，开始写 Markdown。
 3. `Ctrl+T` 切换编辑 / 预览；`Ctrl+Shift+P` 打开命令面板。
-4. 需要给 AI 用时：设置 → MCP，生成令牌并启用本机 HTTP，再把地址与令牌配到客户端。
+4. 需要给 AI 用时：设置 → MCP 启用本机 HTTP，复制客户端配置片段即可（默认无需令牌）；要按令牌限制权限时再打开「必须携带令牌」并生成令牌。
 
 常用快捷键：
 
@@ -130,7 +130,7 @@
 - **崩溃恢复**：编辑中途异常退出时，下次启动可从快照恢复未保存内容；保存后自动清理快照。
 - **崩溃上报**：崩溃日志默认只保存在本地；在运行配置中填入 Gitee 令牌后，启动时若网络可用且有历史崩溃记录，会自动在 Gitee 仓库创建 Issue 并附上崩溃日志（不含笔记内容）。令牌也可用环境变量 `MDWORK_GITEE_TOKEN` 提供，上传失败不影响启动。
 - **图片**：本地 `assets/` 图床（可配置通用 HTTP / PicGo 兼容接口），图片写入限制在笔记本 `assets/` 内。
-- **MCP**：stdio 与 Streamable HTTP（仅 `127.0.0.1`），默认拒绝（无令牌返回 401），DPAPI 加密令牌，按笔记本/笔记的 ACL、glob 允许/拒绝，审计 JSONL 不记录笔记正文。
+- **MCP**：stdio 与 Streamable HTTP（仅 `127.0.0.1`），令牌默认可选（本机连接无需令牌）；需要细粒度授权时可开启「必须携带令牌」，DPAPI 加密令牌，按笔记本/笔记的 ACL、glob 允许/拒绝与四级权限树限制，审计 JSONL 不记录笔记正文。
 - **单实例**：二次启动会把文件路径转发给已运行实例；不静默修改 Windows `.md` 默认应用。
 - **通知中心**：标题栏铃铛显示未读数，普通消息、警告与错误按主题色区分，可全部已读或清空。
 
@@ -153,15 +153,18 @@
 
 ### MCP
 
-1. 打开 设置 → MCP，生成令牌并启用 HTTP 服务（默认端口 `11026`）。
-2. 客户端连接 `http://127.0.0.1:11026/mcp`，使用 `Authorization: Bearer <令牌>`。
-3. 无令牌或令牌错误返回 401；超出 ACL 的笔记本/笔记返回 403；GUI 中有未保存修改的笔记默认拒写。
+1. 打开 设置 → MCP，启用 HTTP 服务（默认端口 `11026`），复制「客户端接入」片段。
+2. 客户端连接 `http://127.0.0.1:11026/mcp`，默认无需任何令牌。
+3. 需要按笔记本/笔记限制可见范围时，打开「必须携带令牌」，生成令牌并改用带 `Authorization: Bearer <令牌>` 的片段；此时无/错令牌返回 401，超出 ACL 返回 `-32003 FORBIDDEN`。GUI 中有未保存修改的笔记默认拒写。
 
-也可以用 stdio：
+也可以用 stdio（同样默认无需令牌）：
 
 ```powershell
 md-work-cli mcp serve --stdio
+md-work-cli mcp serve --stdio --require-token   # 强制要求 env.MDWORK_TOKEN
 ```
+
+命令行 `--require-token` / `--no-require-token` 与环境变量 `MDWORK_REQUIRE_TOKEN` 可覆盖主程序设置，详见 `doc/mcp.md`。
 
 ### CLI
 
@@ -217,8 +220,8 @@ cargo test --workspace
 
 ```powershell
 cargo run -p xtask -- icon        # 由 SVG 生成软件图标和安装包图标
-cargo run -p xtask -- package     # release 构建 → dist/md-work-1.2.7-win64/ 与 .zip
-cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.2.7-setup.exe
+cargo run -p xtask -- package     # release 构建 → dist/md-work-1.3.0-win64/ 与 .zip
+cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.3.0-setup.exe
 ```
 
 `installer` 需要 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH、`NSIS_HOME`、`E:\apps\nsis` 或默认 Program Files 目录）。安装脚本位于 `packaging/nsis/md-work.nsi`，按用户安装、HKCU 卸载信息、卸载时保留笔记与设置。安装程序包含「选择工作区」页面（默认 `我的文档\md-work`），首次安装时把所选文件夹写入 `HKCU\Software\md-work\WorkspaceRoot`；应用只在 `config\runtime.toml`（以及旧版 `config.json`）尚无工作区时采用该值，随后写回完整配置，升级不会覆盖现有设置。支持 `/S` 静默安装（不弹页面，直接使用默认工作区）。

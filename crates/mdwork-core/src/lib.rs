@@ -18,6 +18,7 @@ pub mod permissions;
 pub mod recovery;
 pub mod search;
 pub mod text;
+pub mod theme_ext;
 pub mod toml_io;
 pub mod watch;
 pub mod workspace;
@@ -27,7 +28,7 @@ pub use ai::{
     AiMessage, AiProvider, AiRole, AiUsage, CompletionRequest, CompletionResponse, ProviderRegistry,
 };
 pub use bookmarks::{Bookmark, Bookmarks};
-pub use config::{AppConfig, Session, ThemePreference};
+pub use config::{AppConfig, BookmarkMarker, Session, ThemePreference};
 pub use dirty::{DirtyDoc, DirtyState};
 pub use doc::{DecodedDoc, EncodingHint, Eol, TextEncoding};
 pub use image::{ImageHost, ImageKind};

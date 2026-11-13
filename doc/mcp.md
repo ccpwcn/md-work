@@ -1,6 +1,6 @@
 # 墨笺 MCP 服务与工具使用说明
 
-> 适用版本：v1.2.4+；验证日期：2026-11-08；平台：Windows 10/11 x64。
+> 适用版本：v1.2.4+（v1.3.0 起令牌默认可选）；验证日期：2026-11-08；平台：Windows 10/11 x64。
 > 本文说明 `md-work-cli.exe` 提供的 MCP 服务（stdio / Streamable HTTP）、AI Agent 如何发现并使用它的能力，以及配置与排障时的注意事项。
 > 相关源码：`apps/cli/src/main.rs`、`crates/mdwork-mcp/`、`crates/mdwork-core/src/{permissions,mcp_permissions}.rs`、`apps/gui/src/app/mcp_settings.rs`。
 
@@ -15,8 +15,8 @@
 | `initialize` | `capabilities.tools`、`capabilities.resources`、`instructions`（服务用途、写入需带 sha256、删除默认进回收站等约定）、`protocolVersion` | 正常，`2025-06-18` |
 | `tools/list` | 14 个工具，每个都有 `description`、`inputSchema`、`outputSchema`、`annotations` | 正常，14 个 |
 | `resources/templates/list` | 笔记资源 URI 模板 `mdwork://notebook/{notebook_id}/note/{note_path}` | 正常，1 个 |
-| `resources/list` / `resources/read` | 当前令牌可见的笔记列表与 Markdown 原文 | 正常 |
-| `tools/call` → `server_status` | 当前令牌的 `scopes`、`workspace_root`、版本、笔记本数量 | 正常，可用于自检 |
+| `resources/list` / `resources/read` | 当前调用者可见的笔记列表与 Markdown 原文 | 正常 |
+| `tools/call` → `server_status` | 当前调用者身份（`token_name`）、`scopes`、`workspace_root`、版本、笔记本数量 | 正常，可用于自检；无令牌时 `token_name` 为 `local (no token)` |
 
 stdio 实测完成 `initialize` → `tools/list` → `tools/call`（`server_status`、`list_notebooks`、`write_note`、`read_note`）→ `resources/list` → `resources/read`；Streamable HTTP 实测完成 `initialize` → `tools/list` → `tools/call`（`server_status`）→ `resources/list`，均返回预期结果。`cargo test -p mdwork-mcp -p md-work-cli` 全部通过。
 
@@ -41,14 +41,19 @@ md-work-cli.exe        对外 CLI：mcp serve / export / search / notebook ...
 ### 1. 命令
 
 ```powershell
-md-work-cli.exe mcp serve --stdio                  # stdio 传输（不传任何参数时也是 stdio）
-md-work-cli.exe mcp serve --http                  # Streamable HTTP，默认端口 11026
-md-work-cli.exe mcp serve --http --port 12000     # 指定端口
-md-work-cli.exe --version                         # md-work-cli 1.2.4
+md-work-cli.exe mcp serve --stdio                    # stdio 传输（不传任何参数时也是 stdio）
+md-work-cli.exe mcp serve --http                    # Streamable HTTP，默认端口 11026
+md-work-cli.exe mcp serve --http --port 12000       # 指定端口
+md-work-cli.exe mcp serve --stdio --require-token   # stdio 强制要求 MDWORK_TOKEN
+md-work-cli.exe mcp serve --http --no-require-token # HTTP 明确允许无令牌（默认）
+md-work-cli.exe --version                           # md-work-cli 1.2.4
 ```
 
 - `--stdio` 与 `--http` 互斥；`--port` 仅对 HTTP 生效，默认 `11026`。
-- HTTP 只绑定 `127.0.0.1`，端点为 `http://127.0.0.1:<port>/mcp`；端口被占用时明确报错，不会静默换端口。启动时会在 stderr 打印监听地址；**stdout 专用于 stdio 协议**，日志一律走 stderr 与文件（`%LOCALAPPDATA%\md-work\logs`）。
+- **令牌默认非必须**：stdio 与只监听 `127.0.0.1` 的 HTTP 都是本机通道，不带令牌即可连接，此时按「本地可信」处理（见下文「令牌策略」）。
+- 需要继续用令牌做细粒度授权时，用 `--require-token` 强制要求；`--no-require-token` 显式关闭，两者互斥。环境变量 `MDWORK_REQUIRE_TOKEN=1|0`（也接受 `true/false`、`required/optional`）可覆盖主程序配置，但优先级低于命令行参数。
+- 只要带了令牌就一定会校验：stdio 用 `env.MDWORK_TOKEN`，HTTP 用 `Authorization: Bearer <token>`；令牌无效/已吊销不会静默降级为无令牌访问，而是启动失败 / HTTP `401`。
+- HTTP 只绑定 `127.0.0.1`，端点为 `http://127.0.0.1:<port>/mcp`；端口被占用时明确报错，不会静默换端口。启动时会在 stderr 打印监听地址与令牌策略；**stdout 专用于 stdio 协议**，日志一律走 stderr 与文件（`%LOCALAPPDATA%\md-work\logs`）。
 - 独立运行的 HTTP 服务用 `Ctrl+C` 结束；由 GUI 拉起时，GUI 还传入 `MDWORK_PARENT_PID`，GUI 退出会自动结束子进程。
 
 ### 2. 两种服务模型
@@ -58,11 +63,24 @@ md-work-cli.exe --version                         # md-work-cli 1.2.4
 | 启动者 | 勾选「设置 → MCP → 服务」开关后由 GUI 启动子进程 | AI 客户端直接拉起 CLI |
 | 生命周期 | 仅在 GUI 运行且开关打开期间可用 | 随客户端会话启停，不受 GUI 开关控制 |
 | 工作区 | GUI 显式传入 `MDWORK_WORKSPACE`，避免读到刚切换前的旧配置 | 由环境变量/GUI 配置决定 |
-| 鉴权 | 每个请求带 `Authorization: Bearer <token>` | 启动时通过 `env.MDWORK_TOKEN` 传入 |
+| 鉴权 | 默认无需令牌；开启「必须携带令牌」后每个请求带 `Authorization: Bearer <token>` | 默认无需令牌；要求令牌时通过 `env.MDWORK_TOKEN` 传入 |
 
 GUI 默认不启动 HTTP 服务（`mcp_http = false`），端口默认 `11026`。stdio 与 CLI 自带的 HTTP 都可以在无 GUI 场景下独立运行。
 
-### 3. 工作区解析顺序
+### 3. 令牌策略（v1.3.0+）
+
+| 取值 | 效果 |
+| --- | --- |
+| 可选（默认） | 未带令牌的连接视为「本地可信」：拥有全部 scope、可访问全部笔记本/笔记，**令牌 ACL 与权限树都不生效**（权限树默认全隐藏，不绕过会让纯 CLI 场景什么都看不到）。带令牌的连接仍按令牌 ACL + 权限树严格限制。 |
+| 必须 | 与 v1.2.6 及以前一致：stdio 未设 `MDWORK_TOKEN` 启动即失败，HTTP 无/错令牌返回 `401`，工具调用按 scopes、笔记本白名单、路径 glob 与权限树约束。 |
+
+优先级（高 → 低）：命令行 `--require-token` / `--no-require-token` → 环境变量 `MDWORK_REQUIRE_TOKEN` → 主程序设置 → 默认「可选」。
+
+主程序开关：设置 → MCP → 服务 → 「MCP 连接必须携带有效令牌」，写入 `config/runtime.toml` 的 `[general] mcp_require_token`。切换会重启 GUI 托管的 HTTP 子进程；stdio 由客户端自行拉起 CLI，按其参数/环境/配置决定。GUI 生成的两段客户端配置片段会随开关自动省略或带上令牌字段。
+
+> 安全提示：本地可信等于把笔记本的完整读写权限交给本机任何能连到该端点（或能拉起 CLI）的进程。需要按笔记本/路径限制可见范围、或不想让其它本机程序访问时，请打开「必须携带令牌」并在权限页授权。两种模式都只监听 `127.0.0.1` / 使用进程管道，不要做端口转发。
+
+### 4. 工作区解析顺序
 
 1. 环境变量 `MDWORK_WORKSPACE`；
 2. `%LOCALAPPDATA%\md-work\config\core.toml` 中 GUI 保存的 `workspace_root`；
@@ -72,9 +90,11 @@ GUI 默认不启动 HTTP 服务（`mcp_http = false`），端口默认 `11026`�
 
 ---
 
-## 三、准备工作（推荐用 GUI 完成）
+## 三、准备工作
 
-CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建。
+**默认（令牌可选）无需生成令牌**：装好 CLI，把第四节的片段粘进客户端即可连接；独立运行 stdio 时建议显式设置 `MDWORK_WORKSPACE`。
+
+只有打开「必须携带令牌」、需要按令牌限制权限时，才用 GUI 完成下面的配置。CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建。
 
 1. **新建令牌**：设置 → MCP → 令牌 → 新建令牌。
    - 名称自定义；scopes 默认只勾 `read`、`search`；
@@ -85,17 +105,45 @@ CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建�
    - **默认全部隐藏**；新建笔记本、文件夹、笔记同样默认隐藏，需要重新授权；
    - 变更即时保存，但**只对新建的 MCP 会话生效**，已连接的客户端要重连；
    - 有效权限取自身与全部祖先的最小值，隐藏的父节点会隐藏整棵子树。
-3. **启用 HTTP 服务**（仅 HTTP 方式需要）：设置 → MCP → 服务，打开开关、确认端口、点「应用」。状态栏显示 `MCP :<端口>`。
-4. **复制客户端配置**：服务页下方有「HTTP / stdio」两个标签与复制按钮，直接把生成的 `mcpServers` JSON 粘到 AI 客户端配置里。刚创建或轮换令牌时片段里是真实令牌，否则显示占位符 `mdt_<令牌ID>_<创建时显示的密钥>`。
-5. **审计**：设置 → MCP → 审计，查看最近的工具调用（不记录笔记正文）。
+3. **启用 HTTP 服务**（仅 HTTP 方式需要）：设置 → MCP → 服务，打开开关、确认端口、点「应用」；需要令牌时再打开「MCP 连接必须携带有效令牌」。状态栏显示 `MCP :<端口>`。
+4. **复制客户端配置**：服务页下方有「HTTP / stdio」两个标签与复制按钮，直接把生成的 `mcpServers` JSON 粘到 AI 客户端配置里。开关关闭时片段不含任何令牌字段；开启时，刚创建或轮换令牌会填入真实令牌，否则显示占位符 `mdt_<令牌ID>_<创建时显示的密钥>`。
+5. **审计**：设置 → MCP → 审计，查看最近的工具调用（不记录笔记正文）；无令牌调用的 `token_name` 为 `local (no token)`，`token_id` 为空。
 
-> 权限是**两层取交集**：令牌的 scopes / 笔记本白名单 / 路径 glob，再加上权限页的四级权限树。少配一层，Agent 就会看到空列表或收到 `FORBIDDEN`。
+> 带令牌时权限是**两层取交集**：令牌的 scopes / 笔记本白名单 / 路径 glob，再加上权限页的四级权限树；少配一层，Agent 就会看到空列表或收到 `FORBIDDEN`。未带令牌的本地可信连接不经过这两层，见「令牌策略」。
 
 ---
 
 ## 四、客户端配置
 
+**默认「令牌可选」**：下面两组片段不含任何令牌字段，粘上即可连。若在主程序打开了「必须携带令牌」，改用本节「要求令牌时」的片段。
+
 ### HTTP（推荐，GUI 运行期间可用）
+
+```json
+{
+  "mcpServers": {
+    "md-work": {
+      "type": "http",
+      "url": "http://127.0.0.1:11026/mcp"
+    }
+  }
+}
+```
+
+### stdio（不依赖 GUI 是否打开）
+
+```json
+{
+  "mcpServers": {
+    "md-work": {
+      "command": "C:\\Users\\<user>\\AppData\\Local\\Programs\\md-work\\md-work-cli.exe",
+      "args": ["mcp", "serve", "--stdio"]
+    }
+  }
+}
+```
+
+### 要求令牌时（打开开关）
 
 ```json
 {
@@ -108,8 +156,6 @@ CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建�
   }
 }
 ```
-
-### stdio（不依赖 GUI 是否打开）
 
 ```json
 {
@@ -126,8 +172,9 @@ CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建�
 要点：
 
 - `command` 建议写绝对路径；安装版默认在 `%LOCALAPPDATA%\Programs\md-work\md-work-cli.exe`。
-- stdio 通过 `env.MDWORK_TOKEN` 传令牌；缺少令牌或令牌无效时 CLI 启动即退出，错误写入日志/stderr。
-- HTTP 方式**每个请求**都要带 `Authorization` 头；无令牌或错令牌返回 HTTP `401` 并带 `WWW-Authenticate: Bearer realm="md-work"`。
+- 默认无令牌时按本地可信处理：全部 scope、全部笔记本与笔记，令牌 ACL 与权限树不生效；需要限制可见范围请打开开关并用带令牌片段。
+- 只要片段里写了令牌就会严格校验：stdio 用 `env.MDWORK_TOKEN`，HTTP 用 `Authorization: Bearer`。可选模式下写错令牌也**不会**降级为无令牌，而是启动失败 / `401`。
+- 要求令牌时，stdio 缺少/无效令牌 CLI 启动即退出；HTTP **每个请求**都要带 `Authorization` 头，无令牌或错令牌返回 `401` 并带 `WWW-Authenticate: Bearer realm="md-work"`。
 - 含令牌的配置等同于笔记本读写权限，不要提交到仓库或共享；令牌库用 DPAPI 加密，绑定当前 Windows 用户，换用户/换机器后原令牌不可用。
 - 客户端、CLI、GUI 应保持同一版本（导出等功能对版本不一致有明确报错）。
 
@@ -144,7 +191,7 @@ CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建�
   "protocolVersion": "2025-06-18",
   "capabilities": { "tools": {}, "resources": {} },
   "serverInfo": { "name": "rmcp", "version": "3.7.0" },
-  "instructions": "MoJiān (墨笺) notebook server. All calls use the token's notebook and path ACL. Notes are UTF-8/GBK text; write_note expects the sha256 returned by read_note. Deletes go to the notebook trash unless delete:permanent is granted."
+  "instructions": "MoJiān (墨笺) notebook server. When a token is presented, calls use its notebook and path ACL plus the permission tree; local connections without a token have full workspace access. Notes are UTF-8/GBK text; write_note expects the sha256 returned by read_note. Deletes go to the notebook trash unless delete:permanent is granted."
 }
 ```
 
@@ -171,7 +218,7 @@ CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建�
 | 工具 | 作用 | 所需 scope | 主要参数 |
 | --- | --- | --- | --- |
 | `server_status` | 版本、工作区根、笔记本数、令牌名称与 scopes（**无需 scope**，建议作为连通性自检第一步） | — | 无 |
-| `list_notebooks` | 列出令牌可访问且权限树未隐藏的笔记本 | `read` | 无 |
+| `list_notebooks` | 列出当前调用者可访问的笔记本（无令牌时为全部） | `read` | 无 |
 | `notebook_info` | 笔记本元数据与可见笔记/文件夹统计 | `read` | `notebook_id` |
 | `list_notes` | 列出笔记与文件夹，可按 `folder` 过滤；隐藏项不返回 | `read` | `notebook_id`, `folder?` |
 | `read_note` | 读取笔记（可按行范围），返回编码、EOL、BOM、`sha256` | `read` | `notebook_id`, `path`, `offset?`, `limit?`（默认 400 行，上限 5000） |
@@ -191,7 +238,7 @@ CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建�
 
 - 模板：`mdwork://notebook/{notebook_id}/note/{note_path}`（`note_path` 需百分号编码）。
 - 实际 URI：`mdwork://notebook/<uuid 无连字符>/note/<编码后的相对路径>`，例如 `mdwork://notebook/728dc7e7da9b4c679cc84001c6fd17fc/note/probe.md`。
-- `resources/list` 最多返回 500 条，且只列令牌 ACL 与权限树都允许的笔记；`resources/read` 返回 `text/markdown` 原文。
+- `resources/list` 最多返回 500 条，只列当前调用者可访问的笔记（带令牌时须 ACL 与权限树都允许）；`resources/read` 返回 `text/markdown` 原文。
 - 大工作区请用 `list_notes` / `search_notes` 定位，不要依赖 `resources/list` 遍历全部。
 
 ### 5. 建议的调用顺序
@@ -228,13 +275,15 @@ CLI 本身**不提供生成令牌的子命令**，令牌必须在 GUI 中创建�
 | `export` | `export_note` |
 | `admin` | 覆盖以上全部 scope（仍受笔记本/路径 ACL 与权限树约束） |
 
+> 以上 scope 只对**带令牌**的连接生效；无令牌的本地可信连接相当于同时拥有全部 7 个 scope，且不受笔记本/路径 ACL 与权限树约束。
+
 ### 2. 错误码
 
-HTTP 层无令牌/错令牌直接是 `401`；工具层的越权与业务错误是 JSON-RPC error，`data.code` 为下列标签：
+「必须携带令牌」模式下，HTTP 层无令牌/错令牌直接是 `401`；「可选」模式下只有**带了错令牌**才是 `401`，不带令牌直接放行。工具层的越权与业务错误是 JSON-RPC error，`data.code` 为下列标签：
 
 | code | 标签 | 含义 |
 | --- | --- | --- |
-| `-32001` | `UNAUTHORIZED` | 令牌缺失/无效（stdio 未设 `MDWORK_TOKEN` 会在启动阶段报错） |
+| `-32001` | `UNAUTHORIZED` | 无有效调用身份（「必须携带令牌」且 stdio 未设 `MDWORK_TOKEN` 时在启动阶段报错；HTTP 缺/错令牌为 `401`） |
 | `-32002` | `NOT_FOUND` | 笔记本或笔记不存在 |
 | `-32003` | `FORBIDDEN` | 缺少 scope、笔记本/路径被 ACL 或权限树拒绝 |
 | `-32009` | `CONFLICT` | 目标已存在，或 `expected_sha256` 不匹配 |
@@ -262,16 +311,16 @@ HTTP 层无令牌/错令牌直接是 `401`；工具层的越权与业务错误�
 
 ## 七、注意事项（务必逐条确认）
 
-1. **三处默认拒绝**：MCP HTTP 服务默认关闭；无令牌返回 401；权限树默认全部隐藏。生成令牌、勾选笔记本、在权限页授权、打开服务开关，缺一不可。
-2. **工具清单不等于可用清单**：`tools/list` 永远返回 14 个工具。Agent 应先 `server_status` 看 `scopes`，再决定调用范围；越权调用返回 `-32003`，而不是「工具不存在」。
-3. **权限变更需要重连**：服务在建立会话时加载权限快照，GUI 中改权限/令牌后，已连接的客户端要断开重连才生效。
-4. **新节点默认隐藏**：新建笔记本、文件夹、笔记后要重新授权；重命名/移动会迁移对应的权限记录。
+1. **默认值**：MCP HTTP 服务默认关闭；令牌默认可选，未带令牌的本地连接拥有工作区全部权限；权限树默认全部隐藏，但只在**带令牌**时生效。需要限制 Agent 可见范围时，打开「必须携带令牌」，再生成令牌、勾选笔记本、在权限页授权、打开服务开关。
+2. **工具清单不等于可用清单**：`tools/list` 永远返回 14 个工具。Agent 应先 `server_status` 看 `scopes`，再决定调用范围；带令牌时越权调用返回 `-32003`，而不是「工具不存在」。无令牌连接 `token_name` 为 `local (no token)`，`scopes` 为全部 7 项。
+3. **权限变更需要重连**：服务在建立会话时加载权限快照，GUI 中改权限/令牌后，已连接的客户端要断开重连才生效；切换「必须携带令牌」开关会直接重启服务。
+4. **新节点默认隐藏**（仅带令牌连接）：新建笔记本、文件夹、笔记后要重新授权；重命名/移动会迁移对应的权限记录。
 5. **令牌只显示一次**：明文只在创建/轮换时出现，令牌库只存哈希且用当前用户的 DPAPI 加密；换 Windows 用户、换机器、把 `tokens.bin` 拷走都不可用。含令牌的 `mcpServers` 配置不要提交到仓库、贴到公开场合；stdio 方式下令牌会出现在子进程的 `env` 中。
 6. **服务标识**：客户端可能把服务显示成 `rmcp 3.7.0`（`serverInfo` 未定制）；用 `instructions` 或 `server_status.name` 判断是不是墨笺。工具描述与 instructions 为英文。
 7. **stdio 的 stdout 是协议通道**：CLI 日志走 stderr 与文件。不要给 `command` 套会往 stdout 打印内容的包装脚本，否则 JSON-RPC 帧会被污染。
-8. **HTTP 是 Streamable HTTP**：需要 `Content-Type: application/json`、`Accept: application/json, text/event-stream`，`initialize` 响应头的 `Mcp-Session-Id` 要带回后续请求；**每个请求**都要带 `Authorization` 头。仅监听 `127.0.0.1`，不要做端口转发或改绑到公网地址。
+8. **HTTP 是 Streamable HTTP**：需要 `Content-Type: application/json`、`Accept: application/json, text/event-stream`，`initialize` 响应头的 `Mcp-Session-Id` 要带回后续请求；要求令牌时**每个请求**都要带 `Authorization` 头（可选模式下不带令牌即可，带了错令牌仍 `401`）。仅监听 `127.0.0.1`，不要做端口转发或改绑到公网地址。
 9. **写保护**：GUI 有未保存修改时拒写（`DOC_DIRTY`）；写前用 `read_note` 取 `sha256` 并作为 `expected_sha256` 传入，避免并发覆盖；路径一律按笔记本内相对路径规范化，逃逸会被拒。删除默认进回收站，永久删除必须显式授予 `delete:permanent`。
-10. **隐蔽过滤**：`list_notebooks`、`list_notes`、`search_notes`、`list_bookmarks`、`resources/list` 都会按 ACL 与权限树过滤，连隐藏笔记的数量/名字都不会泄露；返回空列表时先检查权限页，而不是怀疑工作区为空。
+10. **隐蔽过滤**（带令牌连接）：`list_notebooks`、`list_notes`、`search_notes`、`list_bookmarks`、`resources/list` 都会按 ACL 与权限树过滤，连隐藏笔记的数量/名字都不会泄露；返回空列表时先检查权限页，而不是怀疑工作区为空。无令牌的本地可信连接不经过这两层，返回工作区全量内容。
 11. **端口与生命周期**：端口占用会明确报错，不自动改端口；GUI 关闭开关或退出后 HTTP 连接立即不可用，stdio 不受影响。CLI 与 GUI 版本需一致。
 12. **能力边界**：无 `prompts`、采样、资源订阅等可选能力；`resources/list` 上限 500 条；导出依赖本地 Typst 组件，失败返回 `EXPORT_FAILED`。
 
@@ -279,13 +328,13 @@ HTTP 层无令牌/错令牌直接是 `401`；工具层的越权与业务错误�
 
 ## 八、手工排查
 
-先用最简单的连通性检查（应返回 401）：
+先用最简单的连通性检查（默认「令牌可选」下不再是 `401`；打开「必须携带令牌」后才应返回 `401`）：
 
 ```powershell
 curl.exe -i http://127.0.0.1:11026/mcp
 ```
 
-手工发 MCP 消息时，等价的 HTTP 请求形态（实测可用）如下：
+手工发 MCP 消息时，等价的 HTTP 请求形态（实测可用）如下；`Authorization` 行只在「必须携带令牌」或主动用令牌限制权限时需要：
 
 ```http
 POST /mcp HTTP/1.1
@@ -303,10 +352,11 @@ Content-Length: ...
 
 | 现象 | 常见原因 | 处理 |
 | --- | --- | --- |
-| stdio 客户端一启动就断开 | 未设 `MDWORK_TOKEN`，或令牌无效/已吊销 | 在 GUI 重新生成令牌并写入 `env` |
-| HTTP 全部 `401` | 缺 `Authorization` 头、令牌写错、令牌库不属于当前用户 | 核对片段里的令牌；必要时轮换 |
-| `tools/list` 有工具，调用却 `-32003` | scope 不够、笔记本未勾选、glob 拒绝、权限树隐藏 | 用 `server_status` 看 scopes；检查令牌与权限页 |
-| 笔记本列表为空 / 资源为空 | 权限树默认隐藏，或令牌未勾选该笔记本 | 在「设置 → MCP → 权限」授权后重连 |
+| stdio 客户端一启动就断开 | 「必须携带令牌」下未设 `MDWORK_TOKEN`，或令牌无效/已吊销 | 关闭开关 / 传 `--no-require-token`，或在 GUI 重新生成令牌并写入 `env` |
+| HTTP 全部 `401` | 打开了「必须携带令牌」却没带 `Authorization` 头，或带了错令牌、令牌库不属于当前用户 | 关闭开关，或核对片段里的令牌；必要时轮换 |
+| 不带令牌却仍被权限限制 | 客户端配置里残留旧的 `MDWORK_TOKEN` / `Authorization`，服务端按该令牌 ACL 处理 | 删掉片段里的令牌字段 |
+| `tools/list` 有工具，调用却 `-32003` | 带令牌连接：scope 不够、笔记本未勾选、glob 拒绝、权限树隐藏 | 用 `server_status` 看 `token_name` 与 scopes；检查令牌与权限页 |
+| 笔记本列表为空 / 资源为空 | 带令牌连接：权限树默认隐藏，或令牌未勾选该笔记本 | 在「设置 → MCP → 权限」授权后重连；或改用无令牌本地连接 |
 | 写入返回 `DOC_DIRTY` | GUI 里该笔记有未保存修改 | 先在 GUI 保存，再重试 |
 | 写入返回 `CONFLICT` | 文件在读取后被改动，`sha256` 过期 | 重新 `read_note` 拿新的 `sha256` |
 | 启动 HTTP 提示端口被占用 | 已有 GUI 或另一个 CLI 在监听 | 停掉旧进程，或换 `--port` 并同步改客户端 URL |
@@ -321,3 +371,4 @@ Content-Length: ...
 - `cargo build -p md-work-cli`：构建成功；`md-work-cli.exe --help`、`mcp serve --help`、`--version` 输出与本文一致。
 - `cargo test -p mdwork-mcp -p md-work-cli`：40 项既有测试 + 1 项临时端到端探针，全部通过；既有测试覆盖令牌/DPAPI、权限树失效关闭、ACL 矩阵、HTTP 401、写入冲突、脏缓冲保护、工具 schema 注册等（删除临时探针后复跑为 40 项）。
 - 临时端到端探针：用真实 CLI 二进制分别以 stdio 与 Streamable HTTP 启动，都完成了 `initialize`、`notifications/initialized`、`tools/list`（14 个工具及输入/输出 schema）、`tools/call` 与 `resources/list`；stdio 额外验证了 `resources/templates/list`、`resources/read` 以及 `write_note` / `read_note` 写入读回。全部返回预期结果。探针为一次性验证文件，验证后已从仓库删除。
+- v1.3.0 令牌可选改造：`cargo test --workspace` 通过，新增覆盖本地可信身份（绕过默认全隐藏权限树）、必须令牌策略下的 `UNAUTHORIZED`、HTTP 两种策略的 `401`/放行、错令牌不降级、CLI 参数与环境变量优先级、配置项往返。

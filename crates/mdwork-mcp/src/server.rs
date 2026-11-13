@@ -22,6 +22,7 @@ use rmcp::{RoleServer, ServerHandler};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::TokenPolicy;
 use crate::audit::{AuditEntry, AuditLog};
 use crate::auth::TokenStore;
 use crate::perms::PermissionStore;
@@ -42,6 +43,8 @@ pub struct ServerContext {
     pub audit: Arc<AuditLog>,
     /// Set for the stdio transport, which carries one token for the process.
     pub stdio_token: Option<TokenRecord>,
+    /// Whether a caller must present a valid token; see [`TokenPolicy`].
+    pub token_policy: TokenPolicy,
     /// Overrides the GUI dirty-buffer marker; tests and portable runs set it.
     pub dirty_path: Option<PathBuf>,
     /// Overrides the export output folder.
@@ -53,16 +56,89 @@ pub struct ServerContext {
 impl ServerContext {
     /// Resolves the workspace root from `MDWORK_WORKSPACE`, then the GUI
     /// config, then the default `Documents/md-work`.
-    pub fn load(stdio_token: Option<TokenRecord>) -> anyhow::Result<Self> {
+    pub fn load(
+        stdio_token: Option<TokenRecord>,
+        token_policy: TokenPolicy,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             workspace_root: resolve_workspace_root(),
             tokens: Arc::new(TokenStore::new(TokenStore::default_path())),
             audit: Arc::new(AuditLog::new(AuditLog::default_dir())),
             stdio_token,
+            token_policy,
             dirty_path: None,
             exports_dir: None,
             permissions_path: None,
         })
+    }
+}
+
+/// Identity behind an MCP call.
+///
+/// `Local` is only created when a local transport (stdio or loopback HTTP)
+/// presents no token and the effective policy allows it. It is fully trusted:
+/// every scope, every notebook/note, and no permission-tree gate, because the
+/// GUI permission tree defaults to "all hidden" and would otherwise make a
+/// token-less CLI useless. A presented token always goes through `Token` with
+/// the original ACL and permission-tree checks.
+#[derive(Debug, Clone)]
+pub(crate) enum Caller {
+    Token(TokenRecord),
+    Local,
+}
+
+impl Caller {
+    pub(crate) fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
+
+    pub(crate) fn id(&self) -> Option<Uuid> {
+        match self {
+            Self::Token(record) => Some(record.id),
+            Self::Local => None,
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Token(record) => &record.name,
+            Self::Local => "local (no token)",
+        }
+    }
+
+    pub(crate) fn scopes(&self) -> Vec<String> {
+        match self {
+            Self::Token(record) => record
+                .scopes
+                .iter()
+                .map(|scope| scope.as_str().to_string())
+                .collect(),
+            Self::Local => Scope::ALL
+                .iter()
+                .map(|scope| scope.as_str().to_string())
+                .collect(),
+        }
+    }
+
+    pub(crate) fn has(&self, scope: Scope) -> bool {
+        match self {
+            Self::Token(record) => record.has(scope),
+            Self::Local => true,
+        }
+    }
+
+    pub(crate) fn allows_notebook(&self, notebook_id: &Uuid) -> bool {
+        match self {
+            Self::Token(record) => record.allows_notebook(notebook_id),
+            Self::Local => true,
+        }
+    }
+
+    pub(crate) fn allows_note(&self, notebook_id: &Uuid, rel_path: &str) -> bool {
+        match self {
+            Self::Token(record) => record.allows_note(notebook_id, rel_path),
+            Self::Local => true,
+        }
     }
 }
 
@@ -112,16 +188,25 @@ impl MdworkServer {
     }
 
     /// Resolves the caller: fixed for stdio, per-request for HTTP where the
-    /// auth middleware stores the verified record in the request extensions.
-    pub(crate) fn token(&self, ctx: &RequestContext<RoleServer>) -> Result<TokenRecord, ErrorData> {
+    /// auth middleware stores the verified caller in the request extensions.
+    pub(crate) fn token(&self, ctx: &RequestContext<RoleServer>) -> Result<Caller, ErrorData> {
         if let Some(record) = &self.ctx.stdio_token {
-            return Ok(record.clone());
+            return Ok(Caller::Token(record.clone()));
         }
-        ctx.extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(|parts| parts.extensions.get::<TokenRecord>())
-            .cloned()
-            .ok_or_else(|| unauthorized("missing bearer token"))
+        if let Some(parts) = ctx.extensions.get::<axum::http::request::Parts>() {
+            return parts
+                .extensions
+                .get::<Caller>()
+                .cloned()
+                .ok_or_else(|| unauthorized("missing bearer token"));
+        }
+        // No HTTP request parts: this is the stdio transport. The middleware
+        // always inserts a caller for HTTP, so a missing one is never widened.
+        if self.ctx.token_policy.requires_token() {
+            Err(unauthorized("missing bearer token"))
+        } else {
+            Ok(Caller::Local)
+        }
     }
 
     /// Runs a tool body with audit logging. The body fills in notebook, path
@@ -130,7 +215,7 @@ impl MdworkServer {
         &self,
         ctx: &RequestContext<RoleServer>,
         tool: &'static str,
-        body: impl FnOnce(&TokenRecord, &mut AuditEntry) -> Result<T, ErrorData>,
+        body: impl FnOnce(&Caller, &mut AuditEntry) -> Result<T, ErrorData>,
     ) -> Result<T, ErrorData> {
         let started = Instant::now();
         let mut entry = AuditEntry::new(tool, "");
@@ -148,8 +233,8 @@ impl MdworkServer {
                 return Err(err);
             }
         };
-        entry.token_id = Some(token.id);
-        entry.token_name = token.name.clone();
+        entry.token_id = token.id();
+        entry.token_name = token.name().to_string();
 
         let result = body(&token, &mut entry);
         if let Err(err) = &result {
@@ -160,10 +245,10 @@ impl MdworkServer {
         result
     }
 
-    /// Looks up a notebook the token may access.
+    /// Looks up a notebook the caller may access.
     pub(crate) fn notebook(
         &self,
-        token: &TokenRecord,
+        token: &Caller,
         notebook_id: &str,
     ) -> Result<Notebook, ErrorData> {
         let id = Uuid::parse_str(notebook_id.trim())
@@ -171,7 +256,7 @@ impl MdworkServer {
         if !token.allows_notebook(&id) {
             return Err(forbidden("notebook is not allowed for this token"));
         }
-        if !self.perms.allows(&NodeKey::notebook(id), PermLevel::Read) {
+        if !token.is_local() && !self.perms.allows(&NodeKey::notebook(id), PermLevel::Read) {
             return Err(forbidden("notebook is hidden by the permission tree"));
         }
         self.workspace()
@@ -183,7 +268,7 @@ impl MdworkServer {
     pub(crate) fn note_rel(
         &self,
         notebook: &Notebook,
-        token: &TokenRecord,
+        token: &Caller,
         path: &str,
     ) -> Result<String, ErrorData> {
         let rel = notebook.normalize_note_rel(path).map_err(core_error)?;
@@ -191,7 +276,8 @@ impl MdworkServer {
             return Err(forbidden("note is not allowed for this token"));
         }
         // 缺失路径放行给下游报 NOT_FOUND；存在的隐藏笔记一律 FORBIDDEN。
-        if self.note_exists(notebook, &rel)?
+        if !token.is_local()
+            && self.note_exists(notebook, &rel)?
             && !self
                 .perms
                 .allows(&NodeKey::entry(notebook.marker.id, &rel), PermLevel::Read)
@@ -208,9 +294,14 @@ impl MdworkServer {
         Ok(notebook.to_path(rel).map_err(core_error)?.exists())
     }
 
-    /// 权限树门禁：有效权限（祖先链取最小）须达到指定等级。
-    pub(crate) fn require_perm(&self, key: &NodeKey, level: PermLevel) -> Result<(), ErrorData> {
-        if self.perms.allows(key, level) {
+    /// 权限树门禁：有效权限（祖先链取最小）须达到指定等级；本地可信身份不受限。
+    pub(crate) fn require_perm(
+        &self,
+        token: &Caller,
+        key: &NodeKey,
+        level: PermLevel,
+    ) -> Result<(), ErrorData> {
+        if token.is_local() || self.perms.allows(key, level) {
             Ok(())
         } else {
             Err(forbidden(format!(
@@ -221,7 +312,12 @@ impl MdworkServer {
     }
 
     /// 修改级授权：已存在节点查自身，新建节点沿父链找最近存在祖先。
-    pub(crate) fn require_modify(&self, notebook: &Notebook, rel: &str) -> Result<(), ErrorData> {
+    pub(crate) fn require_modify(
+        &self,
+        token: &Caller,
+        notebook: &Notebook,
+        rel: &str,
+    ) -> Result<(), ErrorData> {
         let mut target = NodeKey::entry(notebook.marker.id, rel);
         while let Some(path) = &target.path {
             if self.note_exists(notebook, path)? {
@@ -229,13 +325,22 @@ impl MdworkServer {
             }
             target = target.parent().expect("非笔记本节点必有父节点");
         }
-        self.require_perm(&target, PermLevel::Modify)
+        self.require_perm(token, &target, PermLevel::Modify)
     }
 
     /// 删除级授权：节点存在才检查；缺失放行由下游报 NOT_FOUND。
-    pub(crate) fn require_delete(&self, notebook: &Notebook, rel: &str) -> Result<(), ErrorData> {
+    pub(crate) fn require_delete(
+        &self,
+        token: &Caller,
+        notebook: &Notebook,
+        rel: &str,
+    ) -> Result<(), ErrorData> {
         if self.note_exists(notebook, rel)? {
-            self.require_perm(&NodeKey::entry(notebook.marker.id, rel), PermLevel::Delete)?;
+            self.require_perm(
+                token,
+                &NodeKey::entry(notebook.marker.id, rel),
+                PermLevel::Delete,
+            )?;
         }
         Ok(())
     }
@@ -269,16 +374,18 @@ impl MdworkServer {
     }
 
     /// 令牌 ACL 与权限树的交集：笔记本是否至少可读。
-    pub(crate) fn notebook_readable(&self, token: &TokenRecord, id: &Uuid) -> bool {
-        token.allows_notebook(id) && self.perms.allows(&NodeKey::notebook(*id), PermLevel::Read)
+    pub(crate) fn notebook_readable(&self, token: &Caller, id: &Uuid) -> bool {
+        token.allows_notebook(id)
+            && (token.is_local() || self.perms.allows(&NodeKey::notebook(*id), PermLevel::Read))
     }
 
     /// 令牌 ACL 与权限树的交集：笔记是否至少可读。
-    pub(crate) fn note_readable(&self, token: &TokenRecord, id: &Uuid, rel: &str) -> bool {
+    pub(crate) fn note_readable(&self, token: &Caller, id: &Uuid, rel: &str) -> bool {
         token.allows_note(id, rel)
-            && self
-                .perms
-                .allows(&NodeKey::entry(*id, rel), PermLevel::Read)
+            && (token.is_local()
+                || self
+                    .perms
+                    .allows(&NodeKey::entry(*id, rel), PermLevel::Read))
     }
 
     /// True while the GUI still holds unsaved edits for this note. Stale
@@ -376,7 +483,7 @@ impl ServerHandler for MdworkServer {
                 .build(),
         )
         .with_instructions(
-            "MoJiān (墨笺) notebook server. All calls use the token's notebook and path ACL. \
+            "MoJiān (墨笺) notebook server. When a token is presented, calls use its notebook and path ACL plus the permission tree; local connections without a token have full workspace access. \
              Notes are UTF-8/GBK text; write_note expects the sha256 returned by read_note. \
              Deletes go to the notebook trash unless delete:permanent is granted.",
         )
@@ -411,7 +518,7 @@ impl ServerHandler for MdworkServer {
     }
 }
 
-pub(crate) fn require_scope(token: &TokenRecord, scope: Scope) -> Result<(), ErrorData> {
+pub(crate) fn require_scope(token: &Caller, scope: Scope) -> Result<(), ErrorData> {
     if token.has(scope) {
         Ok(())
     } else {
@@ -612,6 +719,7 @@ mod tests {
             tokens: Arc::new(TokenStore::new(dir.join("tokens.bin"))),
             audit: Arc::new(AuditLog::new(dir.join("audit"))),
             stdio_token: None,
+            token_policy: crate::TokenPolicy::Required,
             dirty_path: Some(dir.join("dirty.toml")),
             exports_dir: Some(dir.join("exports")),
             permissions_path: Some(dir.join("permissions.toml")),

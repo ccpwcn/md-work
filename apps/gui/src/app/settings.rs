@@ -93,7 +93,8 @@ impl AppShell {
         self.config.note_font = note_font;
         self.config.ui_font_size = ui_size;
         self.config.note_font_size = note_size;
-        theme::apply(&self.config, window, cx);
+        let extension = self.theme_ext.active_definition();
+        theme::apply(&self.config, extension.as_ref(), Some(window), cx);
         self.save_config(cx);
         cx.refresh_windows();
     }
@@ -344,15 +345,15 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.config.theme == preference {
-            return;
-        }
-        let previous = self.config.theme;
-        self.config.theme = preference;
-        theme::apply(&self.config, window, cx);
-        self.save_config(cx);
-        tracing::info!(from = ?previous, to = ?preference, "切换主题");
-        cx.notify();
+        // The three built-in choices are entries in `theme_extension.toml`'s
+        // `active` key, so the mode switch and the extension dropdown always
+        // agree on the currently selected theme.
+        let active = match preference {
+            ThemePreference::Light => mdwork_core::theme_ext::ActiveTheme::BuiltinLight,
+            ThemePreference::Dark => mdwork_core::theme_ext::ActiveTheme::BuiltinDark,
+            ThemePreference::System => mdwork_core::theme_ext::ActiveTheme::System,
+        };
+        self.set_active_theme(active, window, cx);
     }
 
     pub(super) fn set_language(&mut self, language: &str, cx: &mut Context<Self>) {
@@ -365,6 +366,17 @@ impl AppShell {
         self.save_config(cx);
         tracing::info!(from = %previous, to = %self.config.language, "切换语言");
         cx.refresh_windows();
+    }
+
+    pub(super) fn set_bookmark_marker(&mut self, marker: BookmarkMarker, cx: &mut Context<Self>) {
+        if self.config.bookmark_marker == marker {
+            return;
+        }
+        let previous = self.config.bookmark_marker;
+        self.config.bookmark_marker = marker;
+        self.save_config(cx);
+        tracing::info!(from = ?previous, to = ?marker, "切换笔记树书签标记");
+        cx.notify();
     }
 
     /// 侧边导航项：选中项带强调条、浮起白块和箭头。
@@ -428,7 +440,14 @@ impl AppShell {
 
     pub(super) fn render_settings_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = SettingsPalette::new(cx);
-        let theme_active = |preference: ThemePreference| self.config.theme == preference;
+        let theme_active = |preference: ThemePreference| {
+            let active = match preference {
+                ThemePreference::Light => mdwork_core::theme_ext::ActiveTheme::BuiltinLight,
+                ThemePreference::Dark => mdwork_core::theme_ext::ActiveTheme::BuiltinDark,
+                ThemePreference::System => mdwork_core::theme_ext::ActiveTheme::System,
+            };
+            self.theme_ext.config.active == active
+        };
         let theme_track = settings_segment_track(
             vec![
                 settings_segment(
@@ -774,10 +793,56 @@ impl AppShell {
             p,
         );
 
-        settings_body(
-            "settings-appearance-body",
-            vec![theme_card, language_card, font_card, autosave_card],
-        )
+        let marker_active = |marker: BookmarkMarker| self.config.bookmark_marker == marker;
+        let bookmark_marker_track = settings_segment_track(
+            vec![
+                settings_segment(
+                    "settings-bookmark-marker-none",
+                    t!("settings.bookmark_marker.none").to_string(),
+                    None,
+                    marker_active(BookmarkMarker::None),
+                    cx.listener(|this, _, _, cx| {
+                        this.set_bookmark_marker(BookmarkMarker::None, cx)
+                    }),
+                    p,
+                ),
+                settings_segment(
+                    "settings-bookmark-marker-dot",
+                    t!("settings.bookmark_marker.dot").to_string(),
+                    None,
+                    marker_active(BookmarkMarker::Dot),
+                    cx.listener(|this, _, _, cx| this.set_bookmark_marker(BookmarkMarker::Dot, cx)),
+                    p,
+                ),
+                settings_segment(
+                    "settings-bookmark-marker-bookmark",
+                    t!("settings.bookmark_marker.bookmark").to_string(),
+                    Some(IconName::Bookmark),
+                    marker_active(BookmarkMarker::Bookmark),
+                    cx.listener(|this, _, _, cx| {
+                        this.set_bookmark_marker(BookmarkMarker::Bookmark, cx)
+                    }),
+                    p,
+                ),
+            ],
+            p,
+        );
+        let bookmark_marker_card = settings_card(
+            t!("settings.bookmark_marker").to_string(),
+            Some(t!("settings.bookmark_marker_hint").to_string()),
+            bookmark_marker_track,
+            p,
+        );
+
+        let mut cards = vec![theme_card];
+        cards.extend(self.render_theme_extension_cards(cx));
+        cards.extend([
+            language_card,
+            font_card,
+            autosave_card,
+            bookmark_marker_card,
+        ]);
+        settings_body("settings-appearance-body", cards)
     }
 
     pub(super) fn render_settings_workspace(&self, cx: &mut Context<Self>) -> AnyElement {

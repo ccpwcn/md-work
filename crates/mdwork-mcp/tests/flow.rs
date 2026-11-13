@@ -10,7 +10,7 @@ use mdwork_core::notebook::Notebook;
 use mdwork_core::permissions::{Scope, TokenRecord};
 use mdwork_mcp::{
     AuditLog, CODE_CONFLICT, CODE_DOC_DIRTY, CODE_FORBIDDEN, CODE_INVALID_PATH, CODE_NOT_FOUND,
-    MdworkServer, PermissionStore, ServerContext, TokenStore,
+    CODE_UNAUTHORIZED, MdworkServer, PermissionStore, ServerContext, TokenPolicy, TokenStore,
 };
 use rmcp::model::{CallToolRequestParams, ErrorCode, ErrorData, ReadResourceRequestParams};
 use rmcp::service::{RunningService, ServiceError};
@@ -48,6 +48,7 @@ fn context(root: &std::path::Path, token: TokenRecord) -> Arc<ServerContext> {
         tokens: Arc::new(TokenStore::new(root.join("tokens.bin"))),
         audit: Arc::new(AuditLog::new(root.join("audit"))),
         stdio_token: Some(token),
+        token_policy: mdwork_mcp::TokenPolicy::Required,
         dirty_path: Some(root.join("dirty.toml")),
         exports_dir: Some(root.join("exports")),
         permissions_path: Some(root.join("permissions.toml")),
@@ -550,5 +551,66 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
     drop(client);
     let _ = tokio::time::timeout(Duration::from_secs(10), server_task).await;
 
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Builds a context that mimics a stdio server started without a token.
+fn local_context(root: &std::path::Path, policy: TokenPolicy) -> Arc<ServerContext> {
+    Arc::new(ServerContext {
+        workspace_root: root.to_path_buf(),
+        tokens: Arc::new(TokenStore::new(root.join("tokens.bin"))),
+        audit: Arc::new(AuditLog::new(root.join("audit"))),
+        stdio_token: None,
+        token_policy: policy,
+        dirty_path: Some(root.join("dirty.toml")),
+        exports_dir: Some(root.join("exports")),
+        permissions_path: Some(root.join("permissions.toml")),
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tokenless_local_caller_has_full_access() {
+    let root = temp_root();
+    let notebook = Notebook::create(&root.join("本地笔记"), "本地笔记").unwrap();
+    // No permissions.toml: the tree defaults to "all hidden", which proves the
+    // local trusted identity does not depend on GUI authorization.
+    let (peer, client, server_task) = connect(local_context(&root, TokenPolicy::Optional)).await;
+
+    let status = expect_ok(&peer, "server_status", json!({})).await;
+    assert_eq!(status["token_name"], "local (no token)");
+    assert_eq!(status["notebook_count"], 1);
+    let scopes = status["scopes"].as_array().unwrap();
+    assert!(scopes.contains(&json!("write")) && scopes.contains(&json!("delete")));
+
+    let notebooks = expect_ok(&peer, "list_notebooks", json!({})).await;
+    assert_eq!(notebooks["notebooks"].as_array().unwrap().len(), 1);
+
+    let written = expect_ok(
+        &peer,
+        "write_note",
+        json!({
+            "notebook_id": notebook.marker.id.to_string(),
+            "path": "随手记.md",
+            "text": "无需令牌",
+        }),
+    )
+    .await;
+    assert_eq!(written["created"], true);
+
+    drop(peer);
+    drop(client);
+    server_task.abort();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn required_policy_rejects_tokenless_calls() {
+    let root = temp_root();
+    let _ = Notebook::create(&root.join("受限笔记"), "受限笔记").unwrap();
+    let (peer, client, server_task) = connect(local_context(&root, TokenPolicy::Required)).await;
+    expect_code(&peer, "server_status", json!({}), CODE_UNAUTHORIZED).await;
+    drop(peer);
+    drop(client);
+    server_task.abort();
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -567,7 +567,26 @@ impl AppShell {
             )
             .into_any_element();
 
-        let mut server_rows: Vec<AnyElement> = vec![status_row, port_row];
+        let token_row = div()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                Switch::new("mcp-require-token")
+                    .checked(dialog.require_token)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.toggle_mcp_require_token(*checked, cx)
+                    })),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .child(t!("mcp.require_token").to_string()),
+            )
+            .into_any_element();
+
+        let mut server_rows: Vec<AnyElement> = vec![status_row, port_row, token_row];
         server_rows.push(
             div()
                 .text_xs()
@@ -580,6 +599,13 @@ impl AppShell {
                 .text_xs()
                 .text_color(muted)
                 .child(t!("mcp.port_hint").to_string())
+                .into_any_element(),
+        );
+        server_rows.push(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(t!("mcp.require_token_hint").to_string())
                 .into_any_element(),
         );
         if !running && let Some(error) = mcp_error {
@@ -614,26 +640,47 @@ impl AppShell {
             .clone()
             .unwrap_or_else(|| t!("mcp.token_placeholder").to_string());
         let url = format!("http://127.0.0.1:{port}/mcp");
-        let snippet_hint = match snippet_kind {
-            SnippetKind::Http => t!("mcp.snippet_hint_http", url = url.clone()).to_string(),
-            SnippetKind::Stdio => t!("mcp.snippet_hint_stdio").to_string(),
+        let require_token = dialog.require_token;
+        let snippet_hint = match (snippet_kind, require_token) {
+            (SnippetKind::Http, true) => t!("mcp.snippet_hint_http", url = url.clone()).to_string(),
+            (SnippetKind::Http, false) => {
+                t!("mcp.snippet_hint_http_no_token", url = url.clone()).to_string()
+            }
+            (SnippetKind::Stdio, true) => t!("mcp.snippet_hint_stdio").to_string(),
+            (SnippetKind::Stdio, false) => t!("mcp.snippet_hint_stdio_no_token").to_string(),
         };
-        let snippet = match snippet_kind {
-            SnippetKind::Http => serde_json::json!({
+        let snippet = match (snippet_kind, require_token) {
+            (SnippetKind::Http, true) => serde_json::json!({
                 "mcpServers": {
                     "md-work": {
                         "type": "http",
-                        "url": url,
+                        "url": url.clone(),
                         "headers": { "Authorization": format!("Bearer {sample_token}") }
                     }
                 }
             }),
-            SnippetKind::Stdio => serde_json::json!({
+            (SnippetKind::Http, false) => serde_json::json!({
                 "mcpServers": {
                     "md-work": {
-                        "command": cli,
+                        "type": "http",
+                        "url": url.clone()
+                    }
+                }
+            }),
+            (SnippetKind::Stdio, true) => serde_json::json!({
+                "mcpServers": {
+                    "md-work": {
+                        "command": cli.clone(),
                         "args": ["mcp", "serve", "--stdio"],
                         "env": { "MDWORK_TOKEN": sample_token }
+                    }
+                }
+            }),
+            (SnippetKind::Stdio, false) => serde_json::json!({
+                "mcpServers": {
+                    "md-work": {
+                        "command": cli.clone(),
+                        "args": ["mcp", "serve", "--stdio"]
                     }
                 }
             }),
@@ -1369,6 +1416,7 @@ impl AppShell {
     pub(super) fn toggle_mcp_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.config.mcp_http = enabled;
         let port = self.config.mcp_port.max(1);
+        let require_token = self.config.mcp_require_token;
         let workspace = self.current_workspace_root();
         self.save_config(cx);
         self.mcp.stop();
@@ -1376,7 +1424,7 @@ impl AppShell {
         let mut message = None;
         let mut error = None;
         if enabled {
-            if self.mcp.start(port, workspace.as_deref()) {
+            if self.mcp.start(port, workspace.as_deref(), require_token) {
                 self.mcp_live = true;
                 message = Some(t!("mcp.started", port = port).to_string());
             } else {
@@ -1387,6 +1435,33 @@ impl AppShell {
         }
         if let Some(dialog) = self.mcp_settings.as_mut() {
             dialog.enabled = enabled;
+            dialog.message = message;
+            dialog.error = error;
+        }
+        cx.notify();
+    }
+
+    /// 令牌策略切换即时生效：重启 HTTP 子进程，已连接的客户端会断开。
+    /// stdio 由客户端自行拉起 CLI，其策略来自配置文件或环境变量。
+    pub(super) fn toggle_mcp_require_token(&mut self, required: bool, cx: &mut Context<Self>) {
+        self.config.mcp_require_token = required;
+        self.save_config(cx);
+        let mut message = None;
+        let mut error = None;
+        if self.config.mcp_http {
+            let port = self.config.mcp_port.max(1);
+            let workspace = self.current_workspace_root();
+            self.mcp.stop();
+            self.mcp_live = false;
+            if self.mcp.start(port, workspace.as_deref(), required) {
+                self.mcp_live = true;
+                message = Some(t!("mcp.started", port = port).to_string());
+            } else {
+                error = self.mcp.error.clone();
+            }
+        }
+        if let Some(dialog) = self.mcp_settings.as_mut() {
+            dialog.require_token = required;
             dialog.message = message;
             dialog.error = error;
         }
@@ -1625,6 +1700,7 @@ impl AppShell {
     pub(super) fn open_mcp_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let port = self.config.mcp_port.to_string();
         let enabled = self.config.mcp_http;
+        let require_token = self.config.mcp_require_token;
         let port_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(port)
@@ -1649,6 +1725,7 @@ impl AppShell {
         self.mcp_settings = Some(McpSettingsDialog {
             tab: McpTab::Server,
             enabled,
+            require_token,
             port_input,
             tokens: Vec::new(),
             selected: None,
@@ -2125,10 +2202,11 @@ impl AppShell {
     }
 
     pub(super) fn apply_mcp_server(&mut self, cx: &mut Context<Self>) {
-        let Some((raw_port, enabled)) = self.mcp_settings.as_ref().map(|dialog| {
+        let Some((raw_port, enabled, require_token)) = self.mcp_settings.as_ref().map(|dialog| {
             (
                 dialog.port_input.read(cx).value().trim().to_string(),
                 dialog.enabled,
+                dialog.require_token,
             )
         }) else {
             return;
@@ -2145,13 +2223,14 @@ impl AppShell {
 
         self.config.mcp_port = port;
         self.config.mcp_http = enabled;
+        self.config.mcp_require_token = require_token;
         self.save_config(cx);
         let workspace = self.current_workspace_root();
         let mut message = None;
         self.mcp.stop();
         self.mcp_live = false;
         if enabled {
-            if self.mcp.start(port, workspace.as_deref()) {
+            if self.mcp.start(port, workspace.as_deref(), require_token) {
                 self.mcp_live = true;
                 message = Some(t!("mcp.started", port = port).to_string());
             }

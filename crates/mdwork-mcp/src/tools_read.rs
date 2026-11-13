@@ -212,12 +212,8 @@ impl MdworkServer {
                 version: mdwork_core::version().to_string(),
                 workspace_root: self.ctx.workspace_root.display().to_string(),
                 notebook_count,
-                token_name: token.name.clone(),
-                scopes: token
-                    .scopes
-                    .iter()
-                    .map(|scope| scope.as_str().to_string())
-                    .collect(),
+                token_name: token.name().to_string(),
+                scopes: token.scopes(),
             }))
         })
     }

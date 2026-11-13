@@ -20,8 +20,8 @@ use gpui_kit::*;
 use mdwork_core::archive::{self, Conflict, ConflictPolicy, ImportMode, ImportOptions, ImportPlan};
 use mdwork_core::bookmarks::Bookmarks;
 use mdwork_core::config::{
-    AppConfig, CursorPos, NotebookSession, PanelArrangement, PanelDock, PanelKind, Session,
-    ThemePreference,
+    AppConfig, BookmarkMarker, CursorPos, NotebookSession, PanelArrangement, PanelDock, PanelKind,
+    Session, ThemePreference,
 };
 use mdwork_core::doc::{Eol, TextEncoding};
 use mdwork_core::image::{self, ImageHost, ImageKind};
@@ -31,6 +31,7 @@ use mdwork_core::order::{self, TreeOrder, file_name, parent_rel, sibling_rank};
 use mdwork_core::permissions::{self as perms, Scope, TokenRecord};
 use mdwork_core::search::{self, SearchHit, SearchQuery};
 use mdwork_core::text::{TextStats, text_stats};
+use mdwork_core::theme_ext::ThemeWatcher;
 use mdwork_core::workspace_registry::WorkspaceRegistry;
 use mdwork_core::{FolderKind, Workspace};
 use mdwork_export::{
@@ -63,6 +64,7 @@ mod render;
 mod searcher;
 mod settings;
 mod sidebar_tree;
+mod theme_ext;
 mod toolbar;
 mod tree_drag;
 mod util;
@@ -70,6 +72,7 @@ mod window_place;
 mod workspace;
 mod zip;
 
+use theme_ext::ThemeExtensionState;
 use util::*;
 pub(crate) use window_place::restore_window;
 
@@ -541,6 +544,8 @@ enum SnippetKind {
 struct McpSettingsDialog {
     tab: McpTab,
     enabled: bool,
+    /// Whether the MCP server requires a valid token from every client.
+    require_token: bool,
     port_input: Entity<InputState>,
     tokens: Vec<TokenRecord>,
     selected: Option<Uuid>,
@@ -593,6 +598,12 @@ pub struct AppShell {
     missing_workspaces: HashSet<PathBuf>,
     pending: Arc<Mutex<Vec<String>>>,
     changed: Option<Arc<Mutex<Receiver<Vec<PathBuf>>>>>,
+    /// Runtime state for `theme_extension.toml` + extension themes.
+    theme_ext: ThemeExtensionState,
+    /// Debounced batches from the theme directory watcher.
+    theme_changed: Option<Arc<Mutex<Receiver<Vec<PathBuf>>>>>,
+    /// Keeps the theme watcher alive; dropping it stops the watch.
+    _theme_watcher: Option<ThemeWatcher>,
     window_handle: gpui_kit::AnyWindowHandle,
     tree_scroll: UniformListScrollHandle,
     outline_scroll: UniformListScrollHandle,
@@ -648,6 +659,10 @@ pub struct AppShell {
     bookmarks: Bookmarks,
     bookmarks_notebook: Option<Uuid>,
     bookmarks_loading: Option<Uuid>,
+    /// 每个笔记本中「整篇笔记被收藏」的路径，供笔记树标记使用。
+    /// 树会同时展开多个笔记本，因此不能只依赖活动笔记本的 `bookmarks`。
+    bookmark_marks: Arc<HashMap<Uuid, HashSet<String>>>,
+    bookmark_marks_loading: HashSet<Uuid>,
     search_input: Entity<InputState>,
     search_status: SearchStatus,
     search_results: Vec<SearchHit>,
@@ -894,7 +909,7 @@ impl AppShell {
         startup: Startup,
     ) -> Self {
         let Startup {
-            config,
+            mut config,
             registry,
             root,
             root_exists,
@@ -914,7 +929,17 @@ impl AppShell {
             .map(|alert| alert.kind)
             .collect::<HashSet<_>>();
 
-        theme::apply(&config, window, cx);
+        // Load `theme_extension.toml` and all extension themes before the first
+        // paint, so the configured theme is already active when the window shows.
+        let mut theme_ext = ThemeExtensionState::load(config.theme);
+        config.theme =
+            theme_ext::preference_for_active(&theme_ext.config.active, &theme_ext.themes);
+        let startup_notices: Vec<(NoticeKind, String)> = startup_notices
+            .into_iter()
+            .chain(theme_ext.take_notices())
+            .collect();
+        let extension = theme_ext.active_definition();
+        theme::apply(&config, extension.as_ref(), Some(window), cx);
 
         let search_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -924,6 +949,7 @@ impl AppShell {
 
         let mcp_port = config.mcp_port;
         let mcp_enabled = config.mcp_http;
+        let mcp_require_token = config.mcp_require_token;
 
         let mut this = Self {
             config,
@@ -951,6 +977,9 @@ impl AppShell {
             missing_workspaces: HashSet::new(),
             pending,
             changed: None,
+            theme_ext,
+            theme_changed: None,
+            _theme_watcher: None,
             window_handle: window.window_handle(),
             tree_scroll: UniformListScrollHandle::new(),
             outline_scroll: UniformListScrollHandle::new(),
@@ -986,6 +1015,8 @@ impl AppShell {
             bookmarks: Bookmarks::default(),
             bookmarks_notebook: None,
             bookmarks_loading: None,
+            bookmark_marks: Arc::new(HashMap::new()),
+            bookmark_marks_loading: HashSet::new(),
             search_input,
             search_status: SearchStatus::Idle,
             search_results: Vec::new(),
@@ -1066,20 +1097,25 @@ impl AppShell {
         .detach();
 
         this.start_initialization(root, root_exists, cx);
+        this.start_theme_watcher(cx);
         this.spawn_poller(cx);
 
         if mcp_enabled {
-            this.mcp_live = this
-                .mcp
-                .start(mcp_port, this.current_workspace_root().as_deref());
+            this.mcp_live = this.mcp.start(
+                mcp_port,
+                this.current_workspace_root().as_deref(),
+                mcp_require_token,
+            );
         }
 
         let weak = cx.entity().downgrade();
         this._appearance_subscription =
             Some(window.observe_window_appearance(move |window, cx| {
                 let _ = weak.update(cx, |this, cx| {
-                    if this.config.theme == ThemePreference::System {
-                        theme::apply(&this.config, window, cx);
+                    // Only "follow system" tracks the OS appearance. An
+                    // extension theme pins its own light/dark mode.
+                    if this.theme_ext.config.active == mdwork_core::theme_ext::ActiveTheme::System {
+                        theme::apply(&this.config, None, Some(window), cx);
                     }
                 });
             }));
@@ -1118,6 +1154,9 @@ impl Render for AppShell {
         }
 
         self.ensure_bookmarks(cx);
+        if self.config.bookmark_marker != BookmarkMarker::None {
+            self.ensure_bookmark_marks(cx);
+        }
         // 笔记打开/切换后把焦点交给编辑区；放在 render 里能保证编辑器
         // 实体已经创建，且这一帧的元素树会注册它的 focus handle。
         if self.pending_editor_focus {

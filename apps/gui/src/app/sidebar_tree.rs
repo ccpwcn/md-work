@@ -46,6 +46,8 @@ impl AppShell {
             .filter(|clip| clip.action == ClipboardAction::Cut)
             .map(|clip| (clip.notebook_id, clip.rel_path.clone()));
         let drop_color = cx.theme().primary;
+        let bookmark_marker = self.config.bookmark_marker;
+        let bookmark_marks = self.bookmark_marks.clone();
 
         uniform_list("sidebar-tree", count, move |range, _window, _cx| {
             range
@@ -422,6 +424,12 @@ impl AppShell {
                             } else {
                                 IconName::FileText
                             };
+                            // 标记只对应「整篇笔记被收藏」，与工具栏的星形语义一致；
+                            // 标题级书签不在这里体现。
+                            let bookmarked = bookmark_marker != BookmarkMarker::None
+                                && bookmark_marks
+                                    .get(&notebook_id)
+                                    .is_some_and(|paths| paths.contains(&row.rel_path));
 
                             if let Some(renaming) = renaming.as_ref().filter(|renaming| {
                                 renaming.notebook_id == notebook_id && renaming.rel_path == rel_path
@@ -504,6 +512,8 @@ impl AppShell {
                             let tooltip_count = row.note_count;
                             let tooltip_created = row.created;
                             let tooltip_modified = row.modified;
+                            let tooltip_bookmarked =
+                                bookmarked.then(|| t!("tree.bookmarked").to_string());
                             let build_entry_menu = Rc::new({
                                 let rename_shell = rename_shell.clone();
                                 let delete_shell = delete_shell.clone();
@@ -804,6 +814,7 @@ impl AppShell {
                                 .hover(move |style| style.bg(hover_bg))
                                 .tooltip(move |window, cx| {
                                     let path = tooltip_rel.clone();
+                                    let bookmarked_tip = tooltip_bookmarked.clone();
                                     let notes = tooltip_folder.then(|| {
                                         t!("tree.contains_notes", count = tooltip_count).to_string()
                                     });
@@ -841,6 +852,11 @@ impl AppShell {
                                         if let Some(updated) = updated.clone() {
                                             column = column.child(
                                                 div().text_xs().text_color(muted).child(updated),
+                                            );
+                                        }
+                                        if let Some(tip) = bookmarked_tip.clone() {
+                                            column = column.child(
+                                                div().text_xs().text_color(muted).child(tip),
                                             );
                                         }
                                         column
@@ -983,6 +999,30 @@ impl AppShell {
                                         .flex_shrink_0()
                                         .child(Icon::new(type_icon).xsmall().text_color(muted)),
                                 )
+                                .when(bookmark_marker != BookmarkMarker::None, |row| {
+                                    // 固定槽位让所有行的名称左边缘保持对齐，
+                                    // 未收藏的行只是留白；标记沿用图标的 muted 色，
+                                    // 不占用背景 / 字重 / 文字颜色这些导航状态通道。
+                                    row.child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .w(px(12.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .when(bookmarked, |slot| match bookmark_marker {
+                                                BookmarkMarker::Dot => slot.child(
+                                                    div().size(px(5.)).rounded_full().bg(muted),
+                                                ),
+                                                BookmarkMarker::Bookmark => slot.child(
+                                                    Icon::new(IconName::Bookmark)
+                                                        .xsmall()
+                                                        .text_color(muted),
+                                                ),
+                                                BookmarkMarker::None => slot,
+                                            }),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .flex_1()

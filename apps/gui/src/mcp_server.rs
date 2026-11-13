@@ -26,10 +26,10 @@ impl McpHttp {
 
     /// Starts `md-work-cli mcp serve --http` on `port` for `workspace`.
     ///
-    /// The workspace root is passed explicitly: the child would otherwise read
-    /// it from `config/runtime.toml`, which the GUI saves asynchronously, so a
-    /// freshly switched workspace could serve the previous root.
-    pub fn start(&mut self, port: u16, workspace: Option<&Path>) -> bool {
+    /// The workspace root and the token policy are passed explicitly: the child
+    /// would otherwise read them from `config/*.toml`, which the GUI saves
+    /// asynchronously, so a freshly switched setting could serve stale values.
+    pub fn start(&mut self, port: u16, workspace: Option<&Path>, require_token: bool) -> bool {
         self.stop();
         self.port = port;
         match std::net::TcpListener::bind(("127.0.0.1", port)) {
@@ -54,8 +54,20 @@ impl McpHttp {
             }
         };
         let mut command = Command::new(&cli);
+        let token_flag = if require_token {
+            "--require-token"
+        } else {
+            "--no-require-token"
+        };
         command
-            .args(["mcp", "serve", "--http", "--port", &port.to_string()])
+            .args([
+                "mcp",
+                "serve",
+                "--http",
+                "--port",
+                &port.to_string(),
+                token_flag,
+            ])
             .env("MDWORK_PARENT_PID", std::process::id().to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())

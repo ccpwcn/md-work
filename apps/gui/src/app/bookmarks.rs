@@ -1,6 +1,82 @@
 use super::*;
 
+/// 每个笔记本中「整篇笔记被收藏」的相对路径，供笔记树标记使用。
+fn note_bookmark_paths(bookmarks: &Bookmarks) -> HashSet<String> {
+    bookmarks
+        .entries
+        .iter()
+        .filter(|entry| entry.heading.is_none())
+        .map(|entry| entry.rel_path.clone())
+        .collect()
+}
+
 impl AppShell {
+    /// 把活动笔记本的内存书签状态同步进树标记快照。
+    /// `save_bookmarks` 是所有写操作的统一入口，因此这里能覆盖切换、
+    /// 删除、重命名等全部变更，无需重新读盘。
+    fn sync_active_bookmark_marks(&mut self) {
+        let Some(id) = self.bookmarks_notebook else {
+            return;
+        };
+        if self.bookmarks_loading == Some(id) {
+            return;
+        }
+        let paths = note_bookmark_paths(&self.bookmarks);
+        if self.bookmark_marks.get(&id) == Some(&paths) {
+            return;
+        }
+        Arc::make_mut(&mut self.bookmark_marks).insert(id, paths);
+    }
+
+    /// 笔记树会同时展开多个笔记本，而 `self.bookmarks` 只缓存活动笔记本；
+    /// 这里在后台补齐其余笔记本的收藏路径，只加载缺失的那些。
+    pub(super) fn ensure_bookmark_marks(&mut self, cx: &mut Context<Self>) {
+        let pending: Vec<(Uuid, Notebook)> = self
+            .notebooks
+            .iter()
+            .filter(|entry| {
+                let id = entry.notebook.marker.id;
+                !self.bookmark_marks.contains_key(&id) && !self.bookmark_marks_loading.contains(&id)
+            })
+            .map(|entry| (entry.notebook.marker.id, entry.notebook.clone()))
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
+        for (id, _) in &pending {
+            self.bookmark_marks_loading.insert(*id);
+        }
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move {
+                    pending
+                        .into_iter()
+                        .map(|(id, notebook)| {
+                            let paths = Bookmarks::load(&notebook)
+                                .map(|bookmarks| note_bookmark_paths(&bookmarks))
+                                .unwrap_or_default();
+                            (id, paths)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                for (id, _) in &loaded {
+                    this.bookmark_marks_loading.remove(id);
+                }
+                let marks = Arc::make_mut(&mut this.bookmark_marks);
+                for (id, paths) in loaded {
+                    marks.insert(id, paths);
+                }
+                // 活动笔记本以内存状态为准，避免后台读盘覆盖刚发生的收藏切换。
+                this.sync_active_bookmark_marks();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn ensure_bookmarks(&mut self, cx: &mut Context<Self>) {
         let target = self.active_notebook;
         if self.bookmarks_notebook == target && self.bookmarks_loading.is_none() {
@@ -38,6 +114,7 @@ impl AppShell {
                 }
                 this.bookmarks_loading = None;
                 this.bookmarks = loaded;
+                this.sync_active_bookmark_marks();
                 cx.notify();
             });
         })
@@ -57,6 +134,7 @@ impl AppShell {
         if self.bookmarks_loading == Some(notebook_id) {
             return;
         }
+        self.sync_active_bookmark_marks();
         let Some(notebook) = self
             .notebooks
             .iter()

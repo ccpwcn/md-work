@@ -5,9 +5,11 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Context as _, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mdwork_core::archive::{self, ConflictPolicy, ImportMode, ImportOptions};
+use mdwork_core::config::AppConfig;
 use mdwork_core::search::{SearchHit, SearchQuery, search_notebook};
 use mdwork_core::{Notebook, Workspace};
 use mdwork_export::exporter::{ExportEvent, ExportRequest};
+use mdwork_mcp::TokenPolicy;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -57,6 +59,12 @@ struct ServeArgs {
     /// HTTP port (Streamable HTTP only)
     #[arg(long, default_value_t = 11026)]
     port: u16,
+    /// Require a valid token (overrides MDWORK_REQUIRE_TOKEN and the GUI setting)
+    #[arg(long, conflicts_with = "no_require_token")]
+    require_token: bool,
+    /// Allow local stdio / loopback HTTP connections without a token (default)
+    #[arg(long, conflicts_with = "require_token")]
+    no_require_token: bool,
 }
 
 #[derive(Args)]
@@ -193,19 +201,64 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
+/// Priority: explicit CLI flags > `MDWORK_REQUIRE_TOKEN` > GUI config > optional.
+fn resolve_token_policy(args: &ServeArgs) -> anyhow::Result<TokenPolicy> {
+    let cli_override = match (args.require_token, args.no_require_token) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    };
+    if let Some(require) = cli_override {
+        return Ok(TokenPolicy::from_require_token(require));
+    }
+    let env = std::env::var("MDWORK_REQUIRE_TOKEN").ok();
+    policy_from_env(
+        env.as_deref(),
+        AppConfig::load_or_default().mcp_require_token,
+    )
+}
+
+fn policy_from_env(raw: Option<&str>, config_require: bool) -> anyhow::Result<TokenPolicy> {
+    match raw.map(str::trim) {
+        Some(value) if !value.is_empty() => {
+            let require = parse_boolish(value).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "MDWORK_REQUIRE_TOKEN 只接受 true/false、1/0、yes/no、required/optional，实际为 {value:?}"
+                )
+            })?;
+            Ok(TokenPolicy::from_require_token(require))
+        }
+        _ => Ok(TokenPolicy::from_require_token(config_require)),
+    }
+}
+
+fn parse_boolish(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" | "required" => Some(true),
+        "0" | "false" | "no" | "off" | "optional" => Some(false),
+        _ => None,
+    }
+}
+
 fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Mcp(args) => match args.command {
             McpCommand::Serve(args) => {
+                let policy = resolve_token_policy(&args)?;
                 let runtime = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()?;
-                tracing::info!(http = args.http, port = args.port, "MCP 服务启动");
+                tracing::info!(
+                    http = args.http,
+                    port = args.port,
+                    require_token = policy.requires_token(),
+                    "MCP 服务启动"
+                );
                 let result = runtime.block_on(async {
                     if args.http {
-                        mdwork_mcp::serve_http(args.port).await
+                        mdwork_mcp::serve_http(args.port, policy).await
                     } else {
-                        mdwork_mcp::serve_stdio().await
+                        mdwork_mcp::serve_stdio(policy).await
                     }
                 });
                 tracing::info!(http = args.http, "MCP 服务退出");
@@ -501,6 +554,16 @@ fn run_notebook_import(args: &NotebookImportArgs) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    fn serve_args(require_token: bool, no_require_token: bool) -> ServeArgs {
+        ServeArgs {
+            stdio: true,
+            http: false,
+            port: 11026,
+            require_token,
+            no_require_token,
+        }
+    }
+
     #[test]
     fn import_mode_and_policy_map_to_core() {
         assert_eq!(ImportMode::from(ModeArg::Merge), ImportMode::Merge);
@@ -509,6 +572,63 @@ mod tests {
         assert_eq!(
             ConflictPolicy::from(PolicyArg::KeepBoth),
             ConflictPolicy::KeepBoth
+        );
+    }
+
+    #[test]
+    fn boolean_env_values_map_to_token_policy() {
+        for raw in ["1", "true", "YES", "on", "required"] {
+            assert_eq!(parse_boolish(raw), Some(true), "{raw}");
+        }
+        for raw in ["0", "false", "No", "off", "optional"] {
+            assert_eq!(parse_boolish(raw), Some(false), "{raw}");
+        }
+        assert_eq!(parse_boolish("maybe"), None);
+        assert_eq!(
+            policy_from_env(Some("1"), false).unwrap(),
+            TokenPolicy::Required
+        );
+        assert_eq!(
+            policy_from_env(Some("optional"), true).unwrap(),
+            TokenPolicy::Optional
+        );
+        assert_eq!(
+            policy_from_env(Some(" "), true).unwrap(),
+            TokenPolicy::Required
+        );
+        assert_eq!(policy_from_env(None, false).unwrap(), TokenPolicy::Optional);
+        assert!(policy_from_env(Some("maybe"), false).is_err());
+    }
+
+    #[test]
+    fn cli_flags_override_config_and_conflict_with_each_other() {
+        assert_eq!(
+            resolve_token_policy(&serve_args(true, false)).unwrap(),
+            TokenPolicy::Required
+        );
+        assert_eq!(
+            resolve_token_policy(&serve_args(false, true)).unwrap(),
+            TokenPolicy::Optional
+        );
+        let cli =
+            Cli::try_parse_from(["md-work-cli", "mcp", "serve", "--stdio", "--require-token"])
+                .unwrap();
+        let Command::Mcp(McpArgs {
+            command: McpCommand::Serve(args),
+        }) = cli.command
+        else {
+            panic!("expected mcp serve");
+        };
+        assert!(args.require_token);
+        assert!(
+            Cli::try_parse_from([
+                "md-work-cli",
+                "mcp",
+                "serve",
+                "--require-token",
+                "--no-require-token",
+            ])
+            .is_err()
         );
     }
 }

@@ -27,6 +27,7 @@ fn context(root: &Path, token: TokenRecord) -> Arc<ServerContext> {
         tokens: Arc::new(TokenStore::new(root.join("tokens.bin"))),
         audit: Arc::new(AuditLog::new(root.join("audit"))),
         stdio_token: Some(token),
+        token_policy: mdwork_mcp::TokenPolicy::Required,
         dirty_path: Some(root.join("dirty.toml")),
         exports_dir: Some(root.join("exports")),
         permissions_path: Some(root.join("permissions.toml")),

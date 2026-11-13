@@ -220,6 +220,7 @@ impl AppShell {
             self.mcp_live = self.mcp.start(
                 self.config.mcp_port,
                 self.current_workspace_root().as_deref(),
+                self.config.mcp_require_token,
             );
         }
 

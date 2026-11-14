@@ -1584,6 +1584,10 @@ impl AppShell {
         let border = cx.theme().border;
         let danger = cx.theme().danger;
         let success = cx.theme().success;
+        let page_count = audit_page_count(dialog.audit.len());
+        let page = dialog.audit_page.min(page_count - 1);
+        let start = page * AUDIT_PAGE_SIZE;
+        let end = (start + AUDIT_PAGE_SIZE).min(dialog.audit.len());
         let mut rows: Vec<AnyElement> = Vec::new();
         rows.push(
             div()
@@ -1626,7 +1630,7 @@ impl AppShell {
         if dialog.audit.is_empty() && dialog.audit_error.is_none() {
             rows.push(empty_hint(t!("mcp.audit_empty").to_string(), muted));
         }
-        for entry in &dialog.audit {
+        for entry in dialog.audit.get(start..end).unwrap_or_default() {
             let when = age_label(entry.time);
             let result_color = if entry.result == "ok" {
                 success
@@ -1686,14 +1690,59 @@ impl AppShell {
                     .into_any_element(),
             );
         }
+        let pager = div()
+            .id("mcp-audit-pager")
+            .h_flex()
+            .items_center()
+            .justify_end()
+            .gap_2()
+            .child(
+                Button::new("mcp-audit-prev")
+                    .ghost()
+                    .compact()
+                    .icon(IconName::ChevronLeft)
+                    .label(t!("mcp.audit_prev").to_string())
+                    .disabled(page == 0)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_mcp_audit_page(page.saturating_sub(1), cx)
+                    })),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("mcp.audit_page", page = page + 1, total = page_count).to_string()),
+            )
+            .child(
+                Button::new("mcp-audit-next")
+                    .ghost()
+                    .compact()
+                    .icon(IconName::ChevronRight)
+                    .label(t!("mcp.audit_next").to_string())
+                    .disabled(page + 1 >= page_count)
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.set_mcp_audit_page(page + 1, cx)),
+                    ),
+            )
+            .into_any_element();
         div()
             .id("mcp-audit-body")
             .v_flex()
             .gap_2()
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
-            .child(div().flex_1().min_h_0().v_flex().gap_1().children(rows))
+            .child(
+                div()
+                    // 换页时换 id，滚动位置随之回到顶部。
+                    .id(format!("mcp-audit-list-{page}"))
+                    .v_flex()
+                    .gap_1()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(rows),
+            )
+            .when(!dialog.audit.is_empty(), |body| body.child(pager))
             .into_any_element()
     }
 
@@ -1741,6 +1790,7 @@ impl AppShell {
             pending_delete: false,
             audit: Vec::new(),
             audit_error: None,
+            audit_page: 0,
             perms: loaded.tree,
             perms_tampered: loaded.tampered,
             perms_expanded,
@@ -1772,6 +1822,9 @@ impl AppShell {
                     }
                     dialog.audit = audit.0;
                     dialog.audit_error = audit.1;
+                    dialog.audit_page = dialog
+                        .audit_page
+                        .min(audit_page_count(dialog.audit.len()) - 1);
                 }
                 cx.notify();
             });
@@ -2259,11 +2312,26 @@ impl AppShell {
                 if let Some(dialog) = this.mcp_settings.as_mut() {
                     dialog.audit = audit;
                     dialog.audit_error = error;
+                    dialog.audit_page = dialog
+                        .audit_page
+                        .min(audit_page_count(dialog.audit.len()) - 1);
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// 审计页翻页：页码始终落在已加载的可展示页范围内。
+    pub(super) fn set_mcp_audit_page(&mut self, page: usize, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.mcp_settings.as_mut() {
+            let clamped = page.min(audit_page_count(dialog.audit.len()) - 1);
+            if clamped == dialog.audit_page {
+                return;
+            }
+            dialog.audit_page = clamped;
+            cx.notify();
+        }
     }
 
     pub(super) fn copy_mcp_text(&mut self, text: String, cx: &mut Context<Self>) {

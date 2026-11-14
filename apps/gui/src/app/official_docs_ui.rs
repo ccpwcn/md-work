@@ -8,6 +8,7 @@ impl AppShell {
         self.notify_warning(t!("official_docs.readonly").to_string(), cx);
         self.notice_panel = true;
         self.workspace_menu = false;
+        self.theme_menu = false;
     }
 
     /// 以只读预览模式打开随包发布的官方说明文档。

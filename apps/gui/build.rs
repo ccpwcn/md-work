@@ -134,6 +134,13 @@ fn main() {
         return;
     }
 
+    // Windows 主线程默认栈只有 1 MiB。debug 构建里 GPUI 渲染设置 → 外观页的
+    // 调用链会超出这个上限，触发 0xC00000FD 栈溢出（此时 panic hook 也来不及
+    // 运行，crashes/ 里不会留下记录）。把 PE 头的栈保留大小提到 8 MiB。
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg=/STACK:8388608");
+    }
+
     let (major, minor, patch) = pkg_version_parts();
     let version = major << 48 | minor << 32 | patch << 16;
     let version_text = format!("{major}.{minor}.{patch}");

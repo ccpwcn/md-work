@@ -5,9 +5,12 @@
 //! * `~/.config/md-work/theme_extension.toml` — the main configuration. It
 //!   stores the active theme, the extension loading policy and the error
 //!   fallback policy. Every key has a matching control in the settings panel.
-//! * `~/.config/md-work/themes/<id>.toml` — one extension theme per file.
-//!   Dropping a new file in that directory loads it immediately; JSON files in
-//!   Zed's theme format are converted into TOML automatically.
+//! * `~/.config/md-work/themes/<id>.toml` — one theme *collection* per file.
+//!   A file may hold a single `[theme]` (the legacy form) or a `[collection]`
+//!   plus several `[[themes]]` variants. The settings panel renders one
+//!   collapsible group per file, so a Zed theme file that contains light and
+//!   dark variants stays a single group instead of becoming a flat list.
+//!   JSON files in Zed's theme format are converted into one such TOML file.
 //!
 //! The parsed theme is emitted as a JSON value shaped like
 //! `gpui_component::ThemeConfig` (the component library's public theme schema).
@@ -42,7 +45,10 @@ const CONFIG_HEADER: &str = "\
 #  墨笺 md-work · 主题扩展主配置（theme_extension.toml）
 #
 #  本文件保存软件与主题相关的全部配置；每一项都能在「设置 → 外观」中找到。
-#  扩展主题放在同目录的 themes/ 子目录，每个主题一个 TOML 文件：
+#  扩展主题放在同目录的 themes/ 子目录，一个文件就是一个主题集，设置面板按文件分组：
+#  单主题文件用下面的 [theme] 写法；一个文件放多个主题时，用 [collection] 定义主题集名称，
+#  再用多个 [[themes]] 小节定义变体，颜色等写在 [themes.colors] / [themes.highlight] 下。
+#  多主题文件里每个变体的 id 是「文件名-变体名」，active 写成 ext:文件名-变体名。
 #
 #    [theme]
 #    name = \"My Theme\"           # 必填，显示名称
@@ -67,7 +73,7 @@ const CONFIG_HEADER: &str = "\
 #    color = \"#565f89\"
 #
 #  可直接把 Zed 的 .json 主题文件放进 themes/，或在设置里点「导入 Zed 主题」，
-#  软件会自动转换为上述 TOML 格式。
+#  软件会把同一个文件里的全部变体转换成一个 TOML 文件，不拆散、按文件分组显示。
 # =====================================================================
 ";
 
@@ -322,11 +328,17 @@ pub struct ThemeTypography {
 /// A successfully parsed extension theme.
 #[derive(Debug, Clone)]
 pub struct ExtensionTheme {
-    /// File stem; also the `ext:<id>` used in `theme_extension.toml`.
+    /// `ext:<id>` used in `theme_extension.toml`. For a single-theme file this
+    /// is the file stem; for a multi-theme file it is `<stem>-<variant>`.
     pub id: String,
     pub name: String,
     pub author: String,
     pub description: String,
+    /// Display name of the collection (the file that owns this theme). The
+    /// settings panel groups themes by this file instead of flattening them.
+    pub collection: String,
+    /// Stable group key: the file stem. Used for the collapsible group state.
+    pub collection_id: String,
     /// `"light"` or `"dark"`.
     pub mode: String,
     /// `"native"`, `"zed"`, …
@@ -381,22 +393,32 @@ pub fn scan_themes(dir: &Path) -> ThemeScan {
     };
     files.sort();
 
-    let mut seen = HashSet::new();
+    let mut file_ids = HashSet::new();
+    let mut theme_ids = HashSet::new();
     for path in files {
         let stem = file_stem(&path);
-        let id = slugify(&stem);
-        if !seen.insert(id.clone()) {
+        let file_id = slugify(&stem);
+        if !file_ids.insert(file_id.clone()) {
             scan.failures.push(ThemeFailure {
                 path,
                 name: stem,
-                error: format!("主题 id「{id}」重复"),
+                error: format!("主题 id「{file_id}」重复"),
             });
             continue;
         }
         match load_theme_file(&path) {
-            Ok(mut theme) => {
-                theme.id = id;
-                scan.themes.push(theme);
+            Ok(themes) => {
+                for theme in themes {
+                    if !theme_ids.insert(theme.id.clone()) {
+                        scan.failures.push(ThemeFailure {
+                            path: path.clone(),
+                            name: theme.name.clone(),
+                            error: format!("主题 id「{}」重复", theme.id),
+                        });
+                        continue;
+                    }
+                    scan.themes.push(theme);
+                }
             }
             Err(error) => scan.failures.push(ThemeFailure {
                 path,
@@ -408,14 +430,107 @@ pub fn scan_themes(dir: &Path) -> ThemeScan {
     scan
 }
 
-pub fn load_theme_file(path: &Path) -> Result<ExtensionTheme, String> {
+/// Loads every theme contained in one file. A file may hold a single
+/// `[theme]` or a `[collection]` plus several `[[themes]]` variants.
+pub fn load_theme_file(path: &Path) -> Result<Vec<ExtensionTheme>, String> {
     let text = fs::read_to_string(path).map_err(|err| format!("读取失败：{err}"))?;
-    parse_theme_toml(path, &text)
+    parse_theme_file(path, &text)
 }
 
-/// Parses an extension theme TOML file into a vendor-compatible JSON config.
+/// Parses a theme file into one or more themes.
+///
+/// * Legacy single-theme form: `[theme]` plus `[colors]`, `[radius]`,
+///   `[highlight]` and `[highlight.syntax]`.
+/// * Multi-theme form: `[collection]` (name / author / source) followed by
+///   one or more `[[themes]]` entries, each with `[themes.colors]` etc.
+///   Collection metadata is inherited by variants that do not override it.
+///
+/// Every variant gets a stable `id` of `<file-stem>-<variant-name>`, so
+/// `active = "ext:<id>"` keeps working while the file is edited.
+pub fn parse_theme_file(path: &Path, text: &str) -> Result<Vec<ExtensionTheme>, String> {
+    let root: toml::Table = toml::from_str(text).map_err(|err| format!("TOML 解析失败：{err}"))?;
+    let variants = match root.get("themes") {
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| "themes 必须是数组（用 [[themes]] 定义每个主题）".to_string())?,
+        None => return parse_theme_toml(path, text).map(|theme| vec![theme]),
+    };
+    if variants.is_empty() {
+        return Err("[[themes]] 至少要定义一个主题".to_string());
+    }
+    let collection_id = slugify(&file_stem(path));
+    let meta = root.get("collection").and_then(|value| value.as_table());
+    let collection = meta
+        .and_then(|table| non_empty_str(table, "name"))
+        .unwrap_or_else(|| file_stem(path));
+
+    let mut result = Vec::with_capacity(variants.len());
+    let mut seen = HashSet::new();
+    for (index, variant) in variants.iter().enumerate() {
+        let table = variant
+            .as_table()
+            .ok_or_else(|| format!("第 {} 个 [[themes]] 必须是表", index + 1))?;
+        let mut theme_meta = table.clone();
+        if let Some(meta) = meta {
+            for key in ["author", "description", "source"] {
+                if !theme_meta.contains_key(key) {
+                    if let Some(value) = meta.get(key) {
+                        theme_meta.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
+        }
+        let mut variant_root = toml::Table::new();
+        variant_root.insert("theme".to_string(), toml::Value::Table(theme_meta));
+        for key in ["colors", "radius", "highlight", "typography"] {
+            if let Some(value) = table.get(key) {
+                variant_root.insert(key.to_string(), value.clone());
+            }
+        }
+        let slug = slugify(&non_empty_str(table, "name").unwrap_or_default());
+        let base = if slug.is_empty() {
+            format!("{collection_id}-{}", index + 1)
+        } else {
+            format!("{collection_id}-{slug}")
+        };
+        let mut id = base.clone();
+        let mut suffix = 2;
+        while !seen.insert(id.clone()) {
+            id = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        result.push(build_theme(
+            path,
+            &variant_root,
+            id,
+            collection.clone(),
+            collection_id.clone(),
+        )?);
+    }
+    Ok(result)
+}
+
+/// Parses the legacy single-theme file format.
 pub fn parse_theme_toml(path: &Path, text: &str) -> Result<ExtensionTheme, String> {
     let root: toml::Table = toml::from_str(text).map_err(|err| format!("TOML 解析失败：{err}"))?;
+    let id = slugify(&file_stem(path));
+    let collection = root
+        .get("theme")
+        .and_then(|value| value.as_table())
+        .and_then(|table| non_empty_str(table, "collection"))
+        .unwrap_or_else(|| file_stem(path));
+    build_theme(path, &root, id.clone(), collection, id)
+}
+
+/// Builds one theme from a root table holding `theme`, `colors`, `radius`,
+/// `highlight` and `typography`.
+fn build_theme(
+    path: &Path,
+    root: &toml::Table,
+    id: String,
+    collection: String,
+    collection_id: String,
+) -> Result<ExtensionTheme, String> {
     let theme = root
         .get("theme")
         .and_then(|value| value.as_table())
@@ -504,10 +619,12 @@ pub fn parse_theme_toml(path: &Path, text: &str) -> Result<ExtensionTheme, Strin
         .unwrap_or_default();
 
     Ok(ExtensionTheme {
-        id: slugify(&file_stem(path)),
+        id,
         name,
         author: non_empty_str(theme, "author").unwrap_or_default(),
         description: non_empty_str(theme, "description").unwrap_or_default(),
+        collection,
+        collection_id,
         mode,
         source: non_empty_str(theme, "source").unwrap_or_else(|| "native".to_string()),
         path: path.to_path_buf(),
@@ -532,16 +649,29 @@ pub fn content_signature(path: &Path) -> u64 {
 // Zed theme import
 // ---------------------------------------------------------------------------
 
-/// One generated TOML document from a Zed theme JSON file.
+/// One generated TOML document holding every variant of a Zed theme file.
 #[derive(Debug, Clone)]
 pub struct ZedThemeDoc {
+    /// Suggested file stem (without `.toml`).
     pub stem: String,
     pub text: String,
+    /// Collection name shown as the group title in the settings panel.
     pub name: String,
+    /// Number of `[[themes]]` variants written into `text`.
+    pub theme_count: usize,
 }
 
-/// Converts a Zed theme JSON document into one TOML document per theme variant.
-pub fn zed_json_to_toml_documents(json: &str) -> Result<Vec<ZedThemeDoc>, String> {
+/// Result of importing one Zed theme JSON file.
+#[derive(Debug, Clone)]
+pub struct ZedImport {
+    pub paths: Vec<PathBuf>,
+    pub theme_count: usize,
+}
+
+/// Converts a Zed theme JSON document into **one** TOML file with all of its
+/// variants under `[[themes]]`. Keeping them in a single file preserves the
+/// file → variants hierarchy that the settings panel renders as a group.
+pub fn zed_json_to_theme_document(json: &str, stem: &str) -> Result<ZedThemeDoc, String> {
     let root: Value = serde_json::from_str(json).map_err(|err| format!("JSON 解析失败：{err}"))?;
     let author = root
         .get("author")
@@ -562,7 +692,21 @@ pub fn zed_json_to_toml_documents(json: &str) -> Result<Vec<ZedThemeDoc>, String
         return Err("未找到 themes 数组".to_string());
     }
 
-    let mut docs = Vec::new();
+    let collection = if set_name.trim().is_empty() {
+        stem.to_string()
+    } else {
+        set_name.clone()
+    };
+    let mut out = String::new();
+    out.push_str("# 由 Zed 主题自动转换而来，可继续手工编辑。\n");
+    out.push_str("# 一个文件对应一个主题集；[[themes]] 下面是该文件里的全部主题变体。\n");
+    out.push_str("[collection]\n");
+    out.push_str(&format!("name = {}\n", toml_quote(&collection)));
+    if !author.is_empty() {
+        out.push_str(&format!("author = {}\n", toml_quote(&author)));
+    }
+    out.push_str("source = \"zed\"\n");
+
     for (index, variant) in variants.iter().enumerate() {
         let style = variant
             .get("style")
@@ -590,15 +734,9 @@ pub fn zed_json_to_toml_documents(json: &str) -> Result<Vec<ZedThemeDoc>, String
             "dark"
         };
 
-        let mut out = String::new();
-        out.push_str("# 由 Zed 主题自动转换而来，可继续手工编辑。\n");
-        out.push_str("[theme]\n");
+        out.push_str("\n[[themes]]\n");
         out.push_str(&format!("name = {}\n", toml_quote(&name)));
-        if !author.is_empty() {
-            out.push_str(&format!("author = {}\n", toml_quote(&author)));
-        }
         out.push_str(&format!("mode = {}\n", toml_quote(mode)));
-        out.push_str("source = \"zed\"\n\n");
 
         let mut colors: BTreeMap<String, String> = BTreeMap::new();
         for (zed_key, mdwork_key) in ZED_COLOR_MAP {
@@ -624,7 +762,7 @@ pub fn zed_json_to_toml_documents(json: &str) -> Result<Vec<ZedThemeDoc>, String
                 .entry("primary.background".to_string())
                 .or_insert(accent);
         }
-        out.push_str("[colors]\n");
+        out.push_str("\n[themes.colors]\n");
         if colors.is_empty() {
             return Err(format!("主题「{name}」没有任何可识别的颜色"));
         }
@@ -649,7 +787,7 @@ pub fn zed_json_to_toml_documents(json: &str) -> Result<Vec<ZedThemeDoc>, String
             highlight.insert(mapped.to_string(), color);
         }
         if !highlight.is_empty() {
-            out.push_str("\n[highlight]\n");
+            out.push_str("\n[themes.highlight]\n");
             for (key, value) in &highlight {
                 out.push_str(&format!("{} = {}\n", toml_key(key), toml_quote(value)));
             }
@@ -666,49 +804,50 @@ pub fn zed_json_to_toml_documents(json: &str) -> Result<Vec<ZedThemeDoc>, String
                 }
             }
             if !syntax_lines.is_empty() {
-                out.push_str("\n[highlight.syntax]\n");
+                out.push_str("\n[themes.highlight.syntax]\n");
                 for line in syntax_lines {
                     out.push_str(&line);
                     out.push('\n');
                 }
             }
         }
-
-        let stem_base = slugify(&format!("{name}-{mode}"));
-        docs.push(ZedThemeDoc {
-            stem: if stem_base.is_empty() {
-                format!("zed-theme-{index}")
-            } else {
-                stem_base
-            },
-            text: out,
-            name,
-        });
     }
-    Ok(docs)
+    let file_stem = slugify(stem);
+    Ok(ZedThemeDoc {
+        stem: if file_stem.is_empty() {
+            "zed-theme".to_string()
+        } else {
+            file_stem
+        },
+        text: out,
+        name: collection,
+        theme_count: variants.len(),
+    })
 }
 
-/// Writes converted TOML files into `dir` and returns their paths.
-pub fn import_zed_theme(json_path: &Path, dir: &Path) -> Result<Vec<PathBuf>, String> {
+/// Imports a Zed theme JSON file, writing one TOML file with all its variants.
+pub fn import_zed_theme(json_path: &Path, dir: &Path) -> Result<ZedImport, String> {
     let json = fs::read_to_string(json_path)
         .map_err(|err| format!("读取 {} 失败：{err}", json_path.display()))?;
-    write_zed_documents(&json, dir)
+    let stem = format!("{}-zed", slugify(&file_stem(json_path)));
+    write_zed_document(&json, dir, &stem)
 }
 
-pub fn write_zed_documents(json: &str, dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let docs = zed_json_to_toml_documents(json)?;
+/// Writes the converted TOML into `dir`; returns its path and variant count.
+pub fn write_zed_document(json: &str, dir: &Path, stem: &str) -> Result<ZedImport, String> {
+    let doc = zed_json_to_theme_document(json, stem)?;
     fs::create_dir_all(dir).map_err(|err| format!("创建主题目录失败：{err}"))?;
-    let mut written = Vec::new();
-    for doc in docs {
-        let path = unique_theme_path(dir, &doc.stem);
-        toml_io::save_text(&path, &doc.text)
-            .map_err(|err| format!("写入 {} 失败：{err}", path.display()))?;
-        written.push(path);
-    }
-    Ok(written)
+    let path = unique_theme_path(dir, &doc.stem);
+    toml_io::save_text(&path, &doc.text)
+        .map_err(|err| format!("写入 {} 失败：{err}", path.display()))?;
+    Ok(ZedImport {
+        paths: vec![path],
+        theme_count: doc.theme_count,
+    })
 }
 
 /// Converts Zed `.json` files that were dropped straight into `themes/`.
+/// Each JSON file produces exactly one TOML file, so the group stays intact.
 fn import_zed_files_in_dir(dir: &Path, scan: &mut ThemeScan) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -719,28 +858,18 @@ fn import_zed_files_in_dir(dir: &Path, scan: &mut ThemeScan) {
         .collect();
     files.sort();
     for json_path in files {
-        let stem = file_stem(&json_path);
-        let base = format!("{}-zed", slugify(&stem));
+        let source = file_stem(&json_path);
+        let stem = format!("{}-zed", slugify(&source));
+        let target = dir.join(format!("{stem}.toml"));
         let json_mtime = fs::metadata(&json_path)
             .and_then(|meta| meta.modified())
             .ok();
-        // Skip reconversion while any generated TOML is newer than the JSON;
+        // Skip reconversion while the generated TOML is newer than the JSON;
         // otherwise editing a Zed file would rewrite its conversion on every scan.
-        let already_converted = fs::read_dir(dir)
+        let already_converted = fs::metadata(&target)
+            .and_then(|meta| meta.modified())
             .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                has_extension(&entry.path(), "toml") && name.starts_with(&base)
-            })
-            .filter_map(|entry| {
-                fs::metadata(entry.path())
-                    .and_then(|meta| meta.modified())
-                    .ok()
-            })
-            .any(|toml_mtime| match json_mtime {
+            .is_some_and(|toml_mtime| match json_mtime {
                 Some(json_mtime) => toml_mtime >= json_mtime,
                 None => true,
             });
@@ -752,86 +881,94 @@ fn import_zed_files_in_dir(dir: &Path, scan: &mut ThemeScan) {
             Err(err) => {
                 scan.failures.push(ThemeFailure {
                     path: json_path,
-                    name: stem,
+                    name: source,
                     error: format!("读取 Zed 主题失败：{err}"),
                 });
                 continue;
             }
         };
-        let docs = match zed_json_to_toml_documents(&json) {
-            Ok(docs) => docs,
-            Err(err) => {
-                scan.failures.push(ThemeFailure {
-                    path: json_path,
-                    name: stem,
-                    error: format!("Zed 主题转换失败：{err}"),
-                });
-                continue;
+        match zed_json_to_theme_document(&json, &stem) {
+            Ok(doc) => {
+                if let Err(err) = toml_io::save_text(&target, &doc.text) {
+                    scan.failures.push(ThemeFailure {
+                        path: target,
+                        name: doc.name,
+                        error: format!("写入转换结果失败：{err}"),
+                    });
+                }
             }
-        };
-        for (index, doc) in docs.iter().enumerate() {
-            let stem = if docs.len() == 1 {
-                format!("{}-zed", slugify(&file_stem(&json_path)))
-            } else {
-                format!("{}-zed-{}", slugify(&file_stem(&json_path)), index + 1)
-            };
-            let path = dir.join(format!("{stem}.toml"));
-            if let Err(err) = toml_io::save_text(&path, &doc.text) {
-                scan.failures.push(ThemeFailure {
-                    path,
-                    name: doc.name.clone(),
-                    error: format!("写入转换结果失败：{err}"),
-                });
-            }
+            Err(err) => scan.failures.push(ThemeFailure {
+                path: json_path,
+                name: source,
+                error: format!("Zed 主题转换失败：{err}"),
+            }),
         }
     }
 }
 
 /// A commented example theme, created on demand from the settings panel so
 /// developers have a starting point without shipping a fake built-in theme.
+/// It uses the multi-theme form: one file, one collapsible group, two variants.
 pub fn example_theme_toml() -> &'static str {
-    "\
+    r##"
 # 墨笺 md-work 扩展主题示例 —— 复制到 ~/.config/md-work/themes/ 即可自动载入。
-# 文件名（不含 .toml）就是主题 id，可在 theme_extension.toml 里写成 active = \"ext:my-theme\"。
-[theme]
-name = \"My Theme\"
-author = \"Your Name\"
-description = \"一个暗色示例主题\"
-mode = \"dark\"
+# 一个文件就是一个主题集，设置 → 外观里显示成一个可折叠分组；
+# 下面两个 [[themes]] 变体就是分组里的两个主题。
+# 变体 id 是「文件名-变体名」，例如 active = "ext:my-theme-my-dark"。
+[collection]
+name = "My Collection"
+author = "Your Name"
+source = "native"
 
-[colors]
-background = \"#181825\"
-foreground = \"#cdd6f4\"
-\"muted.foreground\" = \"#a6adc8\"
-border = \"#313244\"
-\"accent.background\" = \"#313244\"
-\"accent.foreground\" = \"#cdd6f4\"
-\"primary.background\" = \"#89b4fa\"
-\"primary.foreground\" = \"#1e1e2e\"
-\"popover.background\" = \"#1e1e2e\"
-\"popover.foreground\" = \"#cdd6f4\"
-\"sidebar.background\" = \"#11111b\"
-\"sidebar.foreground\" = \"#cdd6f4\"
-\"list.hover.background\" = \"#313244\"
-\"list.active.background\" = \"#45475a\"
+[[themes]]
+name = "My Dark"
+mode = "dark"
 
-[radius]
+[themes.colors]
+background = "#181825"
+foreground = "#cdd6f4"
+"muted.foreground" = "#a6adc8"
+border = "#313244"
+"accent.background" = "#313244"
+"primary.background" = "#89b4fa"
+"popover.background" = "#1e1e2e"
+"sidebar.background" = "#11111b"
+"list.hover.background" = "#313244"
+"list.active.background" = "#45475a"
+
+[themes.radius]
 normal = 6
 large = 8
 shadow = true
 
-[highlight]
-\"editor.background\" = \"#181825\"
-\"editor.foreground\" = \"#cdd6f4\"
-\"editor.line_number\" = \"#6c7086\"
+[themes.highlight]
+"editor.background" = "#181825"
+"editor.foreground" = "#cdd6f4"
+"editor.line_number" = "#6c7086"
 
-[highlight.syntax]
-keyword = \"#cba6f7\"
-string = \"#a6e3a1\"
-function = \"#89b4fa\"
-number = \"#fab387\"
-comment = \"#6c7086\"
-"
+[themes.highlight.syntax]
+keyword = "#cba6f7"
+string = "#a6e3a1"
+function = "#89b4fa"
+number = "#fab387"
+comment = "#6c7086"
+
+[[themes]]
+name = "My Light"
+mode = "light"
+
+[themes.colors]
+background = "#ffffff"
+foreground = "#24292f"
+"muted.foreground" = "#57606a"
+border = "#d0d7de"
+"accent.background" = "#ddf4ff"
+"primary.background" = "#0969da"
+
+[themes.highlight]
+"editor.background" = "#ffffff"
+"editor.foreground" = "#24292f"
+"##
 }
 
 // ---------------------------------------------------------------------------
@@ -1299,35 +1436,92 @@ font_style = "italic"
     }
 
     #[test]
-    fn zed_theme_converts_to_loadable_toml() {
+    fn zed_theme_keeps_all_variants_in_one_file() {
         let zed = r##"{
             "name": "Example",
             "author": "Someone",
-            "themes": [{
-                "name": "Example Dark",
-                "appearance": "dark",
-                "style": {
-                    "background": "#111111",
-                    "editor.background": "#1e1e2e",
-                    "editor.foreground": "#cdd6f4",
-                    "border": "#313244",
-                    "error": "#ff0000",
-                    "syntax": {
-                        "keyword": "#cba6f7",
-                        "comment": { "color": "#6c7086", "font_style": "italic" },
-                        "emphasis": { "color": "#ffffff", "font_style": "italic" }
+            "themes": [
+                {
+                    "name": "Example Dark",
+                    "appearance": "dark",
+                    "style": {
+                        "background": "#111111",
+                        "editor.background": "#1e1e2e",
+                        "editor.foreground": "#cdd6f4",
+                        "border": "#313244",
+                        "error": "#ff0000",
+                        "syntax": {
+                            "keyword": "#cba6f7",
+                            "comment": { "color": "#6c7086", "font_style": "italic" },
+                            "emphasis": { "color": "#ffffff", "font_style": "italic" }
+                        }
+                    }
+                },
+                {
+                    "name": "Example Light",
+                    "appearance": "light",
+                    "style": {
+                        "editor.background": "#ffffff",
+                        "editor.foreground": "#111111",
+                        "syntax": { "keyword": "#0000ff" }
                     }
                 }
-            }]
+            ]
         }"##;
-        let docs = zed_json_to_toml_documents(zed).unwrap();
-        assert_eq!(docs.len(), 1);
-        let theme = parse_theme_toml(Path::new("example-dark.toml"), &docs[0].text).unwrap();
-        assert_eq!(theme.name, "Example Dark");
-        assert_eq!(theme.mode, "dark");
-        assert_eq!(theme.source, "zed");
-        assert_eq!(theme.config["colors"]["background"], "#1e1e2e");
-        let syntax = theme.config["highlight"]["syntax"].as_object().unwrap();
+        let doc = zed_json_to_theme_document(zed, "example-zed").unwrap();
+        assert_eq!(doc.theme_count, 2);
+        assert_eq!(doc.stem, "example-zed");
+        assert_eq!(doc.name, "Example");
+        assert_eq!(
+            doc.text
+                .lines()
+                .filter(|line| line.trim() == "[[themes]]")
+                .count(),
+            2
+        );
+
+        let themes = parse_theme_file(Path::new("example-zed.toml"), &doc.text).unwrap();
+        assert_eq!(themes.len(), 2);
+        assert_eq!(themes[0].name, "Example Dark");
+        assert_eq!(themes[0].mode, "dark");
+        assert_eq!(themes[0].source, "zed");
+        assert_eq!(themes[0].author, "Someone");
+        assert_eq!(themes[0].config["colors"]["background"], "#1e1e2e");
+        let syntax = themes[0].config["highlight"]["syntax"].as_object().unwrap();
         assert_eq!(syntax["emphasis"]["font_style"], "normal");
+        assert_eq!(themes[1].name, "Example Light");
+        assert_eq!(themes[1].mode, "light");
+        assert_eq!(themes[1].config["colors"]["background"], "#ffffff");
+
+        // One file is one group, with stable variant ids.
+        assert_eq!(themes[0].collection, "Example");
+        assert_eq!(themes[0].collection_id, themes[1].collection_id);
+        assert_ne!(themes[0].id, themes[1].id);
+        assert!(
+            themes
+                .iter()
+                .all(|theme| theme.id.starts_with("example-zed-"))
+        );
+    }
+
+    #[test]
+    fn multi_theme_file_groups_variants_and_legacy_still_works() {
+        let themes = parse_theme_file(Path::new("my-theme.toml"), example_theme_toml()).unwrap();
+        assert_eq!(themes.len(), 2);
+        assert_eq!(themes[0].collection, "My Collection");
+        assert_eq!(themes[0].id, "my-theme-my-dark");
+        assert_eq!(themes[1].id, "my-theme-my-light");
+        assert_eq!(themes[0].mode, "dark");
+        assert_eq!(themes[1].mode, "light");
+        assert_eq!(themes[1].config["colors"]["background"], "#ffffff");
+
+        let legacy = parse_theme_file(
+            Path::new("legacy.toml"),
+            "[theme]\nname = \"Legacy\"\nmode = \"dark\"\n[colors]\nbackground = \"#000000\"\n",
+        )
+        .unwrap();
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].id, "legacy");
+        assert_eq!(legacy[0].collection_id, "legacy");
     }
 }

@@ -1,6 +1,7 @@
 //! Local crash records and optional upload to the Gitee issue tracker.
 //!
-//! When the process panics we write a small JSON file under
+//! When the process panics (or, on Windows, hits a native exception) we write
+//! a small JSON file under
 //! `%LOCALAPPDATA%/md-work/crashes/`. On the next start the app may upload
 //! pending records to Gitee as issues when a token is configured; note bodies
 //! are never included. Without a token nothing is requested, and once Gitee
@@ -29,6 +30,72 @@ pub struct ReportSummary {
     pub failed: usize,
     /// Why no report was attempted; empty when at least one upload ran.
     pub skipped: String,
+}
+
+/// Windows 原生异常（访问冲突、非法指令等）不经过 Rust 的 panic hook，
+/// 因此 `install_hook` 对这类崩溃不会留下任何记录。这里注册最前置的
+/// vectored exception handler，把异常码与地址写进同样的 `crash-*.json`。
+///
+/// 处理器只做一次原子去重和一次文件写入：异常上下文中不采集 backtrace、
+/// 不调用日志框架、不清理旧文件，避免再次触发异常。异常本身继续交给
+/// 系统与 WER 处理，不改变进程的崩溃行为。
+#[cfg(windows)]
+pub fn install_native_hook() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use windows::Win32::System::Diagnostics::Debug::{
+        AddVectoredExceptionHandler, EXCEPTION_POINTERS,
+    };
+
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "system" fn on_exception(info: *mut EXCEPTION_POINTERS) -> i32 {
+        // EXCEPTION_CONTINUE_SEARCH = 0
+        if info.is_null() || REPORTED.swap(true, Ordering::Relaxed) {
+            return 0;
+        }
+        let record = unsafe { (*info).ExceptionRecord };
+        if record.is_null() {
+            return 0;
+        }
+        let code = unsafe { (*record).ExceptionCode.0 as u32 };
+        // 调试器输出、断点、C++ first-chance 异常都不是崩溃。
+        if matches!(code, 0x4001_0006 | 0x8000_0003 | 0xE06D_7363) {
+            REPORTED.store(false, Ordering::Relaxed);
+            return 0;
+        }
+        let address = unsafe { (*record).ExceptionAddress } as usize;
+        let _ = write_native_record(&crate::paths::crashes_dir(), code, address);
+        0
+    }
+
+    // SAFETY: 处理器只读取异常记录并写文件，随后把异常交回系统。
+    unsafe {
+        let _ = AddVectoredExceptionHandler(1, Some(on_exception));
+    }
+}
+
+#[cfg(not(windows))]
+pub fn install_native_hook() {}
+
+#[cfg(windows)]
+fn write_native_record(dir: &Path, code: u32, address: usize) -> crate::Result<PathBuf> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let millis = now.as_millis();
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(format!("crash-{millis}-{:09}.json", now.subsec_nanos()));
+    // 手工拼 JSON，避免在异常处理期间使用 serde_json 与复杂格式化。
+    let body = format!(
+        "{{\"format\":\"md-work/crash@1\",\"timestamp_ms\":{millis},\"version\":\"{version}\",\"os\":\"{os}\",\"arch\":\"{arch}\",\"thread\":\"<native>\",\"message\":\"Windows native exception 0x{code:08X}\",\"location\":\"0x{address:X}\",\"native\":true,\"backtrace\":\"unavailable for native exceptions\"}}",
+        version = crate::version(),
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+        code = code,
+        address = address,
+    );
+    std::fs::write(&path, body)?;
+    Ok(path)
 }
 
 pub fn install_hook() {
@@ -419,6 +486,20 @@ mod tests {
 
     fn scratch() -> PathBuf {
         std::env::temp_dir().join(format!("mdwork-crash-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn native_record_is_valid_crash_json() {
+        let dir = scratch();
+        let path = write_native_record(&dir, 0xC000_0005, 0x1234_5678).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["native"], true);
+        assert!(value["message"].as_str().unwrap().contains("C0000005"));
+        assert!(value["location"].as_str().unwrap().contains("12345678"));
+        assert_eq!(pending_records(&dir).len(), 1, "原生异常记录也应能被上报");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

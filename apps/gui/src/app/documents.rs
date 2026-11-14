@@ -90,6 +90,31 @@ impl AppShell {
         self.notify_success(t!("note.path_copied").to_string(), cx);
     }
 
+    /// 笔记本显示名；笔记本不存在时返回空串。
+    pub(super) fn notebook_name(&self, notebook_id: Uuid) -> String {
+        self.notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == notebook_id)
+            .map(|entry| entry.notebook.display_name().to_string())
+            .unwrap_or_default()
+    }
+
+    /// 树条目的级联全名称：笔记本名/文件夹/…/笔记名。
+    pub(super) fn tree_full_entry_name(
+        &self,
+        notebook_id: Uuid,
+        rel_path: &str,
+        is_folder: bool,
+    ) -> String {
+        tree_full_name(&self.notebook_name(notebook_id), rel_path, is_folder)
+    }
+
+    /// 把名称写入系统剪贴板（区别于笔记树内部的应用内剪贴板）。
+    pub(super) fn copy_tree_name(&mut self, name: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(name));
+        self.notify_success(t!("note.name_copied").to_string(), cx);
+    }
+
     /// 在文件管理器中定位笔记（Windows 会选中该文件）。
     pub(super) fn reveal_note_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
         let Some(path) = path else {

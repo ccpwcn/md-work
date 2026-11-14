@@ -91,6 +91,7 @@ impl AppShell {
                 )
                 .on_click(cx.listener(|this, _, window, cx| this.open_zip_import(window, cx))),
             ))
+            .child(self.render_theme_switcher(cx))
             .child(titlebar_guard(
                 title_icon(
                     "title-settings",
@@ -126,6 +127,7 @@ impl AppShell {
                 this.notice_panel = !this.notice_panel;
                 if this.notice_panel {
                     this.workspace_menu = false;
+                    this.theme_menu = false;
                 }
                 cx.notify();
             }))

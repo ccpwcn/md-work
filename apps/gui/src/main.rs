@@ -54,6 +54,8 @@ fn main() {
         Err(err) => eprintln!("md-work: 日志不可用：{err}"),
     }
     mdwork_core::crash::install_hook();
+    // panic hook 只覆盖 Rust panic；原生异常（访问冲突等）由 VEH 兜底记录。
+    mdwork_core::crash::install_native_hook();
     #[cfg(debug_assertions)]
     if std::env::var_os("MDWORK_TEST_PANIC").is_some() {
         panic!("panic requested by MDWORK_TEST_PANIC");

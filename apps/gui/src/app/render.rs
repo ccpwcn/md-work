@@ -754,6 +754,8 @@ impl AppShell {
         let close_right_label = t!("tabs.close_right").to_string();
         let close_all_label = t!("tabs.close_all").to_string();
         let adopt_label = t!("external.save_into").to_string();
+        let copy_name_label = t!("note.copy_name").to_string();
+        let copy_full_name_label = t!("note.copy_full_name").to_string();
         let copy_path_label = t!("note.copy_path").to_string();
         let open_folder_label = t!("note.open_folder").to_string();
         let drag_from = self.tab_drag.as_ref().map(|d| d.from);
@@ -848,6 +850,11 @@ impl AppShell {
             let close_right_label = close_right_label.clone();
             let close_all_label = close_all_label.clone();
             let adopt_label = adopt_label.clone();
+            let name_copy_label = copy_name_label.clone();
+            let full_name_copy_label = copy_full_name_label.clone();
+            // 页签标题可能被加上「官方 · 」前缀或状态符号，这里取纯名称。
+            let name_copy_text = tree_entry_name(&doc.rel_path, false);
+            let full_name_copy_text = tree_full_name(&doc.notebook_name, &doc.rel_path, false);
             let path_copy_label = copy_path_label.clone();
             let path_reveal_label = open_folder_label.clone();
             let path_copy_shell = shell.clone();
@@ -950,6 +957,10 @@ impl AppShell {
                         let right_shell = shell.clone();
                         let all_shell = shell.clone();
                         let adopt_shell = shell.clone();
+                        let name_shell = shell.clone();
+                        let full_name_shell = shell.clone();
+                        let name_copy_text = name_copy_text.clone();
+                        let full_name_copy_text = full_name_copy_text.clone();
                         let copy_path_shell = path_copy_shell.clone();
                         let reveal_path_shell = path_reveal_shell.clone();
                         let copy_target = path_copy_target.clone();
@@ -984,6 +995,24 @@ impl AppShell {
                             ));
                         }
                         menu = menu
+                            .item(PopupMenuItem::new(name_copy_label.clone()).on_click({
+                                let name_shell = name_shell.clone();
+                                let text = name_copy_text.clone();
+                                move |_, _, cx| {
+                                    name_shell.update(cx, |this, cx| {
+                                        this.copy_tree_name(text.clone(), cx)
+                                    });
+                                }
+                            }))
+                            .item(PopupMenuItem::new(full_name_copy_label.clone()).on_click({
+                                let full_name_shell = full_name_shell.clone();
+                                let text = full_name_copy_text.clone();
+                                move |_, _, cx| {
+                                    full_name_shell.update(cx, |this, cx| {
+                                        this.copy_tree_name(text.clone(), cx)
+                                    });
+                                }
+                            }))
                             .item(
                                 PopupMenuItem::new(path_copy_label.clone())
                                     .disabled(is_official)

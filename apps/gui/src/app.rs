@@ -562,6 +562,8 @@ struct McpSettingsDialog {
     pending_delete: bool,
     audit: Vec<AuditEntry>,
     audit_error: Option<String>,
+    /// 审计页当前页码（0 起），最多翻到第 10 页。
+    audit_page: usize,
     /// 权限树编辑态：每次变更即时保存，仅对新 MCP 会话生效。
     perms: PermissionTree,
     /// 权限文件签名校验失败：已按全部隐藏处理，需重新授权重建签名。
@@ -593,6 +595,10 @@ pub struct AppShell {
     notice_panel: bool,
     workspace_registry: WorkspaceRegistry,
     workspace_menu: bool,
+    /// 标题栏「主题」下拉是否展开，与工作区 / 通知浮层互斥。
+    theme_menu: bool,
+    /// 标题栏主题列表的滚动位置，供常驻滚动条读取。
+    theme_menu_scroll: ScrollHandle,
     /// Workspace roots that were missing on the last presence probe; the
     /// switcher must not hit the filesystem while rendering.
     missing_workspaces: HashSet<PathBuf>,
@@ -600,6 +606,8 @@ pub struct AppShell {
     changed: Option<Arc<Mutex<Receiver<Vec<PathBuf>>>>>,
     /// Runtime state for `theme_extension.toml` + extension themes.
     theme_ext: ThemeExtensionState,
+    /// 「设置 → 外观」主题列表的滚动位置：滚轮先翻主题，到边界才翻设置页。
+    theme_list_scroll: ScrollHandle,
     /// Debounced batches from the theme directory watcher.
     theme_changed: Option<Arc<Mutex<Receiver<Vec<PathBuf>>>>>,
     /// Keeps the theme watcher alive; dropping it stops the watch.
@@ -974,10 +982,13 @@ impl AppShell {
             notice_panel: false,
             workspace_registry: registry,
             workspace_menu: false,
+            theme_menu: false,
+            theme_menu_scroll: ScrollHandle::new(),
             missing_workspaces: HashSet::new(),
             pending,
             changed: None,
             theme_ext,
+            theme_list_scroll: ScrollHandle::new(),
             theme_changed: None,
             _theme_watcher: None,
             window_handle: window.window_handle(),

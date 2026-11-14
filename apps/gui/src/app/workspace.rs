@@ -24,6 +24,7 @@ impl AppShell {
             && mdwork_core::workspace::same_path(&current, &root)
         {
             self.workspace_menu = false;
+        self.theme_menu = false;
             cx.notify();
             return;
         }
@@ -103,6 +104,7 @@ impl AppShell {
         self.initializing = true;
         self.startup_first_run = false;
         self.workspace_menu = false;
+        self.theme_menu = false;
         self.search_input
             .update(cx, |state, cx| state.set_value("", window, cx));
 
@@ -308,6 +310,7 @@ impl AppShell {
                 this.workspace_menu = !this.workspace_menu;
                 if this.workspace_menu {
                     this.notice_panel = false;
+                    this.theme_menu = false;
                 }
                 cx.notify();
             }))

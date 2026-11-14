@@ -111,7 +111,7 @@ mod tests {
     use std::path::Path;
 
     use gpui_kit::component::{Theme, ThemeConfig, ThemeMode};
-    use mdwork_core::theme_ext::{parse_theme_toml, zed_json_to_toml_documents};
+    use mdwork_core::theme_ext::{parse_theme_file, parse_theme_toml, zed_json_to_theme_document};
     use mdwork_core::{AppConfig, ThemePreference};
 
     /// 扩展主题生成的 JSON 必须能被组件库的公开主题结构直接反序列化，
@@ -154,8 +154,10 @@ keyword = "#ff00ff"
                 }
             }]
         }"##;
-        let docs = zed_json_to_toml_documents(zed).unwrap();
-        let converted = parse_theme_toml(Path::new("zed.toml"), &docs[0].text).unwrap();
+        let doc = zed_json_to_theme_document(zed, "zed").unwrap();
+        let converted = parse_theme_file(Path::new("zed.toml"), &doc.text)
+            .unwrap()
+            .remove(0);
         let config: ThemeConfig = serde_json::from_value(converted.config).unwrap();
         assert_eq!(config.mode, ThemeMode::Dark);
         assert_eq!(config.colors.background.as_deref(), Some("#1e1e2e"));

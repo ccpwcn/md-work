@@ -114,6 +114,10 @@ impl AppShell {
                             let import_shell = shell.clone();
                             let create_shell = shell.clone();
                             let rename_shell = shell.clone();
+                            let name_shell = shell.clone();
+                            let full_name_shell = shell.clone();
+                            let copy_name_label = t!("note.copy_name").to_string();
+                            let copy_full_name_label = t!("note.copy_full_name").to_string();
                             let export_label = t!("zip.export_label").to_string();
                             let import_label = t!("zip.import_label").to_string();
                             let rename_label = t!("sidebar.rename_notebook").to_string();
@@ -136,12 +140,18 @@ impl AppShell {
                                 let new_folder_label = new_folder_label.clone();
                                 let paste_label = paste_label.clone();
                                 let rename_label = rename_label.clone();
+                                let copy_name_label = copy_name_label.clone();
+                                let copy_full_name_label = copy_full_name_label.clone();
                                 let export_label = export_label.clone();
                                 let import_label = import_label.clone();
+                                let name_shell = name_shell.clone();
+                                let full_name_shell = full_name_shell.clone();
                                 move |menu: gpui_kit::component::menu::PopupMenu, cx: &App| {
                                     let export_shell = export_shell.clone();
                                     let import_shell = import_shell.clone();
                                     let rename_shell = rename_shell.clone();
+                                    let name_shell = name_shell.clone();
+                                    let full_name_shell = full_name_shell.clone();
                                     let create_shell = create_shell.clone();
                                     let note_shell = create_shell.clone();
                                     let can_paste = create_shell.read(cx).tree_clipboard.is_some();
@@ -206,6 +216,23 @@ impl AppShell {
                                                         window,
                                                         cx,
                                                     );
+                                                });
+                                            },
+                                        ))
+                                        .item(PopupMenuItem::new(copy_name_label.clone()).on_click(
+                                            move |_, _, cx| {
+                                                name_shell.update(cx, |this, cx| {
+                                                    let name = this.notebook_name(notebook_id);
+                                                    this.copy_tree_name(name, cx);
+                                                });
+                                            },
+                                        ))
+                                        .item(PopupMenuItem::new(copy_full_name_label.clone()).on_click(
+                                            move |_, _, cx| {
+                                                full_name_shell.update(cx, |this, cx| {
+                                                    // 笔记本位于层级顶端，全名称与名称相同。
+                                                    let name = this.notebook_name(notebook_id);
+                                                    this.copy_tree_name(name, cx);
                                                 });
                                             },
                                         ))
@@ -504,6 +531,8 @@ impl AppShell {
                             let child_note_label = t!("tree.new_child_note").to_string();
                             let sibling_note_label = t!("tree.new_sibling_note").to_string();
                             let sibling_folder_label = t!("tree.new_sibling_folder").to_string();
+                            let note_copy_name_label = t!("note.copy_name").to_string();
+                            let note_copy_full_name_label = t!("note.copy_full_name").to_string();
                             let note_copy_path_label = t!("note.copy_path").to_string();
                             let note_open_folder_label = t!("note.open_folder").to_string();
                             let note_path_shell = shell.clone();
@@ -535,6 +564,8 @@ impl AppShell {
                                 let child_note_label = child_note_label.clone();
                                 let sibling_note_label = sibling_note_label.clone();
                                 let sibling_folder_label = sibling_folder_label.clone();
+                                let note_copy_name_label = note_copy_name_label.clone();
+                                let note_copy_full_name_label = note_copy_full_name_label.clone();
                                 let note_copy_path_label = note_copy_path_label.clone();
                                 let note_open_folder_label = note_open_folder_label.clone();
                                 let note_path_shell = note_path_shell.clone();
@@ -754,6 +785,36 @@ impl AppShell {
                                             move_shell.update(cx, |this, cx| {
                                                 this.begin_move(notebook_id, &move_rel, window, cx)
                                             });
+                                        },
+                                    ))
+                                    .item(PopupMenuItem::new(note_copy_name_label.clone()).on_click(
+                                        {
+                                            let name_shell = note_path_shell.clone();
+                                            let name_rel = create_rel.clone();
+                                            let name_folder = is_folder;
+                                            move |_, _, cx| {
+                                                name_shell.update(cx, |this, cx| {
+                                                    let name = tree_entry_name(&name_rel, name_folder);
+                                                    this.copy_tree_name(name, cx);
+                                                });
+                                            }
+                                        },
+                                    ))
+                                    .item(PopupMenuItem::new(note_copy_full_name_label.clone()).on_click(
+                                        {
+                                            let full_shell = note_path_shell.clone();
+                                            let full_rel = create_rel.clone();
+                                            let full_folder = is_folder;
+                                            move |_, _, cx| {
+                                                full_shell.update(cx, |this, cx| {
+                                                    let full = this.tree_full_entry_name(
+                                                        notebook_id,
+                                                        &full_rel,
+                                                        full_folder,
+                                                    );
+                                                    this.copy_tree_name(full, cx);
+                                                });
+                                            }
                                         },
                                     ))
                                     .item(PopupMenuItem::new(note_copy_path_label.clone()).on_click(

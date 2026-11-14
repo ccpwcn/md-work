@@ -4,10 +4,12 @@
 //! watcher and the resulting notification messages together, and renders the
 //! matching controls in 「设置 → 外观」.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use gpui_kit::Axis;
+use gpui_kit::base::{ScrollableMask, Scrollbar, ScrollbarMode, Selectable as _};
 use mdwork_core::config::ThemePreference;
 use mdwork_core::theme_ext::{
     ActiveTheme, ExtensionTheme, ThemeExtensionConfig, ThemeFailure, ThemeFallbackPolicy,
@@ -18,6 +20,30 @@ use rust_i18n::t;
 
 use super::util::*;
 use super::*;
+
+/// Group id for the three built-in themes in the settings list.
+const BUILTIN_GROUP: &str = "builtin";
+/// Fixed row height and viewport height of the theme list.
+const THEME_ROW_HEIGHT: f32 = 34.;
+const THEME_LIST_HEIGHT: f32 = 238.;
+
+/// One row of the theme list. Groups and options share a fixed row height.
+#[derive(Clone)]
+enum ThemeRow {
+    Group {
+        id: String,
+        label: String,
+        count: usize,
+        expanded: bool,
+    },
+    Option {
+        label: String,
+        detail: String,
+        icon: IconName,
+        target: ActiveTheme,
+        selected: bool,
+    },
+}
 
 /// Runtime state of the theme extension system.
 pub struct ThemeExtensionState {
@@ -31,6 +57,8 @@ pub struct ThemeExtensionState {
     config_signature: u64,
     /// Last successfully loaded active extension theme (for `keep-current`).
     last_good: Option<ExtensionTheme>,
+    /// Collapsed theme groups, keyed by `collection_id`.
+    pub collapsed: HashSet<String>,
     notices: Vec<(NoticeKind, String)>,
 }
 
@@ -46,6 +74,7 @@ impl ThemeExtensionState {
             names: HashMap::new(),
             config_signature: content_signature(&path),
             last_good: None,
+            collapsed: HashSet::new(),
             notices: Vec::new(),
         };
         for issue in issues {
@@ -118,20 +147,32 @@ impl ThemeExtensionState {
         }
         let mut signatures = HashMap::new();
         let mut names = HashMap::new();
+        let mut file_counts: HashMap<PathBuf, usize> = HashMap::new();
 
         for theme in &themes {
-            let signature = content_signature(&theme.path);
-            let changed = self.signatures.get(&theme.path) != Some(&signature);
-            if initial || changed {
-                self.push(
-                    NoticeKind::Success,
-                    t!("theme_ext.found_ok", name = theme.name.clone()).to_string(),
-                );
-            }
-            signatures.insert(theme.path.clone(), signature);
-            names.insert(theme.path.clone(), theme.name.clone());
+            signatures.insert(theme.path.clone(), content_signature(&theme.path));
+            *file_counts.entry(theme.path.clone()).or_insert(0) += 1;
+            names
+                .entry(theme.path.clone())
+                .or_insert_with(|| theme.collection.clone());
             if self.config.active == ActiveTheme::Extension(theme.id.clone()) {
                 self.last_good = Some(theme.clone());
+            }
+        }
+        // One notification per file: a Zed file can contain many variants.
+        for (path, label) in &names {
+            let count = file_counts.get(path).copied().unwrap_or(1);
+            let changed = self.signatures.get(path) != signatures.get(path);
+            if initial || changed {
+                let name = if count > 1 {
+                    format!("{label} · {}", t!("theme_ext.group_count", count = count))
+                } else {
+                    label.clone()
+                };
+                self.push(
+                    NoticeKind::Success,
+                    t!("theme_ext.found_ok", name = name).to_string(),
+                );
             }
         }
         for failure in &failures {
@@ -247,6 +288,48 @@ impl ThemeExtensionState {
     }
 }
 
+/// 「设置 → 外观」主题列表的独立滚动区。
+///
+/// 裸 `overflow_y_scroll()` 放在 flex 列中时，固定高度的主题行会被一起压缩
+/// 进 `max_h` 里，列表没有可滚动余量；滚轮事件还会冒泡到外层的设置页滚动
+/// 容器，表现为「滚轮翻的是外观面板，主题列表纹丝不动」。这里固定视口高度、
+/// 让内容层不被 flex 压缩，并用垂直 `ScrollableMask` 在捕获阶段消费滚轮：
+/// 先翻主题，滚到边界后才把事件让给外观页（与平台滚动容器一致）。
+fn theme_options_scroll_area(rows: Vec<AnyElement>, scroll: &ScrollHandle) -> AnyElement {
+    let content = div()
+        .v_flex()
+        .w_full()
+        .gap_0p5()
+        // 给常驻滚动条留出右侧空间，避免盖住主题名与选中勾。
+        .pr_3()
+        .flex_none()
+        .h_auto()
+        .min_h_full()
+        .children(rows);
+
+    div()
+        .id("settings-theme-options")
+        .relative()
+        .w_full()
+        .h(px(THEME_LIST_HEIGHT))
+        .flex_none()
+        .child(
+            div()
+                .id("settings-theme-options-viewport")
+                .size_full()
+                .v_flex()
+                .track_scroll(scroll)
+                .overflow_y_scroll()
+                .lock_scroll_axis()
+                .child(content),
+        )
+        .child(ScrollableMask::new(Axis::Vertical, scroll))
+        // 用 handle 记录的真实视口 bounds。`viewport_from_layout()` 会让覆盖层
+        // 按自身绝对定位布局绘制，在 auto 高度的容器里会掉到内容之后、跑出卡片。
+        .child(Scrollbar::vertical(scroll).mode(ScrollbarMode::Always))
+        .into_any_element()
+}
+
 impl AppShell {
     fn sync_theme_preference(&mut self) {
         self.config.theme =
@@ -359,6 +442,31 @@ impl AppShell {
         cx.notify();
     }
 
+    /// Collapses / expands one theme group in the settings list.
+    pub(super) fn toggle_theme_group(&mut self, id: String, cx: &mut Context<Self>) {
+        if !self.theme_ext.collapsed.insert(id.clone()) {
+            self.theme_ext.collapsed.remove(&id);
+        }
+        cx.notify();
+    }
+
+    /// Expands or collapses every theme group at once.
+    pub(super) fn set_all_theme_groups(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if collapsed {
+            let mut ids: HashSet<String> = self
+                .theme_ext
+                .themes
+                .iter()
+                .map(|theme| theme.collection_id.clone())
+                .collect();
+            ids.insert(BUILTIN_GROUP.to_string());
+            self.theme_ext.collapsed = ids;
+        } else {
+            self.theme_ext.collapsed.clear();
+        }
+        cx.notify();
+    }
+
     /// Handles a batch of paths from the theme directory watcher.
     pub(super) fn handle_theme_paths(
         &mut self,
@@ -429,9 +537,9 @@ impl AppShell {
             };
             let result = import_zed_theme(&path, &themes_dir());
             let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(files) => {
+                Ok(imported) => {
                     this.notify_success(
-                        t!("theme_ext.import_ok", count = files.len()).to_string(),
+                        t!("theme_ext.import_ok", count = imported.theme_count).to_string(),
                         cx,
                     );
                     this.rescan_themes(window, cx);
@@ -472,36 +580,127 @@ impl AppShell {
         self.open_path_in_explorer(Some(themes_dir()), cx);
     }
 
-    /// Cards shown on the appearance settings page. Each one maps to a key in
-    /// `theme_extension.toml` (plus a few one-shot developer actions).
-    pub(super) fn render_theme_extension_cards(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// 标题栏上的主题入口。菜单里的每一项都走 `set_active_theme`，所以切换
+    /// 效果、「theme_extension.toml」持久化与「设置 → 外观」完全相同。
+    pub(super) fn render_theme_switcher(&self, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.theme_menu;
+        let trigger = title_icon(
+            "title-theme",
+            IconName::Palette,
+            t!("theme.label").to_string(),
+        )
+        .selected(open)
+        // 用渲染时的状态取反：浮层的 `on_mouse_down_out` 会在同一次点击里
+        // 先把菜单关掉，若这里再读运行时状态取反，按钮就关不掉菜单了。
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.theme_menu = !open;
+            if this.theme_menu {
+                this.workspace_menu = false;
+                this.notice_panel = false;
+            }
+            cx.notify();
+        }));
+
+        let mut popup = gpui_kit::base::Popup::new("theme-popup", trigger)
+            .anchor(Anchor::TopRight)
+            .offset(px(6.));
+        if open {
+            popup = popup.content(self.render_theme_menu(cx));
+        }
+        titlebar_guard(popup)
+    }
+
+    /// 列出当前已载入的全部主题：内置三项，加上按主题文件分组的扩展主题。
+    fn render_theme_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = SettingsPalette::new(cx);
-        let active = &self.theme_ext.config.active;
-        let options: Vec<(String, String, Option<IconName>, ActiveTheme, bool)> = {
-            let mut list = vec![
-                (
-                    t!("theme.system").to_string(),
-                    String::new(),
-                    Some(IconName::Monitor),
-                    ActiveTheme::System,
-                    *active == ActiveTheme::System,
-                ),
-                (
-                    t!("theme_ext.builtin_light").to_string(),
-                    String::new(),
-                    Some(IconName::Sun),
-                    ActiveTheme::BuiltinLight,
-                    *active == ActiveTheme::BuiltinLight,
-                ),
-                (
-                    t!("theme_ext.builtin_dark").to_string(),
-                    String::new(),
-                    Some(IconName::Moon),
-                    ActiveTheme::BuiltinDark,
-                    *active == ActiveTheme::BuiltinDark,
-                ),
-            ];
-            for theme in &self.theme_ext.themes {
+        let scroll = self.theme_menu_scroll.clone();
+        let active = self.theme_ext.config.active.clone();
+        let current = match &active {
+            ActiveTheme::System => t!("theme.system").to_string(),
+            ActiveTheme::BuiltinLight => t!("theme_ext.builtin_light").to_string(),
+            ActiveTheme::BuiltinDark => t!("theme_ext.builtin_dark").to_string(),
+            ActiveTheme::Extension(id) => self
+                .theme_ext
+                .themes
+                .iter()
+                .find(|theme| &theme.id == id)
+                .map(|theme| theme.name.clone())
+                .unwrap_or_else(|| id.clone()),
+        };
+
+        let mut list = div()
+            .id("title-theme-list")
+            .v_flex()
+            .w_full()
+            .gap_0p5()
+            // 给常驻滚动条留出右侧空间，避免盖住主题名与选中勾。
+            .pr_3()
+            .max_h(px(320.))
+            .track_scroll(&scroll)
+            .overflow_y_scroll();
+
+        list = list.child(Self::theme_menu_group(
+            t!("theme_ext.group_builtin").to_string(),
+            p,
+        ));
+        for (index, (label, icon, target)) in [
+            (
+                t!("theme.system").to_string(),
+                IconName::Monitor,
+                ActiveTheme::System,
+            ),
+            (
+                t!("theme_ext.builtin_light").to_string(),
+                IconName::Sun,
+                ActiveTheme::BuiltinLight,
+            ),
+            (
+                t!("theme_ext.builtin_dark").to_string(),
+                IconName::Moon,
+                ActiveTheme::BuiltinDark,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let selected = active == target;
+            list = list.child(Self::theme_menu_row(
+                format!("title-theme-builtin-{index}"),
+                label,
+                String::new(),
+                icon,
+                target,
+                selected,
+                p,
+                cx,
+            ));
+        }
+
+        // 与设置页一样按主题文件分组，一个文件里的多个变体归到同一组。
+        let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+        let mut group_index: HashMap<String, usize> = HashMap::new();
+        for (index, theme) in self.theme_ext.themes.iter().enumerate() {
+            let key = theme.collection_id.clone();
+            let slot = *group_index.entry(key).or_insert_with(|| {
+                groups.push((theme.collection.clone(), Vec::new()));
+                groups.len() - 1
+            });
+            groups[slot].1.push(index);
+        }
+        if groups.is_empty() {
+            list = list.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child(t!("theme.menu.no_themes").to_string()),
+            );
+        }
+        for (group_no, (label, indexes)) in groups.into_iter().enumerate() {
+            list = list.child(Self::theme_menu_group(label, p));
+            for (row, index) in indexes.into_iter().enumerate() {
+                let theme = &self.theme_ext.themes[index];
                 let detail = format!(
                     "{} · {}",
                     if theme.mode == "dark" {
@@ -516,72 +715,400 @@ impl AppShell {
                     }
                 );
                 let target = ActiveTheme::Extension(theme.id.clone());
-                list.push((
+                let selected = active == target;
+                list = list.child(Self::theme_menu_row(
+                    format!("title-theme-ext-{group_no}-{row}"),
                     theme.name.clone(),
                     detail,
-                    Some(IconName::Palette),
-                    target.clone(),
-                    *active == target,
+                    IconName::Palette,
+                    target,
+                    selected,
+                    p,
+                    cx,
                 ));
             }
-            list
-        };
+        }
 
-        let mut list = div()
-            .id("settings-theme-options")
+        // 滚动条作为滚动容器的兄弟浮层，不随内容一起滚走；Always 模式下
+        // 轨道常驻，thumb 的长度 / 位置直接反映主题总量与浏览进度。
+        let scroll_area = div()
+            .id("title-theme-scroll")
+            .relative()
+            .w_full()
+            .child(list)
+            // 同上：handle 的视口 bounds 才是列表区域，覆盖层自己的 layout
+            // bounds 会落在菜单底部之外。
+            .child(Scrollbar::vertical(&scroll).mode(ScrollbarMode::Always))
+            .into_any_element();
+
+        let header = div()
             .v_flex()
             .w_full()
             .gap_0p5()
-            .max_h(px(210.))
-            .overflow_y_scroll();
-        for (index, (label, detail, icon, target, is_active)) in options.into_iter().enumerate() {
-            let target_for_click = target.clone();
-            list = list.child(
+            .px_2()
+            .pb_1()
+            .border_b_1()
+            .border_color(p.border)
+            .child(
                 div()
-                    .id(format!("settings-theme-option-{index}"))
-                    .h_flex()
+                    .text_sm()
+                    .font_bold()
+                    .child(t!("theme.menu.title").to_string()),
+            )
+            .child(
+                div()
                     .w_full()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py_1p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(if is_active { p.popover } else { p.transparent })
-                    .hover(move |style| style.bg(p.hover))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.set_active_theme(target_for_click.clone(), window, cx);
-                    }))
-                    .when_some(icon, |row, icon| {
-                        row.child(Icon::new(icon).xsmall().text_color(if is_active {
-                            p.accent
-                        } else {
-                            p.muted
-                        }))
-                    })
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child(t!("theme.menu.current", name = current).to_string()),
+            );
+
+        let footer = Button::new("title-theme-open-settings")
+            .ghost()
+            .compact()
+            .icon(IconName::Settings)
+            .label(t!("theme.menu.open_settings").to_string())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.theme_menu = false;
+                cx.notify();
+                this.open_settings(window, cx);
+                this.set_settings_tab(SettingsTab::Appearance, cx);
+            }));
+
+        div()
+            .id("title-theme-menu")
+            .v_flex()
+            .w(px(288.))
+            .p_2()
+            .gap_1()
+            .rounded_lg()
+            .border_1()
+            .border_color(p.border)
+            .bg(p.popover)
+            .text_color(p.foreground)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                if this.theme_menu {
+                    this.theme_menu = false;
+                    cx.notify();
+                }
+            }))
+            .child(header)
+            .child(scroll_area)
+            .child(footer)
+            .into_any_element()
+    }
+
+    fn theme_menu_group(label: String, p: SettingsPalette) -> AnyElement {
+        div()
+            .h(px(26.))
+            // max_h 的 flex 列会把固定高度的子行一起压缩，文字会叠在一起。
+            .flex_shrink_0()
+            .w_full()
+            .h_flex()
+            .items_center()
+            .px_2()
+            .rounded_md()
+            .bg(p.track)
+            .text_xs()
+            .font_bold()
+            .text_color(p.muted)
+            .child(label)
+            .into_any_element()
+    }
+
+    fn theme_menu_row(
+        id: String,
+        label: String,
+        detail: String,
+        icon: IconName,
+        target: ActiveTheme,
+        selected: bool,
+        p: SettingsPalette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(id)
+            .h(px(34.))
+            .flex_shrink_0()
+            .w_full()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .rounded_md()
+            .cursor_pointer()
+            .bg(if selected { p.popover } else { p.transparent })
+            .hover(move |style| style.bg(p.hover))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                // 与设置页里的主题行一样调用 `set_active_theme`；先关菜单并
+                // 显式刷新，避免点击当前主题时 `set_active_theme` 提前返回。
+                this.theme_menu = false;
+                cx.notify();
+                this.set_active_theme(target.clone(), window, cx);
+            }))
+            .child(
+                Icon::new(icon)
+                    .xsmall()
+                    .text_color(if selected { p.accent } else { p.muted }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .v_flex()
+                    .gap_0p5()
                     .child(
                         div()
-                            .v_flex()
-                            .flex_1()
+                            .w_full()
                             .min_w_0()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .when(is_active, |text| text.font_bold())
-                                    .child(label),
-                            )
-                            .when(!detail.is_empty(), |column| {
-                                column.child(div().text_xs().text_color(p.muted).child(detail))
-                            }),
+                            .truncate()
+                            .text_xs()
+                            .when(selected, |text| text.font_bold())
+                            .child(label),
                     )
-                    .when(is_active, |row| {
-                        row.child(Icon::new(IconName::Check).xsmall().text_color(p.success))
+                    .when(!detail.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(p.muted)
+                                .child(detail),
+                        )
                     }),
-            );
+            )
+            .when(selected, |row| {
+                row.child(Icon::new(IconName::Check).xsmall().text_color(p.success))
+            })
+            .into_any_element()
+    }
+
+    /// Cards shown on the appearance settings page. Each one maps to a key in
+    /// `theme_extension.toml` (plus a few one-shot developer actions).
+    pub(super) fn render_theme_extension_cards(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let p = SettingsPalette::new(cx);
+        let active = &self.theme_ext.config.active;
+        let mut rows: Vec<ThemeRow> = Vec::new();
+        let builtin_expanded = !self.theme_ext.collapsed.contains(BUILTIN_GROUP);
+        rows.push(ThemeRow::Group {
+            id: BUILTIN_GROUP.to_string(),
+            label: t!("theme_ext.group_builtin").to_string(),
+            count: 3,
+            expanded: builtin_expanded,
+        });
+        if builtin_expanded {
+            for (label, icon, target) in [
+                (
+                    t!("theme.system").to_string(),
+                    IconName::Monitor,
+                    ActiveTheme::System,
+                ),
+                (
+                    t!("theme_ext.builtin_light").to_string(),
+                    IconName::Sun,
+                    ActiveTheme::BuiltinLight,
+                ),
+                (
+                    t!("theme_ext.builtin_dark").to_string(),
+                    IconName::Moon,
+                    ActiveTheme::BuiltinDark,
+                ),
+            ] {
+                rows.push(ThemeRow::Option {
+                    label,
+                    detail: String::new(),
+                    icon,
+                    selected: *active == target,
+                    target,
+                });
+            }
         }
 
-        let mut status = div().v_flex().w_full().gap_1().child(list);
+        // One group per theme file, in scan order. A Zed file with several
+        // variants stays one group instead of a flat list of lookalikes.
+        let mut groups: Vec<(String, String, Vec<usize>)> = Vec::new();
+        let mut group_index: HashMap<String, usize> = HashMap::new();
+        for (index, theme) in self.theme_ext.themes.iter().enumerate() {
+            let key = theme.collection_id.clone();
+            let slot = *group_index.entry(key.clone()).or_insert_with(|| {
+                groups.push((key, theme.collection.clone(), Vec::new()));
+                groups.len() - 1
+            });
+            groups[slot].2.push(index);
+        }
+        for (id, label, indexes) in groups {
+            let expanded = !self.theme_ext.collapsed.contains(&id);
+            rows.push(ThemeRow::Group {
+                id,
+                label,
+                count: indexes.len(),
+                expanded,
+            });
+            if !expanded {
+                continue;
+            }
+            for index in indexes {
+                let theme = &self.theme_ext.themes[index];
+                let detail = format!(
+                    "{} · {}",
+                    if theme.mode == "dark" {
+                        t!("theme.dark").to_string()
+                    } else {
+                        t!("theme.light").to_string()
+                    },
+                    if theme.author.is_empty() {
+                        theme.source.clone()
+                    } else {
+                        theme.author.clone()
+                    }
+                );
+                let target = ActiveTheme::Extension(theme.id.clone());
+                rows.push(ThemeRow::Option {
+                    label: theme.name.clone(),
+                    detail,
+                    icon: IconName::Palette,
+                    selected: *active == target,
+                    target,
+                });
+            }
+        }
+
+        let mut option_rows: Vec<AnyElement> = Vec::with_capacity(rows.len());
+        for (index, row) in rows.iter().enumerate() {
+            let element =
+                match row {
+                    ThemeRow::Group {
+                        id,
+                        label,
+                        count,
+                        expanded,
+                    } => {
+                        let group_id = id.clone();
+                        let group_count = *count;
+                        let chevron = if *expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        };
+                        div()
+                            .id(format!("settings-theme-group-{index}"))
+                            .h(px(THEME_ROW_HEIGHT))
+                            .w_full()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(p.track)
+                            .hover(move |style| style.bg(p.hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_theme_group(group_id.clone(), cx)
+                            }))
+                            .child(Icon::new(chevron).xsmall().text_color(p.muted))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .font_bold()
+                                    .child(label.clone()),
+                            )
+                            .child(div().text_xs().text_color(p.muted).child(
+                                t!("theme_ext.group_count", count = group_count).to_string(),
+                            ))
+                            .into_any_element()
+                    }
+                    ThemeRow::Option {
+                        label,
+                        detail,
+                        icon,
+                        target,
+                        selected,
+                    } => {
+                        let target = target.clone();
+                        let icon = *icon;
+                        let selected = *selected;
+                        div()
+                            .id(format!("settings-theme-option-{index}"))
+                            .h(px(THEME_ROW_HEIGHT))
+                            .w_full()
+                            .h_flex()
+                            .items_center()
+                            .gap_2()
+                            .pl(px(18.))
+                            .pr_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(if selected { p.popover } else { p.transparent })
+                            .hover(move |style| style.bg(p.hover))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.set_active_theme(target.clone(), window, cx)
+                            }))
+                            .child(Icon::new(icon).xsmall().text_color(if selected {
+                                p.accent
+                            } else {
+                                p.muted
+                            }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .when(selected, |text| text.font_bold())
+                                    .child(label.clone()),
+                            )
+                            .when(!detail.is_empty(), |row| {
+                                row.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(p.muted)
+                                        .truncate()
+                                        .child(detail.clone()),
+                                )
+                            })
+                            .when(selected, |row| {
+                                row.child(Icon::new(IconName::Check).xsmall().text_color(p.success))
+                            })
+                            .into_any_element()
+                    }
+                };
+            option_rows.push(element);
+        }
+        let scroll_area = theme_options_scroll_area(option_rows, &self.theme_list_scroll);
+
+        let should_collapse = self.theme_ext.collapsed.is_empty();
+        let group_actions = div()
+            .h_flex()
+            .w_full()
+            .justify_end()
+            .child(
+                Button::new("settings-theme-toggle-groups")
+                    .ghost()
+                    .compact()
+                    .label(if should_collapse {
+                        t!("theme_ext.collapse_all").to_string()
+                    } else {
+                        t!("theme_ext.expand_all").to_string()
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_all_theme_groups(should_collapse, cx)
+                    })),
+            )
+            .into_any_element();
+
+        let mut status = div()
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .child(scroll_area)
+            .child(group_actions);
         if self.theme_ext.themes.is_empty() {
             status = status.child(
                 div().text_xs().text_color(p.muted).child(
@@ -777,5 +1304,160 @@ pub(super) fn preference_for_active(
                 ThemePreference::Light
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 不用 `use super::*`：`gpui_kit::*` 会重导出 `gpui::test`，glob 导入会让
+    // 标准 `#[test]` 属性被同名宏遮蔽，展开时无限递归。
+    use super::{THEME_ROW_HEIGHT, theme_options_scroll_area};
+    use gpui::{ScrollDelta, ScrollWheelEvent};
+    use gpui_kit::base::StyledExt as _;
+    use gpui_kit::{
+        Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
+        StatefulInteractiveElement as _, Styled as _, Window, div, point, px,
+    };
+
+    /// 「设置 → 外观」的缩略布局：外层页面可滚动，内层主题列表主题数远超视口。
+    struct NestedSettings {
+        page_scroll: ScrollHandle,
+        theme_scroll: ScrollHandle,
+    }
+
+    impl Render for NestedSettings {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let rows = (0..20)
+                .map(|index| {
+                    div()
+                        .id(format!("test-theme-row-{index}"))
+                        .h(px(THEME_ROW_HEIGHT))
+                        .w_full()
+                        .child(format!("主题 {index}"))
+                        .into_any_element()
+                })
+                .collect::<Vec<_>>();
+            div()
+                .id("test-settings-page")
+                .w(px(480.))
+                .h(px(360.))
+                .v_flex()
+                .track_scroll(&self.page_scroll)
+                .overflow_y_scroll()
+                .child(
+                    div()
+                        .v_flex()
+                        .w_full()
+                        .gap_2()
+                        .flex_none()
+                        .h_auto()
+                        .child(div().h(px(40.)).child("页面标题"))
+                        .child(theme_options_scroll_area(rows, &self.theme_scroll))
+                        .child(div().h(px(400.)).child("后续卡片")),
+                )
+        }
+    }
+
+    /// 回归：滚轮悬停主题列表时先翻主题，外观页保持不动；主题到底后才冒泡。
+    #[gpui::test]
+    fn wheel_over_theme_list_scrolls_themes_before_the_page(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| gpui_kit::init(cx));
+        let theme_scroll = ScrollHandle::new();
+        let page_scroll = ScrollHandle::new();
+        let inner = theme_scroll.clone();
+        let outer = page_scroll.clone();
+        let (_, cx) = cx.add_window_view(|_, _| NestedSettings {
+            page_scroll,
+            theme_scroll,
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(inner.offset().y, px(0.));
+        assert_eq!(outer.offset().y, px(0.));
+
+        // 位置落在主题列表内（页面标题 40px 之下、列表高 238px）。
+        let wheel = || ScrollWheelEvent {
+            position: point(px(60.), px(120.)),
+            delta: ScrollDelta::Lines(point(0., -3.)),
+            ..Default::default()
+        };
+        cx.simulate_event(wheel());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            inner.offset().y < px(0.),
+            "滚轮应滚动主题列表，实际 offset.y = {:?}",
+            inner.offset().y
+        );
+        assert_eq!(outer.offset().y, px(0.), "主题列表还能滚动时不应翻动外观页");
+
+        // 一直滚到列表底部，之后的滚轮才交给外观页（overscroll chaining）。
+        for _ in 0..40 {
+            cx.simulate_event(wheel());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        assert!(
+            outer.offset().y < px(0.),
+            "主题列表到底后滚轮应冒泡给外观页"
+        );
+    }
+
+    /// 回归：标题栏主题菜单用 `max_h` 限高时，固定行高的子项不能被 flex 压缩，
+    /// 否则两行文字会叠在一起，列表也因没有滚动余量而无法翻页。
+    #[gpui::test]
+    fn max_h_theme_menu_rows_stay_scrollable(cx: &mut gpui_kit::TestAppContext) {
+        struct MenuList {
+            scroll: ScrollHandle,
+        }
+
+        impl Render for MenuList {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let mut list = div()
+                    .id("test-theme-menu-list")
+                    .v_flex()
+                    .w(px(200.))
+                    .gap_0p5()
+                    .pr_3()
+                    .max_h(px(320.))
+                    .track_scroll(&self.scroll)
+                    .overflow_y_scroll();
+                for index in 0..20 {
+                    list = list.child(
+                        div()
+                            .h(px(34.))
+                            .flex_shrink_0()
+                            .w_full()
+                            .child(format!("主题 {index}"))
+                            .into_any_element(),
+                    );
+                }
+                div().relative().w_full().child(list)
+            }
+        }
+
+        cx.update(|cx| gpui_kit::init(cx));
+        let scroll = ScrollHandle::new();
+        let handle = scroll.clone();
+        let (_, cx) = cx.add_window_view(|_, _| MenuList { scroll });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(60.), px(100.)),
+            delta: ScrollDelta::Lines(point(0., -3.)),
+            ..Default::default()
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            handle.offset().y < px(0.),
+            "max_h 下列表须保留滚动余量，实际 offset.y = {:?}",
+            handle.offset().y
+        );
     }
 }

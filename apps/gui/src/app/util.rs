@@ -746,8 +746,18 @@ pub(super) fn split_globs(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// 审计页每页条数，以及最多可翻的页数；更早的记录既不加载也不展示。
+pub(super) const AUDIT_PAGE_SIZE: usize = 100;
+pub(super) const AUDIT_MAX_PAGES: usize = 10;
+
+/// 已加载记录可分成的页数：至少 1 页，最多 `AUDIT_MAX_PAGES` 页。
+pub(super) fn audit_page_count(total: usize) -> usize {
+    total.div_ceil(AUDIT_PAGE_SIZE).clamp(1, AUDIT_MAX_PAGES)
+}
+
 pub(super) fn load_audit_entries() -> (Vec<AuditEntry>, Option<String>) {
-    match AuditLog::new(AuditLog::default_dir()).recent(100) {
+    // 只取可展示的前 10 页，更早的调用记录在审计页不展示。
+    match AuditLog::new(AuditLog::default_dir()).recent(AUDIT_PAGE_SIZE * AUDIT_MAX_PAGES) {
         Ok(entries) => (entries, None),
         Err(err) => (
             Vec::new(),
@@ -826,6 +836,49 @@ pub(super) fn entry_display_name(rel_path: &str, kind: EntryKind) -> String {
         EntryKind::Note => name.trim_end_matches(".md").to_string(),
         EntryKind::Folder => name.to_string(),
     }
+}
+
+/// 只去掉笔记扩展名；名称中间的点（如「v1.2 计划」）保持不变。
+pub(super) fn note_display_name(name: &str) -> String {
+    for extension in [".markdown", ".md"] {
+        if let Some(stem) = name.strip_suffix(extension) {
+            return stem.to_string();
+        }
+    }
+    name.to_string()
+}
+
+/// 右键「复制名称」：该条目在树 / 页签上的显示名，笔记不带扩展名。
+pub(super) fn tree_entry_name(rel_path: &str, is_folder: bool) -> String {
+    let name = file_name(rel_path);
+    if is_folder {
+        name.to_string()
+    } else {
+        note_display_name(name)
+    }
+}
+
+/// 右键「复制全名称」：笔记本名/文件夹/…/笔记名，用 `/` 级联，不含扩展名。
+/// 外部文件与官方只读文档没有笔记本层级，结果退化为名称本身。
+pub(super) fn tree_full_name(notebook_name: &str, rel_path: &str, is_folder: bool) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !notebook_name.trim().is_empty() {
+        parts.push(notebook_name.to_string());
+    }
+    let segments: Vec<&str> = rel_path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let last = segments.len().saturating_sub(1);
+    for (index, segment) in segments.iter().enumerate() {
+        let is_note = !is_folder && index == last;
+        parts.push(if is_note {
+            note_display_name(segment)
+        } else {
+            (*segment).to_string()
+        });
+    }
+    parts.join("/")
 }
 
 /// File names of the direct children of `parent`, in tree order.
@@ -981,9 +1034,10 @@ pub(super) fn push_rows(
 mod tests {
     use std::collections::HashSet;
 
+    use super::{AUDIT_MAX_PAGES, AUDIT_PAGE_SIZE, audit_page_count};
     use super::{
         build_rows, entry_display_name, insert_sibling_name, local_datetime_label,
-        sibling_file_names,
+        note_display_name, sibling_file_names, tree_entry_name, tree_full_name,
     };
     use crate::app::{Entry, EntryKind, TreeOrder};
 
@@ -1056,5 +1110,49 @@ mod tests {
         let mut names = sibling_file_names(&tree, "", &order);
         insert_sibling_name(&mut names, "新文件夹".to_string(), None);
         assert_eq!(names, vec!["笔记.md", "新文件夹"]);
+    }
+
+    #[test]
+    fn audit_pages_are_capped_at_ten() {
+        assert_eq!(audit_page_count(0), 1);
+        assert_eq!(audit_page_count(1), 1);
+        assert_eq!(audit_page_count(AUDIT_PAGE_SIZE), 1);
+        assert_eq!(audit_page_count(AUDIT_PAGE_SIZE + 1), 2);
+        assert_eq!(
+            audit_page_count(AUDIT_PAGE_SIZE * AUDIT_MAX_PAGES),
+            AUDIT_MAX_PAGES
+        );
+        // 超出 10 页的记录一律不展示。
+        assert_eq!(
+            audit_page_count(AUDIT_PAGE_SIZE * AUDIT_MAX_PAGES + 37),
+            AUDIT_MAX_PAGES
+        );
+    }
+
+    #[test]
+    fn tree_names_strip_only_the_extension() {
+        assert_eq!(tree_entry_name("资料/v1.2 计划.md", false), "v1.2 计划");
+        assert_eq!(tree_entry_name("随笔.markdown", false), "随笔");
+        assert_eq!(tree_entry_name("资料/子目录", true), "子目录");
+        assert_eq!(note_display_name("第1.章"), "第1.章");
+    }
+
+    #[test]
+    fn tree_full_name_cascades_notebook_folders_and_note() {
+        assert_eq!(
+            tree_full_name("我的笔记本", "资料/子目录/笔记.md", false),
+            "我的笔记本/资料/子目录/笔记"
+        );
+        assert_eq!(
+            tree_full_name("我的笔记本", "资料/子目录", true),
+            "我的笔记本/资料/子目录"
+        );
+        assert_eq!(
+            tree_full_name("我的笔记本", "笔记.md", false),
+            "我的笔记本/笔记"
+        );
+        // 外部文件与官方只读文档没有笔记本层级，退化为名称本身。
+        assert_eq!(tree_full_name("", "笔记.md", false), "笔记");
+        assert_eq!(tree_full_name("", "欢迎使用墨笺", false), "欢迎使用墨笺");
     }
 }

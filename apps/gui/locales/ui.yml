@@ -104,6 +104,18 @@ conflict.close:
 theme.label:
   en: "Theme"
   zh-CN: "主题"
+theme.menu.title:
+  en: "Choose a theme"
+  zh-CN: "选择主题"
+theme.menu.current:
+  en: "Current: %{name}"
+  zh-CN: "当前：%{name}"
+theme.menu.no_themes:
+  en: "No extension themes loaded"
+  zh-CN: "暂无扩展主题"
+theme.menu.open_settings:
+  en: "Theme settings…"
+  zh-CN: "主题设置…"
 theme.light:
   en: "Light"
   zh-CN: "亮色"
@@ -300,8 +312,20 @@ theme_ext.active:
   en: "Active theme"
   zh-CN: "当前激活的主题"
 theme_ext.active_hint:
-  en: "Built-in themes and themes from the extension directory. Switching takes effect immediately. This is the active key in theme_extension.toml."
-  zh-CN: "包含内置主题与扩展目录中的主题，切换立即生效。对应 theme_extension.toml 中的 active 项。"
+  en: "Built-in themes and extension themes grouped by source file. Click a group to fold it; the list scrolls independently. Switching takes effect immediately. This is the active key in theme_extension.toml."
+  zh-CN: "包含内置主题与扩展目录中的主题，按主题文件分组，点击分组标题可折叠；列表可独立滚动，切换立即生效。对应 theme_extension.toml 中的 active 项。"
+theme_ext.group_builtin:
+  en: "Built-in themes"
+  zh-CN: "内置主题"
+theme_ext.group_count:
+  en: "%{count} themes"
+  zh-CN: "%{count} 个主题"
+theme_ext.collapse_all:
+  en: "Collapse all"
+  zh-CN: "全部折叠"
+theme_ext.expand_all:
+  en: "Expand all"
+  zh-CN: "全部展开"
 theme_ext.builtin_light:
   en: "Built-in Light"
   zh-CN: "内置浅色"
@@ -1413,14 +1437,23 @@ mcp.audit_error:
   en: "Cannot read the audit log: %{message}"
   zh-CN: "读取审计日志失败：%{message}"
 mcp.audit_hint:
-  en: "Latest tool calls, newest first. Note contents are never recorded."
-  zh-CN: "最近的工具调用，最新在前；不会记录笔记正文。"
+  en: "Latest tool calls, newest first. Up to 10 pages are kept; note contents are never recorded."
+  zh-CN: "最近的工具调用，最新在前；最多翻看 10 页，不会记录笔记正文。"
 mcp.audit_empty:
   en: "No calls recorded yet."
   zh-CN: "还没有调用记录。"
 mcp.audit_refresh:
   en: "Refresh"
   zh-CN: "刷新"
+mcp.audit_prev:
+  en: "Previous"
+  zh-CN: "上一页"
+mcp.audit_next:
+  en: "Next"
+  zh-CN: "下一页"
+mcp.audit_page:
+  en: "Page %{page} of %{total}"
+  zh-CN: "第 %{page} / %{total} 页"
 mcp.audit_query:
   en: "search “%{query}”"
   zh-CN: "搜索「%{query}」"
@@ -1673,6 +1706,15 @@ tabs.switch:
 tabs.switch_empty:
   en: "No open tabs"
   zh-CN: "没有打开的页签"
+note.copy_name:
+  en: "Copy name"
+  zh-CN: "复制名称"
+note.copy_full_name:
+  en: "Copy full name"
+  zh-CN: "复制全名称"
+note.name_copied:
+  en: "Name copied to clipboard"
+  zh-CN: "名称已复制到剪贴板"
 note.copy_path:
   en: "Copy path"
   zh-CN: "复制路径"

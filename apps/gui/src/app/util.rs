@@ -747,7 +747,9 @@ pub(super) fn split_globs(raw: &str) -> Vec<String> {
 }
 
 /// 审计页每页条数，以及最多可翻的页数；更早的记录既不加载也不展示。
-pub(super) const AUDIT_PAGE_SIZE: usize = 100;
+///
+/// 每页 10 条、最多 10 页，对应「最多翻看 10 页」的提示：只加载最近 100 条调用。
+pub(super) const AUDIT_PAGE_SIZE: usize = 10;
 pub(super) const AUDIT_MAX_PAGES: usize = 10;
 
 /// 已加载记录可分成的页数：至少 1 页，最多 `AUDIT_MAX_PAGES` 页。
@@ -1118,6 +1120,8 @@ mod tests {
         assert_eq!(audit_page_count(1), 1);
         assert_eq!(audit_page_count(AUDIT_PAGE_SIZE), 1);
         assert_eq!(audit_page_count(AUDIT_PAGE_SIZE + 1), 2);
+        // 93 条记录（本机实际量级）应分布在 10 页，而不是挤在 1 页里。
+        assert_eq!(audit_page_count(93), AUDIT_MAX_PAGES);
         assert_eq!(
             audit_page_count(AUDIT_PAGE_SIZE * AUDIT_MAX_PAGES),
             AUDIT_MAX_PAGES

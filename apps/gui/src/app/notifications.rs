@@ -94,6 +94,36 @@ impl AppShell {
             .child(self.render_theme_switcher(cx))
             .child(titlebar_guard(
                 title_icon(
+                    "title-left-sidebar",
+                    IconName::PanelLeft,
+                    if self.left_panel_collapsed {
+                        t!("panel.expand_left_sidebar").to_string()
+                    } else {
+                        t!("panel.collapse_left_sidebar").to_string()
+                    },
+                )
+                .disabled(self.panels_in_dock(PanelDock::Left).is_empty())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.toggle_dock_expansion(PanelDock::Left, cx)
+                })),
+            ))
+            .child(titlebar_guard(
+                title_icon(
+                    "title-right-sidebar",
+                    IconName::PanelRight,
+                    if self.right_panel_collapsed {
+                        t!("panel.expand_right_sidebar").to_string()
+                    } else {
+                        t!("panel.collapse_right_sidebar").to_string()
+                    },
+                )
+                .disabled(self.panels_in_dock(PanelDock::Right).is_empty())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.toggle_dock_expansion(PanelDock::Right, cx)
+                })),
+            ))
+            .child(titlebar_guard(
+                title_icon(
                     "title-settings",
                     IconName::Settings,
                     t!("settings.title").to_string(),

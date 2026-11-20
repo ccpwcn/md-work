@@ -752,6 +752,24 @@ bookmark.remove:
 panel.trash:
   en: "Trash"
   zh-CN: "回收站"
+panel.collapse:
+  en: "Click again to collapse the sidebar"
+  zh-CN: "再次点击收起边栏"
+panel.expand:
+  en: "Click to expand the sidebar"
+  zh-CN: "点击展开边栏"
+panel.collapse_left_sidebar:
+  en: "Collapse left sidebar"
+  zh-CN: "收起左边栏"
+panel.expand_left_sidebar:
+  en: "Expand left sidebar"
+  zh-CN: "展开左边栏"
+panel.collapse_right_sidebar:
+  en: "Collapse right sidebar"
+  zh-CN: "收起右边栏"
+panel.expand_right_sidebar:
+  en: "Expand right sidebar"
+  zh-CN: "展开右边栏"
 tree.rename:
   en: "Rename"
   zh-CN: "重命名"

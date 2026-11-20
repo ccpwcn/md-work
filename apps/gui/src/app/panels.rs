@@ -1,15 +1,57 @@
-//! 侧边栏面板的停靠、切换与各面板主体渲染。
+//! 侧边栏面板的停靠、选择与各面板主体渲染。
 
 use super::util::*;
 use super::*;
 
 impl AppShell {
-    pub(super) fn set_panel(&mut self, panel: SidePanel, cx: &mut Context<Self>) {
-        match self.config.panel_dock_for(panel.kind()) {
-            PanelDock::Left => self.left_panel = panel,
-            PanelDock::Right => self.right_panel = panel,
+    pub(super) fn dock_collapsed(&self, dock: PanelDock) -> bool {
+        match dock {
+            PanelDock::Left => self.left_panel_collapsed,
+            PanelDock::Right => self.right_panel_collapsed,
+        }
+    }
+
+    fn set_dock_collapsed(&mut self, dock: PanelDock, collapsed: bool, cx: &mut Context<Self>) {
+        match dock {
+            PanelDock::Left => self.left_panel_collapsed = collapsed,
+            PanelDock::Right => self.right_panel_collapsed = collapsed,
         }
         cx.notify();
+    }
+
+    /// Expands a sidebar when it is collapsed, and collapses it otherwise.
+    pub(super) fn toggle_dock_expansion(&mut self, dock: PanelDock, cx: &mut Context<Self>) {
+        if self.panels_in_dock(dock).is_empty() {
+            return;
+        }
+        let collapsed = !self.dock_collapsed(dock);
+        self.set_dock_collapsed(dock, collapsed, cx);
+    }
+
+    /// Selects `panel` and makes sure its sidebar is expanded.
+    pub(super) fn set_panel(&mut self, panel: SidePanel, cx: &mut Context<Self>) {
+        match self.config.panel_dock_for(panel.kind()) {
+            PanelDock::Left => {
+                self.left_panel = panel;
+                self.left_panel_collapsed = false;
+            }
+            PanelDock::Right => {
+                self.right_panel = panel;
+                self.right_panel_collapsed = false;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Panel buttons select panels; clicking the active one collapses its
+    /// sidebar, and clicking it again expands the sidebar.
+    pub(super) fn toggle_panel(&mut self, panel: SidePanel, cx: &mut Context<Self>) {
+        let dock = self.config.panel_dock_for(panel.kind());
+        if self.active_panel(dock) == Some(panel) && !self.dock_collapsed(dock) {
+            self.set_dock_collapsed(dock, true, cx);
+        } else {
+            self.set_panel(panel, cx);
+        }
     }
 
     /// Panels currently docked to `dock`, in canonical order.
@@ -45,8 +87,14 @@ impl AppShell {
             return;
         }
         match dock {
-            PanelDock::Left => self.left_panel = panel,
-            PanelDock::Right => self.right_panel = panel,
+            PanelDock::Left => {
+                self.left_panel = panel;
+                self.left_panel_collapsed = false;
+            }
+            PanelDock::Right => {
+                self.right_panel = panel;
+                self.right_panel_collapsed = false;
+            }
         }
         self.save_config(cx);
         cx.notify();
@@ -61,6 +109,8 @@ impl AppShell {
         if !changed {
             return;
         }
+        self.left_panel_collapsed = false;
+        self.right_panel_collapsed = false;
         self.save_config(cx);
         cx.notify();
     }
@@ -148,6 +198,22 @@ impl AppShell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let active = self.active_panel(dock)?;
+        if self.dock_collapsed(dock) {
+            let rail = self.panel_rail(dock, cx);
+            let mut root = div()
+                .w(px(PANEL_RAIL_WIDTH))
+                .h_full()
+                .flex_none()
+                .bg(cx.theme().sidebar)
+                .border_color(cx.theme().border);
+            root = if dock == PanelDock::Right {
+                root.border_l_1()
+            } else {
+                root.border_r_1()
+            };
+            return Some(root.child(rail).into_any_element());
+        }
+
         let vertical = self.config.panel_arrangement == PanelArrangement::Vertical;
         let border = cx.theme().border;
         let sidebar_border = cx.theme().sidebar_border;
@@ -286,6 +352,29 @@ impl AppShell {
         }
     }
 
+    fn panel_label(panel: SidePanel) -> String {
+        match panel {
+            SidePanel::Notes => t!("panel.notes").to_string(),
+            SidePanel::Outline => t!("panel.outline").to_string(),
+            SidePanel::Search => t!("panel.search").to_string(),
+            SidePanel::Bookmarks => t!("panel.bookmarks").to_string(),
+            SidePanel::Trash => t!("panel.trash").to_string(),
+        }
+    }
+
+    fn panel_tooltip(&self, dock: PanelDock, panel: SidePanel, active: bool) -> String {
+        let label = Self::panel_label(panel);
+        if !active {
+            return label;
+        }
+        let action = if self.dock_collapsed(dock) {
+            t!("panel.expand")
+        } else {
+            t!("panel.collapse")
+        };
+        format!("{label} · {action}")
+    }
+
     pub(super) fn panel_tab_row(&self, dock: PanelDock, cx: &mut Context<Self>) -> AnyElement {
         let mut row = div()
             .h(px(34.))
@@ -296,14 +385,14 @@ impl AppShell {
             .border_b_1()
             .border_color(cx.theme().sidebar_border);
         for panel in self.panels_in_dock(dock) {
-            let (label, id) = match panel {
-                SidePanel::Notes => (t!("panel.notes").to_string(), "panel-notes"),
-                SidePanel::Outline => (t!("panel.outline").to_string(), "panel-outline"),
-                SidePanel::Search => (t!("panel.search").to_string(), "panel-search"),
-                SidePanel::Bookmarks => (t!("panel.bookmarks").to_string(), "panel-bookmarks"),
-                SidePanel::Trash => (t!("panel.trash").to_string(), "panel-trash"),
+            let id = match panel {
+                SidePanel::Notes => "panel-notes",
+                SidePanel::Outline => "panel-outline",
+                SidePanel::Search => "panel-search",
+                SidePanel::Bookmarks => "panel-bookmarks",
+                SidePanel::Trash => "panel-trash",
             };
-            row = row.child(self.panel_tab(panel, label, id, cx));
+            row = row.child(self.panel_tab(panel, Self::panel_label(panel), id, cx));
         }
         row.into_any_element()
     }
@@ -311,7 +400,7 @@ impl AppShell {
     pub(super) fn panel_rail(&self, dock: PanelDock, cx: &mut Context<Self>) -> AnyElement {
         let mut rail = div()
             .v_flex()
-            .w(px(40.))
+            .w(px(PANEL_RAIL_WIDTH))
             .h_full()
             .flex_shrink_0()
             .items_center()
@@ -326,13 +415,7 @@ impl AppShell {
         let active_panel = self.active_panel(dock);
         for panel in self.panels_in_dock(dock) {
             let active = active_panel == Some(panel);
-            let label = match panel {
-                SidePanel::Notes => t!("panel.notes"),
-                SidePanel::Outline => t!("panel.outline"),
-                SidePanel::Search => t!("panel.search"),
-                SidePanel::Bookmarks => t!("panel.bookmarks"),
-                SidePanel::Trash => t!("panel.trash"),
-            };
+            let tooltip = self.panel_tooltip(dock, panel, active);
             rail = rail.child(
                 Button::new(match panel {
                     SidePanel::Notes => "rail-notes",
@@ -344,9 +427,9 @@ impl AppShell {
                 .ghost()
                 .compact()
                 .icon(Self::panel_icon(panel))
-                .tooltip(label.to_string())
+                .tooltip(tooltip)
                 .when(active, |button| button.primary())
-                .on_click(cx.listener(move |this, _, _, cx| this.set_panel(panel, cx))),
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_panel(panel, cx))),
             );
         }
         rail.into_any_element()
@@ -359,7 +442,9 @@ impl AppShell {
         id: &'static str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let active = self.active_panel(self.config.panel_dock_for(panel.kind())) == Some(panel);
+        let dock = self.config.panel_dock_for(panel.kind());
+        let active = self.active_panel(dock) == Some(panel);
+        let tooltip = self.panel_tooltip(dock, panel, active);
         let hover = cx.theme().list_hover;
         let color = if active {
             cx.theme().foreground
@@ -385,7 +470,11 @@ impl AppShell {
                 cx.theme().transparent
             })
             .hover(move |style| style.bg(hover))
-            .on_click(cx.listener(move |this, _, _, cx| this.set_panel(panel, cx)))
+            .tooltip(move |window, cx| {
+                let text = tooltip.clone();
+                Tooltip::element(move |_, _cx| div().child(text.clone())).build(window, cx)
+            })
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_panel(panel, cx)))
             .child(
                 Icon::new(Self::panel_icon(panel))
                     .xsmall()

@@ -1,7 +1,9 @@
 use super::util::*;
 use super::*;
 use crate::official_docs::OfficialDocKind;
+use gpui_kit::base::{ScrollableMask, Scrollbar, ScrollbarMode};
 use gpui_kit::component::switch::Switch;
+use gpui_kit::{Axis, ScrollHandle};
 
 /// 令牌写入线程的返回值：提示消息、新令牌明文、新建 id、最新令牌列表。
 type TokenWriteOutcome = Result<(String, Option<String>, Option<Uuid>, Vec<TokenRecord>), String>;
@@ -1584,12 +1586,14 @@ impl AppShell {
         let border = cx.theme().border;
         let danger = cx.theme().danger;
         let success = cx.theme().success;
+        let audit_scroll = dialog.audit_scroll.clone();
         let page_count = audit_page_count(dialog.audit.len());
         let page = dialog.audit_page.min(page_count - 1);
         let start = page * AUDIT_PAGE_SIZE;
         let end = (start + AUDIT_PAGE_SIZE).min(dialog.audit.len());
-        let mut rows: Vec<AnyElement> = Vec::new();
-        rows.push(
+        // 标题、提示与刷新按钮固定在列表上方，不随记录一起滚动。
+        let mut header_rows: Vec<AnyElement> = Vec::new();
+        header_rows.push(
             div()
                 .h_flex()
                 .items_center()
@@ -1619,7 +1623,7 @@ impl AppShell {
                 .into_any_element(),
         );
         if let Some(error) = dialog.audit_error.clone() {
-            rows.push(
+            header_rows.push(
                 div()
                     .text_xs()
                     .text_color(danger)
@@ -1628,8 +1632,9 @@ impl AppShell {
             );
         }
         if dialog.audit.is_empty() && dialog.audit_error.is_none() {
-            rows.push(empty_hint(t!("mcp.audit_empty").to_string(), muted));
+            header_rows.push(empty_hint(t!("mcp.audit_empty").to_string(), muted));
         }
+        let mut entry_rows: Vec<AnyElement> = Vec::new();
         for entry in dialog.audit.get(start..end).unwrap_or_default() {
             let when = age_label(entry.time);
             let result_color = if entry.result == "ok" {
@@ -1649,7 +1654,7 @@ impl AppShell {
                 (None, Some(target)) => target,
                 (None, None) => String::new(),
             };
-            rows.push(
+            entry_rows.push(
                 div()
                     .v_flex()
                     .gap_0p5()
@@ -1731,16 +1736,35 @@ impl AppShell {
             .gap_2()
             .flex_1()
             .min_h_0()
+            .children(header_rows)
             .child(
                 div()
-                    // 换页时换 id，滚动位置随之回到顶部。
                     .id(format!("mcp-audit-list-{page}"))
-                    .v_flex()
-                    .gap_1()
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .children(rows),
+                    .child(
+                        div()
+                            .id("mcp-audit-list-viewport")
+                            .size_full()
+                            .v_flex()
+                            .track_scroll(&audit_scroll)
+                            .overflow_y_scroll()
+                            .lock_scroll_axis()
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_1()
+                                    // 给右侧常驻滚动条留出空间，避免盖住卡片边界。
+                                    .pr_3()
+                                    .flex_none()
+                                    .h_auto()
+                                    .min_h_full()
+                                    .children(entry_rows),
+                            ),
+                    )
+                    .child(ScrollableMask::new(Axis::Vertical, &audit_scroll))
+                    .child(Scrollbar::vertical(&audit_scroll).mode(ScrollbarMode::Always)),
             )
             .when(!dialog.audit.is_empty(), |body| body.child(pager))
             .into_any_element()
@@ -1791,6 +1815,7 @@ impl AppShell {
             audit: Vec::new(),
             audit_error: None,
             audit_page: 0,
+            audit_scroll: ScrollHandle::new(),
             perms: loaded.tree,
             perms_tampered: loaded.tampered,
             perms_expanded,
@@ -2330,6 +2355,9 @@ impl AppShell {
                 return;
             }
             dialog.audit_page = clamped;
+            dialog
+                .audit_scroll
+                .set_offset(gpui_kit::point(px(0.), px(0.)));
             cx.notify();
         }
     }

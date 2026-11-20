@@ -5,8 +5,8 @@ use std::rc::Rc;
 use super::util::*;
 use super::*;
 
-/// 树行右侧为悬浮的 `…` / `+` 按钮预留的宽度，长名称在进入该区域前被截断。
-const TRAILING_SLOT: f32 = 56.0;
+/// 树行悬浮时为 `…` / `+` 操作区预留的宽度；平时不占用名称空间。
+const TRAILING_SLOT: f32 = 68.0;
 
 /// 构造树行右键菜单的回调。
 type BuildTreeMenu =
@@ -358,9 +358,14 @@ impl AppShell {
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .truncate()
-                                        // 为悬浮的 `…` / `+` 按钮预留位置，
-                                        // 长名称不会覆盖到按钮上。
-                                        .pr(px(TRAILING_SLOT))
+                                        // 平时占满整列；悬浮或菜单展开时
+                                        // 才为行尾操作按钮腾出空间。
+                                        .when(menu_open, |el| el.pr(px(TRAILING_SLOT)))
+                                        .when(!menu_open, |el| {
+                                            el.group_hover(group.clone(), |style| {
+                                                style.pr(px(TRAILING_SLOT))
+                                            })
+                                        })
                                         .child(name.clone()),
                                 )
                                 .when(!menu_open, |row| {
@@ -369,7 +374,7 @@ impl AppShell {
                                             .flex_shrink_0()
                                             .text_xs()
                                             .text_color(muted)
-                                            .group_hover(group.clone(), |style| style.invisible())
+                                            .group_hover(group.clone(), |style| style.hidden())
                                             .child(count_label),
                                     )
                                 })
@@ -1093,9 +1098,14 @@ impl AppShell {
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .truncate()
-                                        // 为悬浮的 `…` / `+` 按钮预留位置，
-                                        // 长名称不会覆盖到按钮上。
-                                        .pr(px(TRAILING_SLOT))
+                                        // 平时占满整列；悬浮或菜单展开时
+                                        // 才为行尾操作按钮腾出空间。
+                                        .when(menu_open, |el| el.pr(px(TRAILING_SLOT)))
+                                        .when(!menu_open, |el| {
+                                            el.group_hover(group.clone(), |style| {
+                                                style.pr(px(TRAILING_SLOT))
+                                            })
+                                        })
                                         .child(label),
                                 )
                                 .child(sidebar_row_trailing(
@@ -1202,8 +1212,8 @@ fn sidebar_row_trailing(
 
     // 绝对定位让空闲时的笔记数量贴右显示，悬浮操作
     // 覆盖同一尾部区域，不会把数量挤向左侧。
-    // 不透明背景避免被截断的长名称从按钮后面透出来，
-    // 名称也预留了 `TRAILING_SLOT`，因此不会延伸到按钮处。
+    // 不透明背景避免长名称从按钮后面透出来；名称在
+    // 悬浮 / 菜单展开时会按 `TRAILING_SLOT` 提前截断。
     let mut actions = div()
         .id(format!("tree-actions-{index}"))
         .absolute()
@@ -1211,7 +1221,7 @@ fn sidebar_row_trailing(
         .h_full()
         .h_flex()
         .items_center()
-        .gap_0p5()
+        .gap(px(1.))
         .bg(row_bg)
         .group_hover(group.to_string(), move |style| {
             let style = style.bg(hover_bg);

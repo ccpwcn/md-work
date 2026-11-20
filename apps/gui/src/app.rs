@@ -78,6 +78,7 @@ pub(crate) use window_place::restore_window;
 
 const PANEL_MIN_WIDTH: f32 = 240.0;
 const PANEL_MAX_WIDTH: f32 = 560.0;
+const PANEL_RAIL_WIDTH: f32 = 40.0;
 
 /// 行/标签下标及其最近一次绘制区域，供拖拽命中测试使用。
 type PaintedBounds = Arc<Mutex<Vec<(usize, Bounds<Pixels>)>>>;
@@ -564,6 +565,8 @@ struct McpSettingsDialog {
     audit_error: Option<String>,
     /// 审计页当前页码（0 起），最多翻到第 10 页。
     audit_page: usize,
+    /// 审计列表的滚动位置，供常驻滚动条与翻页归零共用。
+    audit_scroll: ScrollHandle,
     /// 权限树编辑态：每次变更即时保存，仅对新 MCP 会话生效。
     perms: PermissionTree,
     /// 权限文件签名校验失败：已按全部隐藏处理，需重新授权重建签名。
@@ -653,8 +656,12 @@ pub struct AppShell {
     copied: bool,
     /// Active panel of the left sidebar (only panels docked left are shown).
     left_panel: SidePanel,
+    /// Whether the left sidebar is collapsed to its panel button rail.
+    left_panel_collapsed: bool,
     /// Active panel of the right sidebar (only panels docked right are shown).
     right_panel: SidePanel,
+    /// Whether the right sidebar is collapsed to its panel button rail.
+    right_panel_collapsed: bool,
     /// (dock being dragged, mouse x at drag start, that dock's width at drag start)
     panel_resize: Option<(PanelDock, f32, f32)>,
     /// 大纲用 `Arc` 持有：面板每次窗口重绘只需克隆指针，
@@ -1018,7 +1025,9 @@ impl AppShell {
             images_pending: HashSet::new(),
             copied: false,
             left_panel: SidePanel::Notes,
+            left_panel_collapsed: false,
             right_panel: SidePanel::Notes,
+            right_panel_collapsed: false,
             panel_resize: None,
             outline: Arc::default(),
             outline_cache: None,
@@ -1176,15 +1185,19 @@ impl Render for AppShell {
         }
         let has_left = !self.panels_in_dock(PanelDock::Left).is_empty();
         let has_right = !self.panels_in_dock(PanelDock::Right).is_empty();
-        // The workspace-path footer lives on the left sidebar, or on the right
-        // one when nothing is docked left, so it is never shown twice.
-        let left_sidebar = if has_left {
+        let left_expanded = has_left && !self.left_panel_collapsed;
+        let right_expanded = has_right && !self.right_panel_collapsed;
+        // The workspace-path footer lives on the expanded left sidebar, or on
+        // the right one when the left is absent/collapsed, so it is never shown twice.
+        let left_sidebar = if left_expanded {
             self.render_dock(PanelDock::Left, true, cx)
+        } else if self.left_panel_collapsed {
+            self.render_dock(PanelDock::Left, false, cx)
         } else {
             None
         };
         let right_sidebar = if has_right {
-            self.render_dock(PanelDock::Right, !has_left, cx)
+            self.render_dock(PanelDock::Right, !left_expanded, cx)
         } else {
             None
         };
@@ -1200,15 +1213,17 @@ impl Render for AppShell {
             .into_any_element();
         let mut main = div().flex_1().min_h_0().flex();
         if let Some(sidebar) = left_sidebar {
-            main = main
-                .child(sidebar)
-                .child(self.render_panel_handle(PanelDock::Left, cx));
+            main = main.child(sidebar);
+            if left_expanded {
+                main = main.child(self.render_panel_handle(PanelDock::Left, cx));
+            }
         }
         main = main.child(editor);
         if let Some(sidebar) = right_sidebar {
-            main = main
-                .child(self.render_panel_handle(PanelDock::Right, cx))
-                .child(sidebar);
+            if right_expanded {
+                main = main.child(self.render_panel_handle(PanelDock::Right, cx));
+            }
+            main = main.child(sidebar);
         }
 
         let mut root = div()

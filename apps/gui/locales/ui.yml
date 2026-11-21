@@ -1481,6 +1481,12 @@ mcp.audit_page:
 mcp.audit_query:
   en: "search “%{query}”"
   zh-CN: "搜索「%{query}」"
+mcp.audit_client:
+  en: "Client: %{client}"
+  zh-CN: "客户端：%{client}"
+mcp.audit_client_unknown:
+  en: "Client not reported"
+  zh-CN: "客户端未上报"
 mcp.clients:
   en: "Client configuration"
   zh-CN: "客户端配置"

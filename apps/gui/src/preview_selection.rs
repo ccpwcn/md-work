@@ -360,9 +360,10 @@ mod tests {
     use gpui_kit::base::{StyledExt as _, TextSelection, TextSelectionHandle, TextSelectionLayer};
     use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
     use gpui_kit::{
-        Background, Context, ElementId, Hsla, InteractiveElement, IntoElement, Modifiers,
-        MouseButton, ParentElement as _, Render, SharedString, StatefulInteractiveElement,
-        Styled as _, StyledText, TestAppContext, Window, div, point, px,
+        AppContext, Background, ClipboardItem, Context, ElementId, Hsla, InteractiveElement,
+        IntoElement, KeyBinding, Modifiers, MouseButton, ParentElement as _, Render, SharedString,
+        StatefulInteractiveElement, Styled as _, StyledText, TestAppContext, Window, div, point,
+        px,
     };
 
     fn selection_color() -> Hsla {
@@ -420,6 +421,103 @@ mod tests {
                     ))),
             )
         }
+    }
+
+    struct CtrlCHarness {
+        frame: SharedPreviewSelection,
+        handle: TextSelectionHandle,
+        focus: gpui_kit::FocusHandle,
+    }
+
+    impl CtrlCHarness {
+        fn new(cx: &mut Context<Self>) -> Self {
+            Self {
+                frame: new_frame_selection(),
+                handle: TextSelectionHandle::new("", cx),
+                focus: cx.focus_handle(),
+            }
+        }
+    }
+
+    impl Render for CtrlCHarness {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("preview-root")
+                .size_full()
+                .relative()
+                .track_focus(&self.focus)
+                .on_action(cx.listener(|_, _: &crate::CopyPreview, window, cx| {
+                    let selected = TextSelection::selected_text(window, cx);
+                    cx.write_to_clipboard(ClipboardItem::new_string(selected));
+                }))
+                .child(SelectionOverlayElement::new(
+                    self.frame.clone(),
+                    selection_color(),
+                    self.handle.clone(),
+                ))
+                .child(div().w(px(300.)).h(px(20.)).child(run(
+                    "first",
+                    "alpha beta",
+                    0,
+                    self.frame.clone(),
+                )))
+                .child(div().w(px(300.)).h(px(20.)).child(run(
+                    "second",
+                    "gamma delta",
+                    1,
+                    self.frame.clone(),
+                )))
+        }
+    }
+
+    #[gpui::test]
+    fn ctrl_c_copies_preview_selection(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.bind_keys([KeyBinding::new("ctrl-c", crate::CopyPreview, None)]);
+        });
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let harness = cx.new(|cx| CtrlCHarness::new(cx));
+            gpui_kit::component::Root::new(harness, window, cx)
+        });
+        let harness = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<CtrlCHarness>().unwrap()
+        });
+        let focus = harness.read_with(cx, |harness, _| harness.focus.clone());
+        // GPUI 只沿焦点链分发动作；生产代码在预览根挂了同一个焦点句柄。
+        cx.update(|window, cx| {
+            window.focus(&focus, cx);
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_down(
+            point(px(1.), px(8.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(120.), px(8.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(120.), px(8.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(
+                TextSelection::selected_text(window, cx).contains("alpha"),
+                "selection must exist before Ctrl+C"
+            );
+        });
+
+        cx.simulate_keystrokes("ctrl-c");
+        let copied = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default();
+        assert!(copied.contains("alpha"), "Ctrl+C copied {copied:?}");
     }
 
     /// 回归用例：整篇预览共用一个选区句柄时，前面的片段

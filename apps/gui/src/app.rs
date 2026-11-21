@@ -644,6 +644,9 @@ pub struct AppShell {
     selection_overlay: Option<Entity<crate::preview_selection::SelectionOverlay>>,
     /// 正文与覆盖层共享的选区帧数据（runs / 投影结果）。
     preview_frame: Option<crate::preview_selection::SharedPreviewSelection>,
+    /// 预览区的焦点句柄：GPUI 的按键动作只会沿焦点链分发，
+    /// 预览态必须有一个已挂载的焦点目标，Ctrl+C 才能到达复制 handler。
+    preview_focus: FocusHandle,
     /// 创建 `preview_view` 时使用的渲染配置，用于在设置变化时重建它。
     preview_render_config: Option<(bool, String, f32)>,
     /// 状态栏全文统计的缓存，键为 `(文档实体、文本修订号)`。
@@ -746,7 +749,7 @@ pub struct AppShell {
     pending_welcome_doc: bool,
     /// 当前版本更新说明尚未被用户关闭：启动末尾自动以只读预览打开。
     pending_changelog: bool,
-    /// 打开笔记后让编辑区获得输入焦点，避免还要再点一下才能打字。
+    /// 打开笔记后让当前文档（编辑区或预览根）获得焦点。
     pending_editor_focus: bool,
     /// 异步打开尚未落地、但落地后应获得焦点的笔记路径。
     focus_on_open_path: Option<PathBuf>,
@@ -1029,6 +1032,7 @@ impl AppShell {
             preview_view: None,
             selection_overlay: None,
             preview_frame: None,
+            preview_focus: cx.focus_handle(),
             preview_render_config: None,
             status_stats: None,
             math: HashMap::new(),
@@ -1189,8 +1193,8 @@ impl Render for AppShell {
         if self.config.bookmark_marker != BookmarkMarker::None {
             self.ensure_bookmark_marks(cx);
         }
-        // 笔记打开/切换后把焦点交给编辑区；放在 render 里能保证编辑器
-        // 实体已经创建，且这一帧的元素树会注册它的 focus handle。
+        // 笔记打开/切换/预览模式切换后把焦点交给当前文档；放在 render
+        // 里能保证这一帧的元素树已经注册对应的 focus handle。
         if self.pending_editor_focus {
             self.pending_editor_focus = false;
             self.focus_active_editor(window, cx);

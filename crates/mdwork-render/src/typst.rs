@@ -927,14 +927,23 @@ fn typst_image_width(
 
 fn wrap_styled_typst(content: &str, style: &StyleDecls, block: bool) -> String {
     let mut inner = content.to_string();
+    let mut text_args = Vec::new();
     if let Some(color) = style.color {
-        inner = format!("#text(fill: {})[{inner}]", typst_rgb(color));
+        text_args.push(format!("fill: {}", typst_rgb(color)));
     }
-    if let Some(Length::Px(px)) = style.font_size {
-        inner = format!("#text(size: {px}pt)[{inner}]");
-    } else if let Some(Length::PercentCents(cents)) = style.font_size {
-        let em = (cents as f32 / 10_000.0).clamp(0.1, 10.0);
-        inner = format!("#text(size: {em}em)[{inner}]");
+    match style.font_size {
+        Some(Length::Px(px)) => text_args.push(format!("size: {px}pt")),
+        Some(Length::PercentCents(cents)) => {
+            let em = (cents as f32 / 10_000.0).clamp(0.1, 10.0);
+            text_args.push(format!("size: {em}em"));
+        }
+        None => {}
+    }
+    if let Some(weight) = style.font_weight {
+        text_args.push(format!("weight: \"{}\"", typst_font_weight(weight)));
+    }
+    if !text_args.is_empty() {
+        inner = format!("#text({})[{inner}]", text_args.join(", "));
     }
     let mut box_args = Vec::new();
     if let Some(width) = style.width {
@@ -969,6 +978,21 @@ fn typst_length_arg(name: &str, length: Length) -> String {
 
 fn typst_rgb(color: RgbColor) -> String {
     format!("rgb(\"#{:02x}{:02x}{:02x}\")", color.r, color.g, color.b)
+}
+
+/// Typst 的 `text.weight` 取名字而非任意数字，映射到最接近的档位。
+fn typst_font_weight(weight: u16) -> &'static str {
+    match weight {
+        0..=150 => "thin",
+        151..=250 => "extralight",
+        251..=350 => "light",
+        351..=450 => "normal",
+        451..=550 => "medium",
+        551..=650 => "semibold",
+        651..=750 => "bold",
+        751..=850 => "extrabold",
+        _ => "black",
+    }
 }
 
 fn collect_footnotes(ir: &PreviewIr, out: &mut HashMap<String, Vec<Block>>) {

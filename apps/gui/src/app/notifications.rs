@@ -91,6 +91,16 @@ impl AppShell {
                 )
                 .on_click(cx.listener(|this, _, window, cx| this.open_zip_import(window, cx))),
             ))
+            .child(titlebar_guard(
+                title_icon(
+                    "title-html-subset-doc",
+                    IconName::Braces,
+                    t!("title.html_subset").to_string(),
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_official_doc(OfficialDocKind::HtmlSubset, window, cx)
+                })),
+            ))
             .child(self.render_theme_switcher(cx))
             .child(titlebar_guard(
                 title_icon(

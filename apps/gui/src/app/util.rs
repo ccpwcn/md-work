@@ -24,6 +24,17 @@ impl PanelScrollbar for UniformList {
     }
 }
 
+pub(super) const TREE_GESTURE_TTL: Duration = Duration::from_millis(700);
+
+pub(super) fn tree_gesture_fresh(at: Instant, now: Instant) -> bool {
+    now.duration_since(at) < TREE_GESTURE_TTL
+}
+
+/// `top_item` / `bottom_item` 是最后布局时可见的首尾行；部分可见也算在视口内。
+pub(super) fn row_in_viewport(row: usize, top: usize, bottom: usize) -> bool {
+    bottom >= top && (top..=bottom).contains(&row)
+}
+
 /// Subsequence match with a bonus for word starts and consecutive runs.
 pub(super) fn fuzzy_score(label: &str, query: &str) -> Option<i64> {
     if query.trim().is_empty() {
@@ -1035,8 +1046,28 @@ pub(super) fn push_rows(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::time::{Duration, Instant};
 
-    use super::{AUDIT_MAX_PAGES, AUDIT_PAGE_SIZE, audit_page_count};
+    use super::{
+        AUDIT_MAX_PAGES, AUDIT_PAGE_SIZE, TREE_GESTURE_TTL, audit_page_count, row_in_viewport,
+        tree_gesture_fresh,
+    };
+
+    #[test]
+    fn tree_toggle_gesture_expires() {
+        let now = Instant::now();
+        assert!(tree_gesture_fresh(now, now + Duration::from_millis(699)));
+        assert!(!tree_gesture_fresh(now, now + TREE_GESTURE_TTL));
+    }
+
+    #[test]
+    fn partially_visible_row_counts_as_visible() {
+        assert!(row_in_viewport(4, 4, 12));
+        assert!(row_in_viewport(12, 4, 12));
+        assert!(!row_in_viewport(13, 4, 12));
+        assert!(!row_in_viewport(3, 4, 12));
+        assert!(row_in_viewport(0, 0, 0));
+    }
     use super::{
         build_rows, entry_display_name, insert_sibling_name, local_datetime_label,
         note_display_name, sibling_file_names, tree_entry_name, tree_full_name,

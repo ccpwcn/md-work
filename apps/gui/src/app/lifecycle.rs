@@ -352,63 +352,53 @@ impl AppShell {
         };
         self.reload_generation += 1;
         let generation = self.reload_generation;
-        let previous: Vec<(Uuid, HashSet<String>, bool)> = self
-            .notebooks
-            .iter()
-            .map(|entry| {
-                (
-                    entry.notebook.marker.id,
-                    entry.expanded.clone(),
-                    entry.root_expanded,
-                )
-            })
-            .collect();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move {
-                    match workspace.refresh() {
-                        Ok(scan) => {
-                            let issues = scan
-                                .issues
-                                .iter()
-                                .map(|issue| {
-                                    tracing::warn!(
-                                        path = %issue.path.display(),
-                                        kind = ?issue.kind,
-                                        message = %issue.message,
-                                        "扫描工作区发现问题"
-                                    );
-                                    format!("{}：{}", issue.path.display(), issue.message)
-                                })
-                                .collect::<Vec<_>>();
-                            let entries = scan
-                                .notebooks
-                                .into_iter()
-                                .map(|notebook| {
-                                    let (expanded, root_expanded) = previous
-                                        .iter()
-                                        .find(|(id, _, _)| *id == notebook.marker.id)
-                                        .map(|(_, expanded, root)| (expanded.clone(), *root))
-                                        .unwrap_or_default();
-                                    load_notebook_entry(notebook, expanded, root_expanded)
-                                })
-                                .collect::<Vec<_>>();
-                            Ok((entries, issues))
-                        }
-                        Err(err) => Err(err.to_string()),
-                    }
-                })
+                .spawn(async move { workspace.refresh() })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.reload_generation != generation {
                     return;
                 }
                 match result {
-                    Ok((entries, issues)) => {
-                        // 上面的 `previous` 已经带上了展开状态，
-                        // 后台刷新时不要再强制展开当前笔记本，
-                        // 用户可能刚刚手动收起了它。
+                    Ok(scan) => {
+                        let issues = scan
+                            .issues
+                            .iter()
+                            .map(|issue| {
+                                tracing::warn!(
+                                    path = %issue.path.display(),
+                                    kind = ?issue.kind,
+                                    message = %issue.message,
+                                    "扫描工作区发现问题"
+                                );
+                                format!("{}：{}", issue.path.display(), issue.message)
+                            })
+                            .collect::<Vec<_>>();
+                        // 展开状态在应用时读取：后台扫描期间用户可能刚点过箭头，
+                        // 用启动时的快照会把刚展开的节点又显示成收起。
+                        let current: HashMap<Uuid, (HashSet<String>, bool)> = this
+                            .notebooks
+                            .iter()
+                            .map(|entry| {
+                                (
+                                    entry.notebook.marker.id,
+                                    (entry.expanded.clone(), entry.root_expanded),
+                                )
+                            })
+                            .collect();
+                        let entries = scan
+                            .notebooks
+                            .into_iter()
+                            .map(|notebook| {
+                                let (expanded, root_expanded) = current
+                                    .get(&notebook.marker.id)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                load_notebook_entry(notebook, expanded, root_expanded)
+                            })
+                            .collect::<Vec<_>>();
                         let active_kept = this.active_notebook.is_some_and(|id| {
                             entries.iter().any(|entry| entry.notebook.marker.id == id)
                         });
@@ -437,10 +427,10 @@ impl AppShell {
         self.entries_reload_deferred = false;
         self.entries_generation += 1;
         let generation = self.entries_generation;
-        let notebooks: Vec<(Notebook, HashSet<String>)> = self
+        let notebooks: Vec<Notebook> = self
             .notebooks
             .iter()
-            .map(|entry| (entry.notebook.clone(), entry.expanded.clone()))
+            .map(|entry| entry.notebook.clone())
             .collect();
         cx.spawn(async move |this, cx| {
             let refreshed = cx
@@ -448,11 +438,10 @@ impl AppShell {
                 .spawn(async move {
                     notebooks
                         .into_iter()
-                        .map(|(notebook, expanded)| {
+                        .map(|notebook| {
                             let order = notebook.load_tree_order();
                             let tree = notebook.list_tree().unwrap_or_default();
-                            let rows = build_rows(&tree, &expanded, &order);
-                            (notebook.marker.id, tree, rows, order)
+                            (notebook.marker.id, tree, order)
                         })
                         .collect::<Vec<_>>()
                 })
@@ -461,15 +450,18 @@ impl AppShell {
                 if this.entries_generation != generation {
                     return;
                 }
-                for (id, tree, rows, order) in refreshed {
+                for (id, tree, order) in refreshed {
                     if let Some(entry) = this
                         .notebooks
                         .iter_mut()
                         .find(|entry| entry.notebook.marker.id == id)
                     {
                         entry.tree = tree;
-                        entry.rows = rows;
                         entry.order = order;
+                        // 展开状态取应用时的最新值：后台扫描期间用户点开的
+                        // 文件夹不能被旧快照生成的 rows 立刻盖回去。
+                        let expanded = entry.expanded.clone();
+                        entry.rows = build_rows(&entry.tree, &expanded, &entry.order);
                     }
                 }
                 this.rebuild_sidebar_rows();

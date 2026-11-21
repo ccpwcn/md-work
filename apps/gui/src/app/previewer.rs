@@ -1,5 +1,6 @@
 use super::util::*;
 use super::*;
+use gpui_kit::base::TextSelection;
 use mdwork_render::preview::Block;
 
 /// 预览右键复制的内容形式。
@@ -259,6 +260,22 @@ impl AppShell {
         self.config.code_wrap = !self.config.code_wrap;
         self.save_config(cx);
         cx.notify();
+    }
+
+    /// 预览态的 `Ctrl+C`：与 Zed 一致，只复制渲染后的纯文本。
+    /// 没有选中时继续传播，交给输入框或 Root 的默认复制逻辑。
+    /// 「复制为 Markdown」仍只在右键菜单里，不占用快捷键。
+    pub(super) fn copy_preview_selection_shortcut(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = TextSelection::selected_text(window, cx);
+        if selected.trim().is_empty() {
+            cx.propagate();
+            return;
+        }
+        self.copy_preview_text(&selected, PreviewCopyKind::Text, cx);
     }
 
     pub(super) fn copy_preview(&mut self, cx: &mut Context<Self>) {

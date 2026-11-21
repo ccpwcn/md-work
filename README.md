@@ -226,7 +226,7 @@ cargo run -p xtask -- installer   # 调用 makensis 生成 dist/md-work-1.3.2-se
 
 `installer` 需要 [NSIS 3](https://nsis.sourceforge.io/)（`makensis` 在 PATH、`NSIS_HOME`、`E:\apps\nsis` 或默认 Program Files 目录）。安装脚本位于 `packaging/nsis/md-work.nsi`，按用户安装、HKCU 卸载信息、卸载时保留笔记与设置。安装程序包含「选择工作区」页面（默认 `我的文档\md-work`），首次安装时把所选文件夹写入 `HKCU\Software\md-work\WorkspaceRoot`；应用只在 `config\runtime.toml`（以及旧版 `config.json`）尚无工作区时采用该值，随后写回完整配置，升级不会覆盖现有设置。支持 `/S` 静默安装（不弹页面，直接使用默认工作区）。
 
-**随包官方文档**：`xtask package` 会把 `doc/changelog/v<当前版本>.md` 复制为 `changelog.md`、把 `doc/mcp.md` 复制为 `mcp.md`，两者都进入便携目录、zip 和 NSIS 安装包的 exe 同目录（安装版还设置了只读属性，zip 条目也带只读位）。这两份正文同时在编译期嵌入 GUI 可执行文件：新版本在本机首次启动时自动以只读预览打开 `changelog.md`，用户关闭该标签后版本写入 `config\runtime.toml` 的 `shown_changelog_version`，之后不再自动打开；设置 → MCP 的「使用详细说明」按钮会关闭设置面板并以只读预览打开 `mcp.md`。运行时按 SHA-256 校验磁盘副本，若被改动会弹窗提醒，并始终显示内置的权威版本；官方标签页不能切到编辑模式、不能保存，也不会写进会话。
+**随包官方文档**：`xtask package` 会把 `doc/changelog/v<当前版本>.md` 复制为 `changelog.md`、`doc/mcp.md` 复制为 `mcp.md`、`doc/欢迎使用墨笺.md` 复制为 `欢迎使用墨笺.md`、`doc/墨笺-html-子集.md` 复制为 `墨笺-html-子集.md`，四份都进入便携目录、zip 和 NSIS 安装包的 exe 同目录（安装版还设置了只读属性，zip 条目也带只读位）。这些正文同时在编译期嵌入 GUI 可执行文件：新版本在本机首次启动时自动以只读预览打开 `changelog.md` 与欢迎文档，用户关闭更新标签后版本写入 `config\runtime.toml` 的 `shown_changelog_version`，之后不再自动打开；设置 → MCP 的「使用详细说明」按钮打开 `mcp.md`，标题栏的 `{}` 按钮打开 HTML 子集说明。运行时按 SHA-256 校验磁盘副本，若被改动会弹窗提醒，并始终显示内置的权威版本；官方标签页不能切到编辑模式、不能保存，也不会写进会话。
 
 #### 持续集成
 

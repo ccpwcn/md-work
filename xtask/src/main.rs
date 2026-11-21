@@ -53,11 +53,18 @@ fn official_doc_sources(root: &Path, version: &str) -> Vec<(&'static str, PathBu
         ),
         ("mcp.md", root.join("doc").join("mcp.md")),
         ("欢迎使用墨笺.md", root.join("doc").join("欢迎使用墨笺.md")),
+        (
+            "墨笺-html-子集.md",
+            root.join("doc").join("墨笺-html-子集.md"),
+        ),
     ]
 }
 
 fn is_official_doc_name(name: &str) -> bool {
-    matches!(name, "changelog.md" | "mcp.md" | "欢迎使用墨笺.md")
+    matches!(
+        name,
+        "changelog.md" | "mcp.md" | "欢迎使用墨笺.md" | "墨笺-html-子集.md"
+    )
 }
 
 fn parse_icon(svg: &[u8]) -> Result<usvg::Tree> {
@@ -188,7 +195,7 @@ fn copy_official_docs(root: &Path, bundle: &Path, version: &str) -> Result<()> {
     for (name, source) in official_doc_sources(root, version) {
         if !source.is_file() {
             bail!(
-                "缺少随包发布的官方说明文档 {}；请补齐发版说明、doc/mcp.md 与 doc/欢迎使用墨笺.md",
+                "缺少随包发布的官方说明文档 {}；请补齐发版说明、doc/mcp.md、doc/欢迎使用墨笺.md 与 doc/墨笺-html-子集.md",
                 source.display()
             );
         }
@@ -341,10 +348,15 @@ mod tests {
     fn official_doc_sources_exist_for_the_current_version() {
         let root = workspace_root().expect("workspace root");
         let sources = official_doc_sources(&root, VERSION);
-        assert_eq!(sources.len(), 3);
+        assert_eq!(sources.len(), 4);
         assert_eq!(
             sources.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-            vec!["changelog.md", "mcp.md", "欢迎使用墨笺.md"]
+            vec![
+                "changelog.md",
+                "mcp.md",
+                "欢迎使用墨笺.md",
+                "墨笺-html-子集.md"
+            ]
         );
         for (name, source) in sources {
             assert!(
@@ -368,12 +380,18 @@ mod tests {
         assert!(bundle.join("changelog.md").is_file());
         assert!(bundle.join("mcp.md").is_file());
         assert!(bundle.join("欢迎使用墨笺.md").is_file());
+        assert!(bundle.join("墨笺-html-子集.md").is_file());
 
         let zip_path = zip_bundle(&bundle).unwrap();
         let archive_file = fs::File::open(&zip_path).unwrap();
         let mut archive = zip::ZipArchive::new(archive_file).unwrap();
         let prefix = bundle.file_name().unwrap().to_string_lossy();
-        for name in ["changelog.md", "mcp.md", "欢迎使用墨笺.md"] {
+        for name in [
+            "changelog.md",
+            "mcp.md",
+            "欢迎使用墨笺.md",
+            "墨笺-html-子集.md",
+        ] {
             let entry = archive
                 .by_name(&format!("{prefix}/{name}"))
                 .unwrap_or_else(|_| panic!("zip 中缺少 {name}"));

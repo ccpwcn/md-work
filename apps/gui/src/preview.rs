@@ -966,6 +966,9 @@ fn apply_text_style<E: Styled>(mut el: E, style: &StyleDecls, context: &RenderCt
         }
         None => {}
     }
+    if let Some(weight) = style.font_weight {
+        el = el.font_weight(FontWeight(weight as f32));
+    }
     el
 }
 

@@ -32,7 +32,8 @@ gpui_kit::actions!(
         ToggleBold,
         ToggleItalic,
         InsertLink,
-        PastePlain
+        PastePlain,
+        CopyPreview
     ]
 );
 
@@ -109,6 +110,7 @@ fn main() {
                 KeyBinding::new("ctrl-i", ToggleItalic, None),
                 KeyBinding::new("ctrl-k", InsertLink, None),
                 KeyBinding::new("ctrl-shift-v", PastePlain, None),
+                KeyBinding::new("ctrl-c", CopyPreview, None),
             ]);
 
             let mut startup = Some(startup);

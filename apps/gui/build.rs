@@ -26,11 +26,12 @@ fn pkg_version_parts() -> (u64, u64, u64) {
     (major, minor, patch)
 }
 
-/// 把随包发布的三份官方说明文档在编译期嵌入可执行文件。
+/// 把随包发布的四份官方说明文档在编译期嵌入可执行文件。
 ///
 /// 运行时显示的是这份内置正文，磁盘上的 `changelog.md` / `mcp.md` /
-/// `欢迎使用墨笺.md` 只用做 SHA-256 校验。这样即使用户改了安装目录里的
-/// 文件，也改不了程序里显示的权威内容，更不会通过编辑器写回磁盘。
+/// `欢迎使用墨笺.md` / `墨笺-html-子集.md` 只用做 SHA-256 校验。这样即使
+/// 用户改了安装目录里的文件，也改不了程序里显示的权威内容，更不会通过
+/// 编辑器写回磁盘。
 fn generate_official_docs() {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -41,20 +42,24 @@ fn generate_official_docs() {
         .join(format!("v{version}.md"));
     let mcp = root.join("doc").join("mcp.md");
     let welcome = root.join("doc").join("欢迎使用墨笺.md");
+    let html_subset = root.join("doc").join("墨笺-html-子集.md");
     println!("cargo:rerun-if-changed={}", changelog.display());
     println!("cargo:rerun-if-changed={}", mcp.display());
     println!("cargo:rerun-if-changed={}", welcome.display());
+    println!("cargo:rerun-if-changed={}", html_subset.display());
 
     let changelog_text = read_official_doc(&changelog, "changelog");
     let mcp_text = read_official_doc(&mcp, "mcp");
     let welcome_text = read_official_doc(&welcome, "欢迎使用墨笺.md");
+    let html_subset_text = read_official_doc(&html_subset, "墨笺-html-子集.md");
     // `{:?}` 生成的是合法的 Rust 字符串字面量（含转义），源文件里的
     // 引号、反斜杠、换行都不需要额外处理。
     let generated = format!(
         "pub const CHANGELOG_VERSION: &str = {version:?};\n\
          pub const CHANGELOG_MD: &str = {changelog_text:?};\n\
          pub const MCP_MD: &str = {mcp_text:?};\n\
-         pub const WELCOME_MD: &str = {welcome_text:?};\n"
+         pub const WELCOME_MD: &str = {welcome_text:?};\n\
+         pub const HTML_SUBSET_MD: &str = {html_subset_text:?};\n"
     );
     std::fs::write(out.join("official_docs_data.rs"), generated)
         .expect("write generated official docs");

@@ -107,6 +107,60 @@ impl AppShell {
         cx.notify();
     }
 
+    fn active_note_key(&self, cx: &App) -> Option<(Uuid, String)> {
+        let doc = self.active_doc.and_then(|index| self.docs.get(index))?;
+        let doc = doc.read(cx);
+        doc.notebook_id.map(|id| (id, doc.rel_path.clone()))
+    }
+
+    fn sidebar_row_index(&self, notebook_id: Uuid, rel_path: &str) -> Option<usize> {
+        self.sidebar_rows.iter().position(|row| match row {
+            SidebarRow::Entry {
+                notebook_id: id,
+                row,
+            } => *id == notebook_id && row.rel_path == rel_path,
+            SidebarRow::Notebook { .. } => false,
+        })
+    }
+
+    /// 行是否至少有一部分落在当前视口内；部分可见也算可见。
+    fn sidebar_row_visible(&self, row: usize) -> bool {
+        let state = self.tree_scroll.0.borrow();
+        row_in_viewport(
+            row,
+            state.base_handle.top_item(),
+            state.base_handle.bottom_item(),
+        )
+    }
+
+    /// 只有当前笔记确实滚出视口时才滚动；在视口内就什么都不做。
+    fn ensure_active_row_visible(&mut self, notebook_id: Uuid, rel_path: &str) {
+        let Some(row) = self.sidebar_row_index(notebook_id, rel_path) else {
+            return;
+        };
+        if self.sidebar_row_visible(row) {
+            return;
+        }
+        self.tree_scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+    }
+
+    fn flash_active_row(&mut self, notebook_id: Uuid, rel_path: String, cx: &mut Context<Self>) {
+        self.flash_rel = Some((notebook_id, rel_path));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(900))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.flash_rel = None;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 被动定位（打开笔记、切换标签等）：只保证当前笔记可见，
+    /// 不改变用户手动展开/收起的状态，也不抢走树上的手势。
     pub(super) fn reveal_active(&mut self, cx: &mut Context<Self>) {
         // Tab strip first: works for notebook notes and external tabs alike.
         // A deferred retry covers session restore / bulk open, when the strip
@@ -122,41 +176,27 @@ impl AppShell {
         })
         .detach();
 
-        let Some(active) = self.active_doc.and_then(|index| self.docs.get(index)) else {
+        // 展开/收起手势期间不要重排或滚动树：鼠标按下后列表一滚动，
+        // 抬起时的点击就会落到另一行上，把用户刚点的节点又翻回去。
+        if self.tree_gesture_active() {
+            return;
+        }
+        let Some((notebook_id, rel_path)) = self.active_note_key(cx) else {
             return;
         };
-        let (notebook_id, rel_path) = {
-            let doc = active.read(cx);
-            let Some(notebook_id) = doc.notebook_id else {
-                return;
-            };
-            (notebook_id, doc.rel_path.clone())
-        };
-
         self.expand_to(notebook_id, &rel_path);
-        let Some(row) = self.sidebar_rows.iter().position(|row| match row {
-            SidebarRow::Entry {
-                notebook_id: id,
-                row,
-            } => *id == notebook_id && row.rel_path == rel_path,
-            SidebarRow::Notebook { .. } => false,
-        }) else {
+        self.ensure_active_row_visible(notebook_id, &rel_path);
+    }
+
+    /// 显式「定位当前打开的笔记」：必要时展开祖先并把笔记滚回视口，
+    /// 无论原本是否可见都闪一下，让用户立刻看到它在哪里。
+    pub(super) fn locate_active(&mut self, cx: &mut Context<Self>) {
+        let Some((notebook_id, rel_path)) = self.active_note_key(cx) else {
             return;
         };
-        self.tree_scroll.scroll_to_item(row, ScrollStrategy::Center);
-        self.flash_rel = Some((notebook_id, rel_path));
-        cx.notify();
-
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(900))
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.flash_rel = None;
-                cx.notify();
-            });
-        })
-        .detach();
+        self.expand_to(notebook_id, &rel_path);
+        self.ensure_active_row_visible(notebook_id, &rel_path);
+        self.flash_active_row(notebook_id, rel_path, cx);
     }
 
     pub(super) fn new_notebook(&mut self, cx: &mut Context<Self>) {

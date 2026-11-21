@@ -552,6 +552,14 @@ impl AppShell {
                         })),
                 )
                 .child(
+                    Button::new("btn-locate-active")
+                        .ghost()
+                        .compact()
+                        .icon(IconName::LocateFixed)
+                        .tooltip(t!("sidebar.locate_active").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| this.locate_active(cx))),
+                )
+                .child(
                     Button::new("btn-sidebar-more")
                         .ghost()
                         .compact()

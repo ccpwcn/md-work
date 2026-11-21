@@ -17,6 +17,9 @@ sidebar.new_notebook:
 sidebar.refresh:
   en: "Rescan"
   zh-CN: "重新扫描"
+sidebar.locate_active:
+  en: "Locate open note"
+  zh-CN: "定位当前打开的笔记"
 sidebar.more:
   en: "More"
   zh-CN: "更多"
@@ -974,6 +977,9 @@ zip.export_label:
 zip.import_label:
   en: "Import zip"
   zh-CN: "导入 zip"
+title.html_subset:
+  en: "Markdown extras & HTML subset"
+  zh-CN: "Markdown 增强与 HTML 子集"
 zip.export_title:
   en: "Export whole notebook"
   zh-CN: "导出整本笔记本"
@@ -1751,6 +1757,9 @@ note.open_folder_failed:
 official_docs.welcome_title:
   en: "Welcome to MoJiān"
   zh-CN: "欢迎使用墨笺"
+official_docs.html_subset_title:
+  en: "Markdown extras & HTML subset"
+  zh-CN: "Markdown 增强与 HTML 子集"
 toolbar.image:
   en: "Insert image"
   zh-CN: "插入图片"

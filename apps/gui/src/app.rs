@@ -909,11 +909,23 @@ impl AppShell {
         self.tree_toggle_guard = Some((notebook_id, folder.map(str::to_string), Instant::now()));
     }
 
-    fn take_tree_toggle(&mut self, notebook_id: Uuid, folder: Option<&str>) -> bool {
-        let Some((id, rel, at)) = self.tree_toggle_guard.take() else {
+    /// 箭头按下时记录了手势。抬起时无论鼠标下面变成了哪一行，
+    /// 这次点击都只属于那次展开/收起：不能让重新布局后的另一行
+    /// 再执行一次动作（例如把刚展开的节点立刻翻回去）。
+    fn take_tree_toggle(&mut self, _notebook_id: Uuid, _folder: Option<&str>) -> bool {
+        let Some((_, _, at)) = self.tree_toggle_guard.take() else {
             return false;
         };
-        id == notebook_id && rel.as_deref() == folder && at.elapsed() < Duration::from_millis(500)
+        tree_gesture_fresh(at, Instant::now())
+    }
+
+    pub(super) fn tree_gesture_active(&self) -> bool {
+        self.tree_toggle_guard.is_some()
+    }
+
+    /// 新的一次行按下意味着上一次箭头手势已经结束。
+    pub(super) fn clear_tree_toggle_guard(&mut self) {
+        self.tree_toggle_guard = None;
     }
 
     pub fn new(
@@ -1300,6 +1312,19 @@ impl Render for AppShell {
                     doc.update(cx, |doc, cx| doc.insert_text(&text, window, cx));
                     cx.notify();
                 }
+            }))
+            .on_action(cx.listener(|this, _: &crate::CopyPreview, window, cx| {
+                // 编辑态（以及弹窗输入框）继续使用平台默认复制；
+                // 这里只接管预览区的选区，且只复制纯文本。
+                if this.palette.is_some()
+                    || this.prompt.is_some()
+                    || this.move_picker.is_some()
+                    || !this.is_preview_mode(cx)
+                {
+                    cx.propagate();
+                    return;
+                }
+                this.copy_preview_selection_shortcut(window, cx);
             }))
             .child(gpui_kit::component::TitleBar::new().child(self.render_title(cx)))
             .child(main)

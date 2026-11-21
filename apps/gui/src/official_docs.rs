@@ -1,7 +1,7 @@
 //! 随安装包 / zip 包发布的官方说明文档。
 //!
-//! `changelog.md`、`mcp.md` 与 `欢迎使用墨笺.md` 的权威正文在编译期就嵌入了
-//! 可执行文件；运行时
+//! `changelog.md`、`mcp.md`、`欢迎使用墨笺.md` 与 `墨笺-html-子集.md` 的权威
+//! 正文在编译期就嵌入了可执行文件；运行时
 //! 打开的是这份内置正文，磁盘上的副本只用来做 SHA-256 校验。因此：
 //!
 //! - 用户可以阅读、复制、打印，但无法切换编辑模式、无法保存、不会写回磁盘；
@@ -23,10 +23,17 @@ pub enum OfficialDocKind {
     Mcp,
     /// 面向用户的入门说明（`doc/欢迎使用墨笺.md`）；安装后首次启动时打开。
     Welcome,
+    /// Markdown 增强与受控 HTML 子集规范（`doc/墨笺-html-子集.md`）。
+    HtmlSubset,
 }
 
 impl OfficialDocKind {
-    pub const ALL: [Self; 3] = [Self::Changelog, Self::Mcp, Self::Welcome];
+    pub const ALL: [Self; 4] = [
+        Self::Changelog,
+        Self::Mcp,
+        Self::Welcome,
+        Self::HtmlSubset,
+    ];
 
     /// 部署到 exe 同目录后的固定文件名。
     pub fn file_name(self) -> &'static str {
@@ -34,6 +41,7 @@ impl OfficialDocKind {
             Self::Changelog => "changelog.md",
             Self::Mcp => "mcp.md",
             Self::Welcome => "欢迎使用墨笺.md",
+            Self::HtmlSubset => "墨笺-html-子集.md",
         }
     }
 
@@ -43,6 +51,7 @@ impl OfficialDocKind {
             Self::Changelog => CHANGELOG_MD,
             Self::Mcp => MCP_MD,
             Self::Welcome => WELCOME_MD,
+            Self::HtmlSubset => HTML_SUBSET_MD,
         }
     }
 
@@ -54,6 +63,7 @@ impl OfficialDocKind {
             }
             Self::Mcp => t!("official_docs.mcp_title").to_string(),
             Self::Welcome => t!("official_docs.welcome_title").to_string(),
+            Self::HtmlSubset => t!("official_docs.html_subset_title").to_string(),
         }
     }
 
@@ -177,8 +187,12 @@ mod tests {
         assert!(!MCP_MD.trim().is_empty(), "mcp.md 不能为空");
         assert!(!WELCOME_MD.trim().is_empty(), "欢迎使用墨笺.md 不能为空");
         assert!(
-            WELCOME_MD.lines().count() <= 40,
-            "欢迎文档应保持简短，不要超过小屏幕的三分之二"
+            WELCOME_MD.lines().count() <= 200,
+            "欢迎文档可以介绍特性，但不应膨胀成完整用户手册"
+        );
+        assert!(
+            !HTML_SUBSET_MD.trim().is_empty(),
+            "墨笺-html-子集.md 不能为空"
         );
     }
 
@@ -195,6 +209,7 @@ mod tests {
         assert_eq!(OfficialDocKind::Changelog.file_name(), "changelog.md");
         assert_eq!(OfficialDocKind::Mcp.file_name(), "mcp.md");
         assert_eq!(OfficialDocKind::Welcome.file_name(), "欢迎使用墨笺.md");
+        assert_eq!(OfficialDocKind::HtmlSubset.file_name(), "墨笺-html-子集.md");
     }
 
     #[test]
@@ -206,5 +221,6 @@ mod tests {
         );
         assert!(!OfficialDocKind::Mcp.title().is_empty());
         assert!(!OfficialDocKind::Welcome.title().is_empty());
+        assert!(!OfficialDocKind::HtmlSubset.title().is_empty());
     }
 }

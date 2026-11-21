@@ -28,6 +28,7 @@ impl AppShell {
         let hover_bg = cx.theme().list_hover;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
         let count = rows.len();
         let notes_label = t!("sidebar.notes").to_string();
         let tree_bounds = self.tree_bounds.clone();
@@ -291,6 +292,7 @@ impl AppShell {
                                     move |event: &MouseDownEvent, _, cx| {
                                         let y = f32::from(event.position.y);
                                         drag_shell.update(cx, |this, cx| {
+                                            this.clear_tree_toggle_guard();
                                             this.begin_tree_drag(
                                                 tree_drag::DragSource::Notebook(notebook_id),
                                                 y,
@@ -448,6 +450,9 @@ impl AppShell {
                             } else {
                                 muted
                             };
+                            // 当前打开的行除了底色之外，再给图标一点主题色，
+                            // 长列表里一眼就能认出正在编辑的笔记。
+                            let icon_color = if active { primary } else { muted };
                             let rel_path = row.rel_path.clone();
                             let label = row.name.clone();
                             let depth = row.depth as f32;
@@ -878,6 +883,18 @@ impl AppShell {
                                 .cursor_pointer()
                                 .bg(background)
                                 .hover(move |style| style.bg(hover_bg))
+                                .when(active, |row| {
+                                    row.child(
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .top(px(3.))
+                                            .bottom(px(3.))
+                                            .w(px(2.))
+                                            .rounded_full()
+                                            .bg(primary),
+                                    )
+                                })
                                 .tooltip(move |window, cx| {
                                     let path = tooltip_rel.clone();
                                     let bookmarked_tip = tooltip_bookmarked.clone();
@@ -957,6 +974,7 @@ impl AppShell {
                                     move |event: &MouseDownEvent, _, cx| {
                                         let y = f32::from(event.position.y);
                                         drag_shell.update(cx, |this, cx| {
+                                            this.clear_tree_toggle_guard();
                                             this.begin_tree_drag(
                                                 tree_drag::DragSource::Entry {
                                                     notebook_id,
@@ -1061,9 +1079,9 @@ impl AppShell {
                                         .child(chevron)
                                 })
                                 .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .child(Icon::new(type_icon).xsmall().text_color(muted)),
+                                    div().flex_shrink_0().child(
+                                        Icon::new(type_icon).xsmall().text_color(icon_color),
+                                    ),
                                 )
                                 .when(bookmark_marker != BookmarkMarker::None, |row| {
                                     // 固定槽位让所有行的名称左边缘保持对齐，
@@ -1095,6 +1113,7 @@ impl AppShell {
                                         .min_w_0()
                                         .text_sm()
                                         .text_color(color)
+                                        .when(active, |el| el.font_medium())
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .truncate()

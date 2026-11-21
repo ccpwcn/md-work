@@ -4,7 +4,7 @@
 ;   cargo run -p xtask -- package
 ;   cargo run -p xtask -- installer
 ; or manually:
-;   makensis /DVERSION=1.3.2 /DDIST=<workspace>\dist\md-work-1.3.2-win64 md-work.nsi
+;   makensis /DVERSION=1.3.3 /DDIST=<workspace>\dist\md-work-1.3.3-win64 md-work.nsi
 ;
 ; Only HKCU is written and nothing is installed machine-wide, so no elevation
 ; is required. The app's own "用墨笺打开" verb (HKCU\Software\Classes) is left
@@ -19,9 +19,10 @@ ${StrRep}
 
 Var WORKSPACE_DIR
 Var WORKSPACE_DIR_FIELD
+Var APP_RUNNING
 
 !ifndef VERSION
-  !define VERSION "1.3.2"
+  !define VERSION "1.3.3"
 !endif
 !ifndef DIST
   !error "Pass /DDIST=<path to dist\md-work-<ver>-win64>"
@@ -80,10 +81,62 @@ LangString WS_BROWSE ${LANG_SIMPCHINESE} "浏览…"
 LangString WS_BROWSE ${LANG_ENGLISH} "Browse…"
 LangString WS_PICK ${LANG_SIMPCHINESE} "选择工作区文件夹"
 LangString WS_PICK ${LANG_ENGLISH} "Select the workspace folder"
+LangString APP_RUNNING_TEXT ${LANG_SIMPCHINESE} "检测到墨笺正在运行。$\r$\n必须先关闭正在运行的程序才能完成安装。$\r$\n$\r$\n是否结束这些进程并继续安装？"
+LangString APP_RUNNING_TEXT ${LANG_ENGLISH} "MoJiān is still running.$\r$\nThe running processes must be closed before the installation can finish.$\r$\n$\r$\nClose them and continue?"
 
 Function .onInit
   SetShellVarContext current
   StrCpy $WORKSPACE_DIR "$DOCUMENTS\md-work"
+  Call CheckRunningApp
+FunctionEnd
+
+; 安装前检查主程序 / CLI 是否仍在运行。用户在交互安装里做选择；
+; /S 静默安装无人应答，此时直接结束进程，保证无人值守安装能完成。
+Function CheckRunningApp
+  IfSilent check_silent 0
+  Call IsAppRunning
+  ${If} $APP_RUNNING == "1"
+    MessageBox MB_YESNO|MB_ICONQUESTION "$(APP_RUNNING_TEXT)" IDYES stop_running IDNO keep_running
+  ${EndIf}
+  Return
+
+stop_running:
+  Call KillAppProcesses
+  Return
+
+keep_running:
+  Abort
+
+check_silent:
+  Call IsAppRunning
+  ${If} $APP_RUNNING == "1"
+    Call KillAppProcesses
+  ${EndIf}
+FunctionEnd
+
+; `tasklist` 即使没有匹配进程也会成功返回，所以用 findstr 的退出码判断。
+Function IsAppRunning
+  StrCpy $APP_RUNNING "0"
+  nsExec::ExecToStack 'cmd /C tasklist /NH /FI "IMAGENAME eq ${APP_EXE}" | findstr /I /C:"${APP_EXE}"'
+  Pop $0
+  Pop $1
+  ${If} $0 == 0
+    StrCpy $APP_RUNNING "1"
+    Return
+  ${EndIf}
+  nsExec::ExecToStack 'cmd /C tasklist /NH /FI "IMAGENAME eq ${APP_CLI}" | findstr /I /C:"${APP_CLI}"'
+  Pop $0
+  Pop $1
+  ${If} $0 == 0
+    StrCpy $APP_RUNNING "1"
+  ${EndIf}
+FunctionEnd
+
+Function KillAppProcesses
+  nsExec::Exec 'taskkill /F /T /IM ${APP_EXE}'
+  Pop $0
+  nsExec::Exec 'taskkill /F /T /IM ${APP_CLI}'
+  Pop $0
 FunctionEnd
 
 Function WorkspacePageCreate
@@ -141,16 +194,21 @@ Section "主程序" SEC_MAIN
   ${If} ${FileExists} "$INSTDIR\欢迎使用墨笺.md"
     SetFileAttributes "$INSTDIR\欢迎使用墨笺.md" NORMAL
   ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\墨笺-html-子集.md"
+    SetFileAttributes "$INSTDIR\墨笺-html-子集.md" NORMAL
+  ${EndIf}
   File "${DIST}\${APP_EXE}"
   File "${DIST}\${APP_CLI}"
   File "${DIST}\changelog.md"
   File "${DIST}\mcp.md"
   File "${DIST}\欢迎使用墨笺.md"
-  ; 安装目录里的三份官方文档设为只读；应用内还会用 SHA-256 校验，
+  File "${DIST}\墨笺-html-子集.md"
+  ; 安装目录里的四份官方文档设为只读；应用内还会用 SHA-256 校验，
   ; 并始终以只读预览模式显示程序内置的权威版本。
   SetFileAttributes "$INSTDIR\changelog.md" READONLY
   SetFileAttributes "$INSTDIR\mcp.md" READONLY
   SetFileAttributes "$INSTDIR\欢迎使用墨笺.md" READONLY
+  SetFileAttributes "$INSTDIR\墨笺-html-子集.md" READONLY
   SetOutPath "$INSTDIR\licenses"
   File "${DIST}\LICENSE"
   File "${DIST}\THIRD-PARTY-NOTICES.md"
@@ -206,9 +264,13 @@ Section "Uninstall"
   ${If} ${FileExists} "$INSTDIR\欢迎使用墨笺.md"
     SetFileAttributes "$INSTDIR\欢迎使用墨笺.md" NORMAL
   ${EndIf}
+  ${If} ${FileExists} "$INSTDIR\墨笺-html-子集.md"
+    SetFileAttributes "$INSTDIR\墨笺-html-子集.md" NORMAL
+  ${EndIf}
   Delete "$INSTDIR\changelog.md"
   Delete "$INSTDIR\mcp.md"
   Delete "$INSTDIR\欢迎使用墨笺.md"
+  Delete "$INSTDIR\墨笺-html-子集.md"
   Delete "$INSTDIR\uninstall.exe"
   RMDir /r "$INSTDIR\licenses"
   RMDir "$INSTDIR"

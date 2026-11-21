@@ -39,6 +39,8 @@ pub struct RgbColor {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyleDecls {
     pub font_size: Option<Length>,
+    /// CSS 字重：100–900，400 为常规、700 为粗体。
+    pub font_weight: Option<u16>,
     pub width: Option<Length>,
     pub height: Option<Length>,
     pub color: Option<RgbColor>,
@@ -48,6 +50,7 @@ pub struct StyleDecls {
 impl StyleDecls {
     pub fn is_empty(&self) -> bool {
         self.font_size.is_none()
+            && self.font_weight.is_none()
             && self.width.is_none()
             && self.height.is_none()
             && self.color.is_none()
@@ -58,6 +61,9 @@ impl StyleDecls {
     pub fn merge_from(&mut self, other: &Self) {
         if other.font_size.is_some() {
             self.font_size = other.font_size;
+        }
+        if other.font_weight.is_some() {
+            self.font_weight = other.font_weight;
         }
         if other.width.is_some() {
             self.width = other.width;
@@ -376,6 +382,11 @@ fn apply_decl(decls: &mut StyleDecls, key: &str, value: &str) {
                 decls.font_size = Some(len);
             }
         }
+        "fontweight" => {
+            if let Some(weight) = parse_font_weight(value) {
+                decls.font_weight = Some(weight);
+            }
+        }
         "width" => {
             if let Some(len) = parse_length(value) {
                 decls.width = Some(len);
@@ -406,6 +417,19 @@ fn normalize_prop_name(key: &str) -> String {
     match lower.as_str() {
         "backgroudcolor" | "backgroud" => "backgroundcolor".into(),
         other => other.into(),
+    }
+}
+
+/// 只认 CSS 关键字 `normal` / `bold` 与 100–900 的整数；
+/// `lighter` / `bolder` 依赖继承值，受控子集里不支持。
+pub fn parse_font_weight(raw: &str) -> Option<u16> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(400),
+        "bold" => Some(700),
+        other => {
+            let weight: u16 = other.parse().ok()?;
+            (100..=900).contains(&weight).then_some(weight)
+        }
     }
 }
 
@@ -743,5 +767,29 @@ mod tests {
                 b: 0xcc
             })
         );
+    }
+
+    #[test]
+    fn parses_font_weight_keywords_and_numbers() {
+        assert_eq!(parse_style_decls("font-weight: bold").font_weight, Some(700));
+        assert_eq!(parse_style_decls("FONT-WEIGHT: normal").font_weight, Some(400));
+        assert_eq!(parse_style_decls("font-weight: 650").font_weight, Some(650));
+        assert_eq!(parse_style_decls("font-weight: lighter").font_weight, None);
+        assert_eq!(parse_style_decls("font-weight: 1000").font_weight, None);
+    }
+
+    #[test]
+    fn font_weight_follows_css_precedence() {
+        let sheet = parse_style_sheet(".soft { font-weight: 300; } #title { font-weight: bold; }");
+        let style = sheet.resolve(
+            Some("title"),
+            &["soft".into()],
+            &parse_style_decls("font-weight: 500"),
+        );
+        assert_eq!(style.font_weight, Some(500));
+        let style = sheet.resolve(Some("title"), &["soft".into()], &StyleDecls::default());
+        assert_eq!(style.font_weight, Some(700));
+        let style = sheet.resolve(None, &["soft".into()], &StyleDecls::default());
+        assert_eq!(style.font_weight, Some(300));
     }
 }

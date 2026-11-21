@@ -346,6 +346,7 @@ impl AppShell {
                 .position(|doc| doc.read(cx).official == Some(kind))
         {
             self.active_doc = Some(index);
+            self.request_editor_focus(cx);
             changed = true;
         }
         // 从笔记树点开的笔记此时才真正落地，交给下一帧聚焦编辑区。
@@ -608,15 +609,15 @@ impl AppShell {
         }
     }
 
-    /// 请求下一帧把输入焦点交给当前编辑区；render 里执行，保证编辑器已创建。
+    /// 请求下一帧把焦点交给当前文档；render 里执行，保证对应的元素已注册。
     pub(super) fn request_editor_focus(&mut self, cx: &mut Context<Self>) {
         self.pending_editor_focus = true;
         cx.notify();
     }
 
-    /// 从笔记树打开笔记 / 切换页签后，让默认编辑态直接可以打字。
-    /// 预览态、官方只读文档、笔记树上的命名输入框以及任何模态对话框
-    /// 打开时都不抢焦点。
+    /// 从笔记树打开笔记 / 切换页签后，让当前文档直接可以打字或复制。
+    /// 编辑态聚焦编辑器，预览态（含官方只读文档）聚焦预览根；
+    /// 命名输入框与任何模态对话框打开时都不抢焦点。
     pub(super) fn focus_active_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
         // 新建笔记 / 重命名 / 新建笔记本时，名称输入框优先。抢走焦点不仅
         // 打不了字，输入框的 Blur 还会被当成「确认」直接提交默认名。
@@ -640,10 +641,13 @@ impl AppShell {
             return;
         };
         let state = doc.read(cx);
-        if state.preview_mode || state.official.is_some() {
-            return;
-        }
-        let handle = state.editor.read(cx).focus_handle(cx);
+        // 预览态没有 editor 元素可挂载焦点，但 GPUI 的按键动作沿焦点链分发；
+        // 不把焦点交给预览根，Ctrl+C 的动作根本到不了 AppShell。
+        let handle = if state.preview_mode {
+            self.preview_focus.clone()
+        } else {
+            state.editor.read(cx).focus_handle(cx)
+        };
         window.focus(&handle, cx);
     }
 

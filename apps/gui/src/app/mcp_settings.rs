@@ -1654,6 +1654,12 @@ impl AppShell {
                 (None, Some(target)) => target,
                 (None, None) => String::new(),
             };
+            let client = entry
+                .client
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| t!("mcp.audit_client", client = value).to_string())
+                .unwrap_or_else(|| t!("mcp.audit_client_unknown").to_string());
             entry_rows.push(
                 div()
                     .v_flex()
@@ -1684,6 +1690,13 @@ impl AppShell {
                                     .text_color(result_color)
                                     .child(entry.result.clone()),
                             ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .truncate()
+                            .child(client),
                     )
                     .child(
                         div()

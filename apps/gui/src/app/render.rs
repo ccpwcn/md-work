@@ -1355,6 +1355,7 @@ impl AppShell {
                 return div()
                     .id("preview-root")
                     .size_full()
+                    .track_focus(&self.preview_focus)
                     // 整个预览都是可选文本，光标与编辑器一致使用
                     // I 形光标。内部按钮（例如代码块的复制按钮）
                     // 仍会以各自的

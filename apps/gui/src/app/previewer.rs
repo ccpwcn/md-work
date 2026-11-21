@@ -30,6 +30,9 @@ impl AppShell {
             let (line, column) = doc.read(cx).cursor(cx);
             doc.update(cx, |doc, cx| doc.set_cursor(line, column, window, cx));
         }
+        // 焦点在下一帧按当前模式落到预览根或编辑器；否则预览态没有
+        // 可命中的焦点链，Ctrl+C 等动作不会被分发。
+        self.request_editor_focus(cx);
         cx.notify();
     }
 

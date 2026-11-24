@@ -2,7 +2,9 @@ use std::sync::LazyLock;
 
 use super::util::*;
 use super::*;
+use gpui_kit::base::{Scrollbar, ScrollbarMode};
 use gpui_kit::component::link::Link;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::switch::Switch;
 
 /// 应用图标与 MIT 许可协议正文在编译期嵌入，运行时不依赖安装目录里的文件。
@@ -26,6 +28,7 @@ impl AppShell {
         if self.settings.is_some() {
             return;
         }
+        self.focus_panel(panel::SETTINGS, window, cx);
         self.open_image_settings(window, cx);
         self.open_mcp_settings(window, cx);
         let ui_font = cx.new(|cx| {
@@ -529,7 +532,10 @@ impl AppShell {
         };
         // 已安装字体用虚拟列表渲染：字体再多也只绘制视口内的十几行，
         // 配合输入框筛选，不会出现几百上千个组件的卡顿。
-        let font_picker_panel: Option<AnyElement> = dialog.font_picker.as_ref().map(|picker| {
+        // 面板由 Popover 按触发按钮的布局边界定位，不再作为普通子元素
+        // 追加到字体卡片末尾（那样会跑到设置面板底部）。
+        let font_picker_target = dialog.font_picker.as_ref().map(|picker| picker.target);
+        let mut font_picker_panel: Option<AnyElement> = dialog.font_picker.as_ref().map(|picker| {
             let query = picker.query.read(cx).value().trim().to_lowercase();
             let fonts = self.installed_fonts.clone().unwrap_or_default();
             let shown: Arc<Vec<String>> = Arc::new(
@@ -575,8 +581,20 @@ impl AppShell {
             })
             .h(px(176.))
             .w_full()
-            .track_scroll(&scroll)
-            .into_any_element();
+            .track_scroll(&scroll);
+
+            let list = div()
+                .h(px(176.))
+                .w_full()
+                .v_flex()
+                .relative()
+                .child(list.flex_1().min_h_0())
+                .child(
+                    Scrollbar::vertical(&scroll)
+                        .viewport_from_layout()
+                        .mode(ScrollbarMode::Always),
+                )
+                .into_any_element();
 
             let status = if self.fonts_loading {
                 t!("settings.font_picker_loading").to_string()
@@ -600,6 +618,8 @@ impl AppShell {
                 .v_flex()
                 .gap_1()
                 .p_2()
+                .bg(p.popover)
+                .text_color(p.foreground)
                 .rounded_md()
                 .border_1()
                 .border_color(p.border)
@@ -629,6 +649,16 @@ impl AppShell {
                 .child(list)
                 .into_any_element()
         });
+        let ui_font_panel = if font_picker_target == Some(FontPickerTarget::Ui) {
+            font_picker_panel.take()
+        } else {
+            None
+        };
+        let note_font_panel = if font_picker_target == Some(FontPickerTarget::Note) {
+            font_picker_panel.take()
+        } else {
+            None
+        };
 
         let font_body = div()
             .v_flex()
@@ -651,14 +681,43 @@ impl AppShell {
                                         .child(Input::new(&dialog.ui_font).w_full().small()),
                                 )
                                 .child(
-                                    Button::new("settings-ui-font-pick")
-                                        .ghost()
-                                        .compact()
-                                        .icon(IconName::ChevronDown)
-                                        .label(t!("settings.font_choose").to_string())
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.open_font_picker(FontPickerTarget::Ui, window, cx)
-                                        })),
+                                    Popover::new("settings-ui-font-picker")
+                                        .anchor(Anchor::TopLeft)
+                                        .open(font_picker_target == Some(FontPickerTarget::Ui))
+                                        .on_open_change({
+                                            let shell = cx.entity();
+                                            move |open, window, cx| {
+                                                let shell = shell.clone();
+                                                shell.update(cx, |this, cx| {
+                                                    if *open {
+                                                        this.open_font_picker(
+                                                            FontPickerTarget::Ui,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    } else if this
+                                                        .settings
+                                                        .as_ref()
+                                                        .and_then(|dialog| {
+                                                            dialog.font_picker.as_ref()
+                                                        })
+                                                        .is_some_and(|picker| {
+                                                            picker.target == FontPickerTarget::Ui
+                                                        })
+                                                    {
+                                                        this.close_font_picker(cx);
+                                                    }
+                                                });
+                                            }
+                                        })
+                                        .trigger(
+                                            Button::new("settings-ui-font-pick")
+                                                .ghost()
+                                                .compact()
+                                                .icon(IconName::ChevronDown)
+                                                .label(t!("settings.font_choose").to_string()),
+                                        )
+                                        .children(ui_font_panel),
                                 )
                                 .into_any_element(),
                             p.muted,
@@ -693,18 +752,43 @@ impl AppShell {
                                         .child(Input::new(&dialog.note_font).w_full().small()),
                                 )
                                 .child(
-                                    Button::new("settings-note-font-pick")
-                                        .ghost()
-                                        .compact()
-                                        .icon(IconName::ChevronDown)
-                                        .label(t!("settings.font_choose").to_string())
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.open_font_picker(
-                                                FontPickerTarget::Note,
-                                                window,
-                                                cx,
-                                            )
-                                        })),
+                                    Popover::new("settings-note-font-picker")
+                                        .anchor(Anchor::TopLeft)
+                                        .open(font_picker_target == Some(FontPickerTarget::Note))
+                                        .on_open_change({
+                                            let shell = cx.entity();
+                                            move |open, window, cx| {
+                                                let shell = shell.clone();
+                                                shell.update(cx, |this, cx| {
+                                                    if *open {
+                                                        this.open_font_picker(
+                                                            FontPickerTarget::Note,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    } else if this
+                                                        .settings
+                                                        .as_ref()
+                                                        .and_then(|dialog| {
+                                                            dialog.font_picker.as_ref()
+                                                        })
+                                                        .is_some_and(|picker| {
+                                                            picker.target == FontPickerTarget::Note
+                                                        })
+                                                    {
+                                                        this.close_font_picker(cx);
+                                                    }
+                                                });
+                                            }
+                                        })
+                                        .trigger(
+                                            Button::new("settings-note-font-pick")
+                                                .ghost()
+                                                .compact()
+                                                .icon(IconName::ChevronDown)
+                                                .label(t!("settings.font_choose").to_string()),
+                                        )
+                                        .children(note_font_panel),
                                 )
                                 .into_any_element(),
                             p.muted,
@@ -752,7 +836,6 @@ impl AppShell {
                         p,
                     )),
             )
-            .children(font_picker_panel)
             .into_any_element();
         let font_card = settings_card(
             t!("settings.typography").to_string(),
@@ -1270,7 +1353,7 @@ impl AppShell {
         )
     }
 
-    /// 「关于」页：居中的应用图标，下面依次是版本、许可协议、仓库入口与欢迎文档。
+    /// 「关于」页：居中的应用图标，下面依次是版本、许可协议、仓库入口（含欢迎文档）与运行时信息。
     pub(super) fn render_settings_about(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = SettingsPalette::new(cx);
         let show_license = self
@@ -1307,36 +1390,125 @@ impl AppShell {
             )
             .into_any_element();
 
-        // 哈希右侧跟一个 icon-only 的小按钮，反馈问题时一键复制。
+        // 运行时信息放在页面最下方，一键复制给 bug 反馈使用；复制文本用稳定的英文
+        // 字段名，便于不同语言的反馈都能直接比对。
         let commit_value = if GIT_COMMIT.is_empty() {
-            t!("settings.about.commit_unknown").to_string()
+            t!("settings.about.runtime_unknown").to_string()
         } else {
             GIT_COMMIT.to_string()
         };
-        let copy_commit = Button::new("settings-about-copy-commit")
-            .ghost()
-            .compact()
-            .icon(IconName::Copy)
-            .tooltip(t!("settings.about.commit_copy").to_string())
-            .on_click(cx.listener(|this, _, _, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(GIT_COMMIT.to_string()));
-                this.notify_success(t!("settings.about.commit_copied").to_string(), cx);
-            }));
-        let commit_body = div()
-            .h_flex()
-            .items_center()
-            .gap_1()
-            .child(Icon::new(IconName::GitBranch).small().text_color(p.muted))
-            .child(div().font_family("Consolas").text_xs().child(commit_value))
-            .when(!GIT_COMMIT.is_empty(), |row| row.child(copy_commit))
-            .child(div().flex_1())
-            .into_any_element();
-        let commit_card = settings_card(
-            t!("settings.about.commit").to_string(),
-            Some(t!("settings.about.commit_hint").to_string()),
-            commit_body,
-            p,
+        let runtime_report = format!(
+            "MoJiān runtime info\nVersion: {}\nGit commit: {}\nOS: {}\nArchitecture: {}",
+            env!("CARGO_PKG_VERSION"),
+            if GIT_COMMIT.is_empty() {
+                "unknown"
+            } else {
+                GIT_COMMIT
+            },
+            std::env::consts::OS,
+            std::env::consts::ARCH,
         );
+        let runtime_row = |label: String, value: String| {
+            div()
+                .h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(div().w(px(96.)).text_xs().text_color(p.muted).child(label))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_xs()
+                        .font_family("Consolas")
+                        .child(value),
+                )
+                .into_any_element()
+        };
+        let runtime_body = div()
+            .v_flex()
+            .w_full()
+            .gap_1()
+            .child(runtime_row(
+                t!("settings.about.runtime_version").to_string(),
+                env!("CARGO_PKG_VERSION").to_string(),
+            ))
+            .child(runtime_row(
+                t!("settings.about.commit").to_string(),
+                commit_value,
+            ))
+            .child(runtime_row(
+                t!("settings.about.runtime_os").to_string(),
+                std::env::consts::OS.to_string(),
+            ))
+            .child(runtime_row(
+                t!("settings.about.runtime_arch").to_string(),
+                std::env::consts::ARCH.to_string(),
+            ))
+            .into_any_element();
+        // 与 settings_card 同款卡片，但标题行右侧留一个轻量复制图标，不占正文空间。
+        let runtime_card = div()
+            .v_flex()
+            .gap_2()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(p.border)
+            .child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .items_start()
+                    .gap_2()
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_0p5()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_bold()
+                                    .child(t!("settings.about.runtime").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(p.muted)
+                                    .child(t!("settings.about.runtime_hint").to_string()),
+                            ),
+                    )
+                    .child(
+                        Button::new("settings-about-copy-runtime")
+                            .ghost()
+                            .compact()
+                            .icon(IconName::Copy)
+                            .tooltip(t!("settings.about.runtime_copy").to_string())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    runtime_report.clone(),
+                                ));
+                                this.notify_success(
+                                    t!("settings.about.runtime_copied").to_string(),
+                                    cx,
+                                );
+                            })),
+                    ),
+            )
+            .child(runtime_body)
+            .child(
+                div().h_flex().w_full().justify_end().child(
+                    Button::new("settings-about-open-crashes")
+                        .outline()
+                        .compact()
+                        .icon(IconName::Bug)
+                        .label(t!("settings.about.open_crashes").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_path_in_explorer(Some(mdwork_core::paths::crashes_dir()), cx)
+                        })),
+                ),
+            )
+            .into_any_element();
 
         // 一行一个 div：GPUI 的普通文本不会把 `\n` 渲染成换行。
         let license_lines: Vec<AnyElement> = APP_LICENSE
@@ -1420,38 +1592,38 @@ impl AppShell {
                     ),
                 )
                 .child(
-                    Button::new("settings-about-github")
-                        .outline()
-                        .compact()
-                        .icon(IconName::ExternalLink)
-                        .label(t!("settings.about.github_open").to_string())
-                        .on_click(cx.listener(|_, _, _, cx| cx.open_url(REPOSITORY_URL))),
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .flex_shrink_0()
+                        .child(
+                            Button::new("settings-about-github")
+                                .outline()
+                                .compact()
+                                .icon(IconName::ExternalLink)
+                                .label(t!("settings.about.github_open").to_string())
+                                .on_click(cx.listener(|_, _, _, cx| cx.open_url(REPOSITORY_URL))),
+                        )
+                        .child(
+                            Button::new("settings-open-welcome")
+                                .outline()
+                                .compact()
+                                .icon(IconName::BookOpen)
+                                .label(t!("settings.open_welcome").to_string())
+                                .tooltip(t!("settings.open_welcome_hint").to_string())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.close_settings(window, cx);
+                                    this.open_official_doc(OfficialDocKind::Welcome, window, cx);
+                                })),
+                        ),
                 )
                 .into_any_element(),
             p,
         );
 
-        let welcome_row = div()
-            .h_flex()
-            .w_full()
-            .justify_center()
-            .py_1()
-            .child(
-                Button::new("settings-open-welcome")
-                    .outline()
-                    .icon(IconName::BookOpen)
-                    .label(t!("settings.open_welcome").to_string())
-                    .tooltip(t!("settings.open_welcome_hint").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.close_settings(window, cx);
-                        this.open_official_doc(OfficialDocKind::Welcome, window, cx);
-                    })),
-            )
-            .into_any_element();
-
         settings_body(
             "settings-about-body",
-            vec![hero, commit_card, license_card, github_card, welcome_row],
+            vec![hero, license_card, github_card, runtime_card],
         )
     }
 
@@ -1660,6 +1832,7 @@ impl AppShell {
                             ),
                     ),
             )
+            .focus_trap(panel::SETTINGS, &self.panel_focus(panel::SETTINGS))
             .into_any_element()
     }
 }

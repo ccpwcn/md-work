@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use super::mcp_settings::perm_level_icon;
 use super::util::*;
 use super::*;
 
@@ -9,8 +10,14 @@ use super::*;
 const TRAILING_SLOT: f32 = 68.0;
 
 /// 构造树行右键菜单的回调。
-type BuildTreeMenu =
-    Rc<dyn Fn(gpui_kit::component::menu::PopupMenu, &App) -> gpui_kit::component::menu::PopupMenu>;
+/// 需要 `Window` 与 `Context<PopupMenu>` 才能创建「MCP 授权」二级菜单。
+type BuildTreeMenu = Rc<
+    dyn Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu,
+>;
 
 impl AppShell {
     pub(super) fn render_sidebar_tree(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -130,6 +137,7 @@ impl AppShell {
                             let toggle_shell = shell.clone();
                             let activate_shell = shell.clone();
                             let plus_shell = shell.clone();
+                            let mcp_shell = shell.clone();
                             let menu_shell = shell;
 
                             let build_notebook_menu = Rc::new({
@@ -147,7 +155,10 @@ impl AppShell {
                                 let import_label = import_label.clone();
                                 let name_shell = name_shell.clone();
                                 let full_name_shell = full_name_shell.clone();
-                                move |menu: gpui_kit::component::menu::PopupMenu, cx: &App| {
+                                let mcp_shell = mcp_shell.clone();
+                                move |menu: gpui_kit::component::menu::PopupMenu,
+                                      window: &mut Window,
+                                      cx: &mut Context<gpui_kit::component::menu::PopupMenu>| {
                                     let export_shell = export_shell.clone();
                                     let import_shell = import_shell.clone();
                                     let rename_shell = rename_shell.clone();
@@ -197,7 +208,7 @@ impl AppShell {
                                     } else {
                                         menu
                                     };
-                                    menu.separator()
+                                    let menu = menu.separator()
                                         .item(PopupMenuItem::new(rename_label.clone()).on_click(
                                             move |_, window, cx| {
                                                 rename_shell.update(cx, |this, cx| {
@@ -250,7 +261,14 @@ impl AppShell {
                                                     this.open_zip_import(window, cx)
                                                 });
                                             },
-                                        ))
+                                        ));
+                                    append_mcp_auth_submenu(
+                                        menu,
+                                        window,
+                                        cx,
+                                        mcp_shell.clone(),
+                                        NodeKey::notebook(notebook_id),
+                                    )
                                 }
                             });
 
@@ -330,7 +348,9 @@ impl AppShell {
                                 })
                                 .context_menu({
                                     let build_notebook_menu = build_notebook_menu.clone();
-                                    move |menu, _, cx| (build_notebook_menu)(menu, cx)
+                                    move |menu, window, cx| {
+                                        (build_notebook_menu)(menu, window, cx)
+                                    }
                                 })
                                 .child(
                                     div()
@@ -524,6 +544,7 @@ impl AppShell {
                             let create_shell = shell.clone();
                             let plus_shell = shell.clone();
                             let menu_shell = shell.clone();
+                            let mcp_shell = shell.clone();
                             let rename_rel = rel_path.clone();
                             let delete_rel = rel_path.clone();
                             let move_rel = rel_path.clone();
@@ -579,7 +600,10 @@ impl AppShell {
                                 let note_copy_path_label = note_copy_path_label.clone();
                                 let note_open_folder_label = note_open_folder_label.clone();
                                 let note_path_shell = note_path_shell.clone();
-                                move |menu: gpui_kit::component::menu::PopupMenu, cx: &App| {
+                                let mcp_shell = mcp_shell.clone();
+                                move |menu: gpui_kit::component::menu::PopupMenu,
+                                      window: &mut Window,
+                                      cx: &mut Context<gpui_kit::component::menu::PopupMenu>| {
                                     let rename_shell = rename_shell.clone();
                                     let delete_shell = delete_shell.clone();
                                     let move_shell = move_shell.clone();
@@ -778,7 +802,7 @@ impl AppShell {
                                     } else {
                                         menu
                                     };
-                                    menu.item(PopupMenuItem::new(rename_label.clone()).on_click(
+                                    let menu = menu.item(PopupMenuItem::new(rename_label.clone()).on_click(
                                         move |_, window, cx| {
                                             rename_shell.update(cx, |this, cx| {
                                                 this.begin_rename(
@@ -864,6 +888,13 @@ impl AppShell {
                                                 });
                                             },
                                         ),
+                                    );
+                                    append_mcp_auth_submenu(
+                                        menu,
+                                        window,
+                                        cx,
+                                        mcp_shell.clone(),
+                                        NodeKey::entry(notebook_id, &create_rel),
                                     )
                                 }
                             });
@@ -1046,7 +1077,7 @@ impl AppShell {
                                 })
                                 .context_menu({
                                     let build_entry_menu = build_entry_menu.clone();
-                                    move |menu, _, cx| (build_entry_menu)(menu, cx)
+                                    move |menu, window, cx| (build_entry_menu)(menu, window, cx)
                                 })
                                 .child({
                                     let toggle_shell = shell.clone();
@@ -1220,7 +1251,7 @@ fn sidebar_row_trailing(
         .tooltip(more_label)
         .dropdown_menu_with_anchor(Anchor::TopRight, {
             let build_menu = build_menu.clone();
-            move |menu, _, cx| (build_menu)(menu, cx)
+            move |menu, window, cx| (build_menu)(menu, window, cx)
         })
         .on_open_change(move |open, _, cx| {
             menu_shell.update(cx, |this, cx| {
@@ -1276,4 +1307,57 @@ fn sidebar_row_trailing(
     );
 
     actions.into_any_element()
+}
+
+/// 在树行菜单末尾追加「MCP 授权」二级菜单。
+///
+/// 四个等级与设置面板的权限页完全一致，直接写同一份权限文件；
+/// 最后一项跳到设置面板的完整权限树，便于批量调整。
+fn append_mcp_auth_submenu(
+    menu: gpui_kit::component::menu::PopupMenu,
+    window: &mut Window,
+    cx: &mut Context<gpui_kit::component::menu::PopupMenu>,
+    shell: Entity<AppShell>,
+    key: NodeKey,
+) -> gpui_kit::component::menu::PopupMenu {
+    let current = shell.read(cx).mcp_perm_level_for(&key);
+    let submenu_label = t!("tree.mcp_auth").to_string();
+    let manage_label = t!("tree.mcp_auth_manage").to_string();
+    let levels = [
+        (PermLevel::Hidden, t!("mcp.perm.level.hidden").to_string()),
+        (PermLevel::Read, t!("mcp.perm.level.read").to_string()),
+        (PermLevel::Modify, t!("mcp.perm.level.modify").to_string()),
+        (PermLevel::Delete, t!("mcp.perm.level.delete").to_string()),
+    ];
+    menu.separator()
+        .submenu(submenu_label, window, cx, move |submenu, _, _| {
+            let mut submenu = submenu;
+            for (level, label) in levels.iter() {
+                let shell = shell.clone();
+                let key = key.clone();
+                let label = label.clone();
+                let level = *level;
+                submenu = submenu.item(
+                    PopupMenuItem::new(label)
+                        .icon(Icon::new(perm_level_icon(level)))
+                        .checked(current == level)
+                        .on_click(move |_, _, cx| {
+                            let shell = shell.clone();
+                            let key = key.clone();
+                            shell.update(cx, |this, cx| this.quick_mcp_grant(key, level, cx));
+                        }),
+                );
+            }
+            let manage_shell = shell.clone();
+            let manage_label = manage_label.clone();
+            submenu
+                .separator()
+                .item(
+                    PopupMenuItem::new(manage_label).on_click(move |_, window, cx| {
+                        let manage_shell = manage_shell.clone();
+                        manage_shell
+                            .update(cx, |this, cx| this.open_tree_mcp_permissions(window, cx));
+                    }),
+                )
+        })
 }

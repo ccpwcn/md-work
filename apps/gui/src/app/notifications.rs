@@ -1,5 +1,18 @@
+use std::sync::LazyLock;
+
 use super::util::*;
 use super::*;
+
+/// 标题栏「最近的笔记」自定义图标：把原 SVG 的固定灰色改成跟随主题的
+/// `currentColor`，并把宽扁的画布裁成正方形，避免按图标尺寸显示时过小。
+static RECENT_NOTES_ICON: LazyLock<Arc<[u8]>> = LazyLock::new(|| {
+    let raw = include_str!("../../../../assets/最近的笔记.svg");
+    let svg = raw
+        .replace("fill=\"#8a8a8a\"", "fill=\"currentColor\"")
+        .replace("viewBox=\"0 0 1821 1024\"", "viewBox=\"420 0 1000 1000\"")
+        .replace("width=\"355.6640625\" height=\"200\"", "");
+    Arc::from(svg.into_bytes())
+});
 
 impl AppShell {
     pub(super) fn notify_with(
@@ -66,6 +79,20 @@ impl AppShell {
                     ),
             )
             .child(self.render_workspace_switcher(cx))
+            .child(titlebar_guard(
+                Button::new("title-recent-notes")
+                    .ghost()
+                    .compact()
+                    .icon(Icon::default().data(&RECENT_NOTES_ICON).small())
+                    .tooltip(format!("{} (Ctrl+E)", t!("recent.title")))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.recent_notes.is_some() {
+                            this.close_recent_notes(cx);
+                        } else {
+                            this.open_recent_notes(window, cx);
+                        }
+                    })),
+            ))
             .child(div().flex_1())
             .child(titlebar_guard(
                 title_icon(
@@ -113,9 +140,9 @@ impl AppShell {
                     },
                 )
                 .disabled(self.panels_in_dock(PanelDock::Left).is_empty())
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.toggle_dock_expansion(PanelDock::Left, cx)
-                })),
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.toggle_dock_expansion(PanelDock::Left, cx)),
+                ),
             ))
             .child(titlebar_guard(
                 title_icon(
@@ -128,9 +155,9 @@ impl AppShell {
                     },
                 )
                 .disabled(self.panels_in_dock(PanelDock::Right).is_empty())
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.toggle_dock_expansion(PanelDock::Right, cx)
-                })),
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.toggle_dock_expansion(PanelDock::Right, cx)),
+                ),
             ))
             .child(titlebar_guard(
                 title_icon(

@@ -275,6 +275,20 @@ impl PermissionTree {
         if moving.is_empty() {
             return 0;
         }
+        let target_prefix = format!("{to_path}/");
+        // 目标路径上可能已有显式授权；迁移不能静默覆盖它们。
+        let preserved: Vec<(NodeKey, PermLevel)> = self
+            .nodes
+            .iter()
+            .filter(|(key, _)| {
+                key.notebook == to.notebook
+                    && key
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| path == to_path || path.starts_with(&target_prefix))
+            })
+            .map(|(key, level)| (key.clone(), *level))
+            .collect();
         for (key, _) in &moving {
             self.nodes.remove(key);
         }
@@ -292,7 +306,15 @@ impl PermissionTree {
                 }
                 None => to.clone(),
             };
-            self.nodes.insert(migrated, *level);
+            // 两条显式记录重叠时取更严格的等级，避免移动节点造成提权。
+            let level = self
+                .nodes
+                .get(&migrated)
+                .map_or(*level, |current| (*current).min(*level));
+            self.nodes.insert(migrated, level);
+        }
+        for (key, level) in preserved {
+            self.nodes.entry(key).or_insert(level);
         }
         moving.len()
     }
@@ -483,6 +505,24 @@ mod tests {
         // 无记录或未变化时不写入。
         assert_eq!(t.rekey(&NodeKey::entry(id(), "空.md"), &renamed), 0);
         assert_eq!(t.rekey(&renamed, &renamed), 0);
+    }
+
+    #[test]
+    fn rekey_keeps_existing_target_grants_and_uses_stricter_level() {
+        let mut t = tree();
+        let source = NodeKey::entry(id(), "草稿.md");
+        let target = NodeKey::entry(id(), "公开.md");
+        t.set_level(&source, PermLevel::Modify, &[]);
+        t.set_level(&target, PermLevel::Delete, &[]);
+        assert_eq!(t.rekey(&source, &target), 1);
+        assert_eq!(t.level(&target), PermLevel::Modify);
+
+        let untouched = NodeKey::entry(id(), "公开/旧笔记.md");
+        t.set_level(&untouched, PermLevel::Read, &[]);
+        let moved = NodeKey::entry(id(), "草稿");
+        t.set_level(&moved, PermLevel::Read, &[]);
+        t.rekey(&moved, &NodeKey::entry(id(), "公开"));
+        assert_eq!(t.level(&untouched), PermLevel::Read);
     }
 
     #[test]

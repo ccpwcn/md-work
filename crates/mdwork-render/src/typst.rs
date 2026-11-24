@@ -702,15 +702,14 @@ impl<'a> Emitter<'a> {
         }
         let decoded = percent_decode(src);
         let raw = PathBuf::from(&decoded);
-        let absolute = raw.is_absolute();
+        // 笔记可能来自导入的归档，不能借绝对路径读取笔记本外的本地文件。
+        if raw.is_absolute() {
+            return None;
+        }
         let note_dir = Path::new(&self.meta.note_rel)
             .parent()
             .unwrap_or_else(|| Path::new(""));
-        let candidates = if absolute {
-            vec![raw]
-        } else {
-            vec![self.root.join(note_dir).join(&raw), self.root.join(&raw)]
-        };
+        let candidates = vec![self.root.join(note_dir).join(&raw), self.root.join(&raw)];
         for candidate in candidates {
             let Ok(path) = fs::canonicalize(&candidate) else {
                 continue;
@@ -718,7 +717,7 @@ impl<'a> Emitter<'a> {
             if !path.is_file() {
                 continue;
             }
-            if !absolute && !path_under(self.root, &path) {
+            if !path_under(self.root, &path) {
                 continue;
             }
             let extension = path
@@ -1375,12 +1374,7 @@ mod tests {
             "1. 第一步\n2. 日志\n  ```text\n  ERROR 日志\n  ```\n3. 第三步\n",
         );
         let doc = convert(&ir, &ExportOptions::default(), &meta(), Path::new("."));
-        assert_eq!(
-            doc.source.matches("#enum(").count(),
-            1,
-            "{}",
-            doc.source
-        );
+        assert_eq!(doc.source.matches("#enum(").count(), 1, "{}", doc.source);
         assert!(doc.source.contains("#raw("), "{}", doc.source);
         assert!(doc.source.contains("ERROR 日志"), "{}", doc.source);
         assert!(

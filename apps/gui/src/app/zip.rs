@@ -69,6 +69,7 @@ impl AppShell {
         if self.zip.is_some() {
             return;
         }
+        self.focus_panel(panel::ZIP, window, cx);
         let path_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(output.display().to_string())
@@ -164,6 +165,7 @@ impl AppShell {
         if self.zip.is_some() {
             return;
         }
+        self.focus_panel(panel::ZIP, window, cx);
         let path_input = cx.new(|cx| {
             let mut input = InputState::new(window, cx)
                 .placeholder(t!("zip.path_placeholder").to_string())
@@ -539,18 +541,9 @@ impl AppShell {
                 }
             });
         }
-        let unsaved = self
-            .docs
-            .iter()
-            .find(|doc| doc.read(cx).dirty)
-            .map(|doc| doc.read(cx).path.display().to_string());
-        if let Some(path) = unsaved {
-            if let Some(dialog) = self.zip.as_mut() {
-                dialog.error = Some(t!("zip.save_failed", path = path).to_string());
-            }
-            cx.notify();
-            return;
-        }
+        // save_now 只是把写盘入队；dirty 标志要等异步 Saved 事件才清除。
+        // 这里不能同步检查 dirty，否则恰好有未保存笔记时导入必然失败。
+        // 真正的等待在 spawn_zip_import 的后台任务里通过 disk::flush 完成。
 
         if let Some(dialog) = self.zip.as_mut() {
             dialog.busy = true;
@@ -573,7 +566,11 @@ impl AppShell {
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { archive::import_zip(&root, &target, &options) })
+                .spawn(async move {
+                    // 等队列里先前的保存真正落盘，再导入同一批文件。
+                    crate::disk::flush(std::time::Duration::from_secs(15));
+                    archive::import_zip(&root, &target, &options)
+                })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 match result {
@@ -1127,6 +1124,7 @@ impl AppShell {
                     .children(body)
                     .child(footer),
             )
+            .focus_trap(panel::ZIP, &self.panel_focus(panel::ZIP))
             .into_any_element()
     }
 }

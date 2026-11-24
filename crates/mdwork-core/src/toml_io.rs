@@ -42,23 +42,41 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
 }
 
 /// Loads `path`, falling back to the legacy JSON sibling exactly once.
+/// A corrupt TOML file also falls back to the legacy JSON: a half-written
+/// file must not silently turn into an empty configuration.
 pub fn load_with_legacy<T: DeserializeOwned + Serialize>(path: &Path) -> Result<Option<T>> {
-    if let Some(value) = load(path)? {
-        return Ok(Some(value));
-    }
+    let toml_error = match load(path) {
+        Ok(Some(value)) => return Ok(Some(value)),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!(path = %path.display(), error = %err, "TOML 配置解析失败，尝试旧 JSON 备份");
+            Some(err)
+        }
+    };
     let legacy = legacy_path(path);
     if legacy == path {
-        return Ok(None);
+        return match toml_error {
+            Some(err) => Err(err),
+            None => Ok(None),
+        };
     }
     let bytes = match fs::read(&legacy) {
         Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return match toml_error {
+                Some(err) => Err(err),
+                None => Ok(None),
+            };
+        }
         Err(err) => return Err(Error::Io(err)),
     };
     let value: T = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
         path: legacy.clone(),
         source,
     })?;
+    if toml_error.is_some() {
+        backup_corrupt(path);
+    }
     match save(path, &value) {
         Ok(()) => {
             archive_legacy(&legacy);
@@ -103,6 +121,17 @@ pub fn save_text(path: &Path, text: &str) -> Result<()> {
     }
     write_atomic(path, text.as_bytes())?;
     Ok(())
+}
+
+fn backup_corrupt(path: &Path) {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".corrupt");
+    let backup = PathBuf::from(name);
+    if !backup.exists()
+        && let Err(err) = fs::rename(path, &backup)
+    {
+        tracing::warn!(path = %path.display(), error = %err, "备份损坏的 TOML 失败");
+    }
 }
 
 /// Renames a migrated JSON file to `<name>.migrated` so it is not re-read.
@@ -180,5 +209,22 @@ mod tests {
     fn missing_file_is_none() {
         let dir = temp_dir();
         assert_eq!(load::<Sample>(&dir.join("nope.toml")).unwrap(), None);
+    }
+
+    #[test]
+    fn corrupt_toml_falls_back_to_legacy_json() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sample.toml");
+        let legacy = dir.join("sample.json");
+        std::fs::write(&path, b"this = [not valid").unwrap();
+        std::fs::write(&legacy, br#"{"format":"md-work/sample@1","enabled":false}"#).unwrap();
+
+        let loaded = load_with_legacy::<Sample>(&path).unwrap().unwrap();
+        assert!(!loaded.enabled);
+        assert_eq!(load::<Sample>(&path).unwrap(), Some(loaded));
+        assert!(dir.join("sample.toml.corrupt").is_file());
+        assert!(dir.join("sample.json.migrated").is_file());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

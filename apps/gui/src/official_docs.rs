@@ -28,12 +28,7 @@ pub enum OfficialDocKind {
 }
 
 impl OfficialDocKind {
-    pub const ALL: [Self; 4] = [
-        Self::Changelog,
-        Self::Mcp,
-        Self::Welcome,
-        Self::HtmlSubset,
-    ];
+    pub const ALL: [Self; 4] = [Self::Changelog, Self::Mcp, Self::Welcome, Self::HtmlSubset];
 
     /// 部署到 exe 同目录后的固定文件名。
     pub fn file_name(self) -> &'static str {

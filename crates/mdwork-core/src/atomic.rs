@@ -25,21 +25,18 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         return Err(err);
     }
 
-    if let Err(err) = replace(&tmp, path) {
+    if let Err(err) = replace_atomic(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(err);
     }
     Ok(())
 }
 
+/// Atomically replaces `target` with an already staged file `tmp`.
 #[cfg(windows)]
-fn replace(tmp: &Path, target: &Path) -> io::Result<()> {
+pub fn replace_atomic(tmp: &Path, target: &Path) -> io::Result<()> {
     use windows::Win32::Storage::FileSystem::{REPLACE_FILE_FLAGS, ReplaceFileW};
     use windows::core::{HSTRING, PCWSTR};
-
-    if !target.exists() {
-        return fs::rename(tmp, target);
-    }
 
     let target_w = HSTRING::from(target.to_string_lossy().as_ref());
     let tmp_w = HSTRING::from(tmp.to_string_lossy().as_ref());
@@ -57,11 +54,12 @@ fn replace(tmp: &Path, target: &Path) -> io::Result<()> {
 
     match result {
         Ok(()) => Ok(()),
-        Err(_) => fs::rename(tmp, target),
+        Err(_) if !target.exists() => fs::rename(tmp, target),
+        Err(err) => Err(io::Error::other(err)),
     }
 }
 
 #[cfg(not(windows))]
-fn replace(tmp: &Path, target: &Path) -> io::Result<()> {
+pub fn replace_atomic(tmp: &Path, target: &Path) -> io::Result<()> {
     fs::rename(tmp, target)
 }

@@ -6,6 +6,7 @@ impl AppShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.focus_panel(panel::PROMPT, window, cx);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(String::new())

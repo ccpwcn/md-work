@@ -230,9 +230,7 @@ fn list_content_indent(line: &str) -> Option<usize> {
     while digits < bytes.len() && bytes[digits].is_ascii_digit() {
         digits += 1;
     }
-    let after_marker = if digits > 0
-        && digits < bytes.len()
-        && matches!(bytes[digits], b'.' | b')')
+    let after_marker = if digits > 0 && digits < bytes.len() && matches!(bytes[digits], b'.' | b')')
     {
         digits + 1
     } else if digits == 0 && matches!(bytes.first(), Some(b'-' | b'*' | b'+')) {
@@ -1140,7 +1138,10 @@ mod tests {
         assert_eq!(code.0.lines().next().unwrap(), "2026-11-09 ERROR 日志");
         assert_eq!(code.1, 3, "源码行号不能因补齐缩进而改变");
         assert!(
-            items[2].blocks.iter().any(|block| matches!(block, Block::Paragraph { .. })),
+            items[2]
+                .blocks
+                .iter()
+                .any(|block| matches!(block, Block::Paragraph { .. })),
             "图片行仍应留在列表项里"
         );
     }

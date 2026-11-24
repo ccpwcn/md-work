@@ -24,14 +24,20 @@ impl AppShell {
             && mdwork_core::workspace::same_path(&current, &root)
         {
             self.workspace_menu = false;
-        self.theme_menu = false;
+            self.theme_menu = false;
             cx.notify();
             return;
         }
+        let mut pending_saves = false;
         for doc in &self.docs {
             if doc.read(cx).dirty {
                 doc.update(cx, |doc, cx| doc.save_now(cx));
+                pending_saves = true;
             }
+        }
+        // 切换后立即清空标签；先把写盘队列排空，避免快速切回时读到旧磁盘内容。
+        if pending_saves {
+            crate::disk::flush(std::time::Duration::from_secs(3));
         }
         self.persist_session(cx);
 
@@ -279,6 +285,7 @@ impl AppShell {
     ) {
         match kind {
             FolderKind::Foreign | FolderKind::Notebook => {
+                self.focus_panel(panel::WORKSPACE_CONFIRM, window, cx);
                 self.workspace_confirm = Some(WorkspaceConfirm { path, kind });
                 cx.notify();
             }

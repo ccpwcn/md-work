@@ -54,7 +54,13 @@ impl Snapshot {
 
 fn snapshot_path(dir: &Path, note_path: &Path) -> PathBuf {
     let mut hasher = Sha256::new();
-    hasher.update(note_path.to_string_lossy().to_lowercase().as_bytes());
+    let rendered = note_path.to_string_lossy();
+    // 只在大小写不敏感的 Windows 路径上折叠大小写；否则 A.md 与 a.md
+    // 会生成同一个快照文件名并互相覆盖未保存内容。
+    #[cfg(windows)]
+    hasher.update(rendered.to_lowercase().as_bytes());
+    #[cfg(not(windows))]
+    hasher.update(rendered.as_bytes());
     let digest = hasher.finalize();
     let key: String = digest
         .iter()
@@ -213,5 +219,15 @@ mod tests {
         let dir = temp_dir("missing");
         assert!(list(&dir).is_empty());
         clear(&dir).unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn case_only_path_differences_get_distinct_snapshots() {
+        let dir = temp_dir("case");
+        assert_ne!(
+            snapshot_path(&dir, Path::new("/notes/A.md")),
+            snapshot_path(&dir, Path::new("/notes/a.md"))
+        );
     }
 }

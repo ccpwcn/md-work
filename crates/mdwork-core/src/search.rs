@@ -145,7 +145,7 @@ where
                     let Ok(bytes) = std::fs::read(&path) else {
                         continue;
                     };
-                    *files.lock().unwrap() += 1;
+                    *files.lock().unwrap_or_else(|err| err.into_inner()) += 1;
                     let text = decode(&bytes).text;
                     let mut local = Vec::new();
                     for (index, line) in text.lines().enumerate() {
@@ -167,7 +167,7 @@ where
                         }
                     }
                     if !local.is_empty() {
-                        let mut shared = hits.lock().unwrap();
+                        let mut shared = hits.lock().unwrap_or_else(|err| err.into_inner());
                         shared.extend(local);
                         if shared.len() >= max_hits {
                             stop.store(true, Ordering::Relaxed);
@@ -178,12 +178,12 @@ where
         }
     });
 
-    let mut hits = hits.into_inner().unwrap();
+    let mut hits = hits.into_inner().unwrap_or_else(|err| err.into_inner());
     hits.truncate(max_hits);
     outcome.truncated = stop.load(Ordering::Relaxed);
     outcome.cancelled = cancel.load(Ordering::Relaxed) && !outcome.truncated;
     outcome.hits = hits;
-    outcome.files = files.into_inner().unwrap();
+    outcome.files = files.into_inner().unwrap_or_else(|err| err.into_inner());
     Ok(outcome)
 }
 
@@ -229,13 +229,33 @@ impl Matcher {
                     line.find(needle.as_str())
                         .map(|byte| char_column(line, byte))
                 } else {
-                    line.to_lowercase()
+                    let (lowered, offsets) = lowered_with_offsets(line);
+                    lowered
                         .find(needle.as_str())
-                        .map(|byte| char_column(line, byte))
+                        .map(|byte| char_column(line, offsets[byte]))
                 }
             }
         }
     }
+}
+
+/// Lowercases `line` while mapping each lowered byte back to the original
+/// byte offset. Unicode lowercasing can change byte length (e.g. `İ`), so a
+/// plain `to_lowercase().find()` offset cannot be used for the column number.
+fn lowered_with_offsets(line: &str) -> (String, Vec<usize>) {
+    let mut lowered = String::with_capacity(line.len());
+    let mut offsets = Vec::with_capacity(line.len() + 1);
+    let mut buffer = [0u8; 4];
+    for (byte, ch) in line.char_indices() {
+        for lower in ch.to_lowercase() {
+            let piece = lower.encode_utf8(&mut buffer);
+            let start = lowered.len();
+            lowered.push_str(piece);
+            offsets.extend(std::iter::repeat_n(byte, lowered.len() - start));
+        }
+    }
+    offsets.push(line.len());
+    (lowered, offsets)
 }
 
 fn char_column(line: &str, byte: usize) -> usize {
@@ -334,6 +354,18 @@ mod tests {
         let outcome = search_notebook(&notebook, &SearchQuery::new("命中"), &cancel, 5).unwrap();
         assert!(outcome.hits.len() <= 5);
         assert!(outcome.cancelled || outcome.truncated);
+        std::fs::remove_dir_all(&notebook.root).unwrap();
+    }
+
+    #[test]
+    fn case_insensitive_column_handles_unicode_expansion() {
+        let notebook = temp_notebook();
+        // `İ` 小写后变成两个字符，旧实现会把小写串的字节偏移直接当成原串偏移。
+        notebook.create_note("unicode.md", "İstanbul\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let outcome = search_notebook(&notebook, &SearchQuery::new("stan"), &cancel, 10).unwrap();
+        assert_eq!(outcome.hits.len(), 1);
+        assert_eq!(outcome.hits[0].column, 2);
         std::fs::remove_dir_all(&notebook.root).unwrap();
     }
 }

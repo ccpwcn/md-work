@@ -162,7 +162,26 @@ unsafe fn print_with_dc(hdc: HDC, title: &str, text: &str) -> PrintResult {
 
 fn text_width_approx(s: &str, metrics: &TEXTMETRICW) -> usize {
     let avg = metrics.tmAveCharWidth.max(1) as usize;
-    s.chars().count() * avg
+    // CJK/全角字符的实际宽度约为平均字符宽度的两倍；按字符数估算会
+    // 系统性低估中文行宽，导致文本超出页边距被裁切。
+    s.chars()
+        .map(|ch| if is_wide_char(ch) { 2 } else { 1 })
+        .sum::<usize>()
+        * avg
+}
+
+fn is_wide_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{1100}'..='\u{115F}'
+            | '\u{2E80}'..='\u{A4CF}'
+            | '\u{AC00}'..='\u{D7A3}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{FE10}'..='\u{FE6F}'
+            | '\u{FF00}'..='\u{FF60}'
+            | '\u{FFE0}'..='\u{FFE6}'
+            | '\u{1F300}'..='\u{1FAFF}'
+    )
 }
 
 fn wrap_lines(text: &str, max_width: usize, width_of: impl Fn(&str) -> usize) -> Vec<String> {
@@ -206,5 +225,17 @@ mod tests {
     fn keeps_empty_paragraphs() {
         let lines = wrap_lines("a\n\nb", 1000, |s| s.len());
         assert_eq!(lines, vec!["a".to_string(), String::new(), "b".to_string()]);
+    }
+
+    #[test]
+    fn cjk_counts_as_double_width() {
+        assert!(is_wide_char('中'));
+        assert!(!is_wide_char('a'));
+        let metrics = TEXTMETRICW {
+            tmAveCharWidth: 10,
+            ..Default::default()
+        };
+        assert_eq!(text_width_approx("ab", &metrics), 20);
+        assert_eq!(text_width_approx("中文", &metrics), 40);
     }
 }

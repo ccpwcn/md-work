@@ -750,6 +750,8 @@ fn apply_merge(
     let mut skipped_identical = 0;
     let mut kept_existing = 0;
     let mut kept_both = 0;
+    // KeepBoth 会把导入文件改名；书签和编码提示必须跟着落到新名字上。
+    let mut renamed: Vec<(String, String)> = Vec::new();
 
     for item in WalkDir::new(staged_notebook)
         .follow_links(false)
@@ -800,13 +802,16 @@ fn apply_merge(
             ConflictPolicy::KeepBoth => {
                 let unique = unique_file_name(&target);
                 fs::rename(item.path(), &unique)?;
+                if let Ok(new_rel) = unique.strip_prefix(target_root) {
+                    renamed.push((rel.clone(), new_rel.to_string_lossy().replace('\\', "/")));
+                }
                 kept_both += 1;
             }
         }
     }
 
-    merge_bookmarks(target_root, staged_notebook)?;
-    merge_encoding(target_root, staged_notebook)?;
+    merge_bookmarks(target_root, staged_notebook, &renamed)?;
+    merge_encoding(target_root, staged_notebook, &renamed)?;
 
     let notebook = Notebook::open(target_root)?;
     Ok(ImportOutcome {
@@ -819,13 +824,32 @@ fn apply_merge(
     })
 }
 
-fn merge_bookmarks(target_root: &Path, staged_notebook: &Path) -> Result<()> {
+fn remap_archive_rel(rel: &str, renames: &[(String, String)]) -> String {
+    for (from, to) in renames {
+        if rel == from {
+            return to.clone();
+        }
+        if let Some(rest) = rel.strip_prefix(&format!("{from}/")) {
+            return format!("{to}/{rest}");
+        }
+    }
+    rel.to_string()
+}
+
+fn merge_bookmarks(
+    target_root: &Path,
+    staged_notebook: &Path,
+    renames: &[(String, String)],
+) -> Result<()> {
     let staged = staged_notebook.join(META_DIR).join(BOOKMARKS_FILE);
-    let Ok(Some(incoming)) = toml_io::load::<Bookmarks>(&staged) else {
+    let Ok(Some(mut incoming)) = toml_io::load::<Bookmarks>(&staged) else {
         return Ok(());
     };
     if incoming.entries.is_empty() {
         return Ok(());
+    }
+    for entry in &mut incoming.entries {
+        entry.rel_path = remap_archive_rel(&entry.rel_path, renames);
     }
     let notebook = Notebook::open(target_root)?;
     let mut existing = Bookmarks::load(&notebook)?;
@@ -846,14 +870,23 @@ fn merge_bookmarks(target_root: &Path, staged_notebook: &Path) -> Result<()> {
     Ok(())
 }
 
-fn merge_encoding(target_root: &Path, staged_notebook: &Path) -> Result<()> {
+fn merge_encoding(
+    target_root: &Path,
+    staged_notebook: &Path,
+    renames: &[(String, String)],
+) -> Result<()> {
     let incoming = crate::notebook::load_encoding_map(staged_notebook);
     if incoming.is_empty() {
         return Ok(());
     }
+    let folded: Vec<(String, String)> = renames
+        .iter()
+        .map(|(from, to)| (from.to_lowercase(), to.to_lowercase()))
+        .collect();
     let mut merged = crate::notebook::load_encoding_map(target_root);
     let mut changed = false;
     for (key, value) in incoming {
+        let key = remap_archive_rel(&key, &folded);
         if let std::collections::btree_map::Entry::Vacant(slot) = merged.entry(key) {
             slot.insert(value);
             changed = true;
@@ -883,9 +916,62 @@ fn move_to_workspace_trash(
         rel_path: rel_name.to_string(),
         kind: EntryKind::Folder,
         deleted_at: now_unix(),
+        bookmarks: Vec::new(),
+        encoding_hint: None,
     };
     toml_io::save(&item_dir.join(TRASH_META_FILE), &item)?;
     Ok(payload)
+}
+
+/// Lists notebooks moved to the workspace-level trash by an Overwrite import.
+pub fn list_workspace_trash(workspace_root: &Path) -> Result<Vec<TrashItem>> {
+    let dir = workspace_root.join(META_DIR).join(WORKSPACE_TRASH_DIR);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let mut items = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.path().join("payload").is_dir() {
+            continue;
+        }
+        let Ok(Some(item)) =
+            toml_io::load_with_legacy::<TrashItem>(&entry.path().join(TRASH_META_FILE))
+        else {
+            continue;
+        };
+        items.push(item);
+    }
+    items.sort_by_key(|item| std::cmp::Reverse(item.deleted_at));
+    Ok(items)
+}
+
+/// Restores a workspace-level trashed notebook under a free folder name.
+pub fn restore_workspace_trash(workspace_root: &Path, id: &Uuid) -> Result<PathBuf> {
+    let item_dir = workspace_root
+        .join(META_DIR)
+        .join(WORKSPACE_TRASH_DIR)
+        .join(id.to_string());
+    let meta_path = item_dir.join(TRASH_META_FILE);
+    let item: TrashItem = toml_io::load_with_legacy(&meta_path)
+        .map_err(|_| Error::NotFound(meta_path.display().to_string()))?
+        .ok_or_else(|| Error::NotFound(meta_path.display().to_string()))?;
+    let payload = item_dir.join("payload");
+    if !payload.is_dir() {
+        return Err(Error::NotFound(payload.display().to_string()));
+    }
+    let base = sanitize_notebook_folder_name(&item.rel_path);
+    let mut target = workspace_root.join(&base);
+    for n in 2..10_000 {
+        if !target.exists() {
+            break;
+        }
+        target = workspace_root.join(format!("{base} ({n})"));
+    }
+    fs::rename(&payload, &target)?;
+    fs::remove_dir_all(&item_dir)?;
+    Ok(target)
 }
 
 /// Validates one archive entry path and returns it normalized with `/`.

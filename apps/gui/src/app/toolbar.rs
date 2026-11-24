@@ -1,6 +1,8 @@
+use super::previewer::PreviewCopyKind;
 use super::util::*;
 use super::*;
 use crate::print::{self, PrintResult};
+use gpui_kit::base::TextSelection;
 use gpui_kit::component::input::{Redo, Undo};
 
 impl AppShell {
@@ -65,7 +67,45 @@ impl AppShell {
                         .ghost()
                         .compact()
                         .label(copy_label)
-                        .on_click(cx.listener(|this, _, _, cx| this.copy_preview(cx))),
+                        .dropdown_caret(true)
+                        .dropdown_menu({
+                            let shell = shell.clone();
+                            let copy_label = t!("preview.context_copy").to_string();
+                            let markdown_label = t!("preview.context_copy_markdown").to_string();
+                            move |menu, window, cx| {
+                                // 与预览页右键菜单一致：有选中就复制选区，
+                                // 没有选中则复制全文（含整篇 Markdown 源码）。
+                                let selected =
+                                    TextSelection::selected_text(window, cx).trim().to_string();
+                                let text_shell = shell.clone();
+                                let text_selected = selected.clone();
+                                let markdown_shell = shell.clone();
+                                menu.item(PopupMenuItem::new(copy_label.clone()).on_click(
+                                    move |_, _, cx| {
+                                        let _ = text_shell.update(cx, |this, cx| {
+                                            this.copy_preview_text(
+                                                &text_selected,
+                                                PreviewCopyKind::Text,
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                ))
+                                .item(
+                                    PopupMenuItem::new(markdown_label.clone()).on_click(
+                                        move |_, _, cx| {
+                                            let _ = markdown_shell.update(cx, |this, cx| {
+                                                this.copy_preview_text(
+                                                    &selected,
+                                                    PreviewCopyKind::Markdown,
+                                                    cx,
+                                                );
+                                            });
+                                        },
+                                    ),
+                                )
+                            }
+                        }),
                 );
         }
 
@@ -301,9 +341,9 @@ impl AppShell {
                                 )
                                 .item(
                                     PopupMenuItem::new(t!("toolbar.delete").to_string()).on_click(
-                                        move |_, _, cx| {
+                                        move |_, window, cx| {
                                             delete_shell.update(cx, |this, cx| {
-                                                this.request_delete_active(cx);
+                                                this.request_delete_active(window, cx);
                                             });
                                         },
                                     ),
@@ -532,7 +572,7 @@ impl AppShell {
         }
     }
 
-    pub(super) fn request_delete_active(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn request_delete_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.active_doc else {
             return;
         };
@@ -543,6 +583,7 @@ impl AppShell {
             let d = doc.read(cx);
             (d.notebook_id, d.rel_path.clone(), d.title())
         };
+        self.focus_panel(panel::DELETE_CONFIRM, window, cx);
         let Some(notebook_id) = notebook_id else {
             self.delete_confirm = Some(DeleteConfirm {
                 kind: DeleteConfirmKind::CloseExternal {
@@ -671,6 +712,10 @@ impl AppShell {
                                     ),
                             ),
                     ),
+            )
+            .focus_trap(
+                panel::DELETE_CONFIRM,
+                &self.panel_focus(panel::DELETE_CONFIRM),
             )
             .into_any_element()
     }

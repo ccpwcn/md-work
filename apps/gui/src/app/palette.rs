@@ -66,6 +66,7 @@ impl AppShell {
         if self.palette.is_some() {
             return;
         }
+        self.focus_panel(panel::PALETTE, window, cx);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("palette.placeholder").to_string())
@@ -79,9 +80,14 @@ impl AppShell {
             InputEvent::PressEnter { .. } => {
                 let handle = this.window_handle;
                 let weak = cx.entity().downgrade();
-                let _ = handle.update(cx, |_, window, cx| {
-                    let _ = weak.update(cx, |this, cx| this.run_palette_selected(window, cx));
-                });
+                // 输入框自己的事件回调里已持有 AppShell 的可变借用，
+                // 必须推迟到回调结束后再重入窗口，否则会双重借用而崩溃。
+                cx.spawn(async move |_, cx| {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        let _ = weak.update(cx, |this, cx| this.run_palette_selected(window, cx));
+                    });
+                })
+                .detach();
             }
             _ => {}
         })

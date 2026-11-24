@@ -141,7 +141,8 @@ impl AppShell {
         if self.sidebar_row_visible(row) {
             return;
         }
-        self.tree_scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+        self.tree_scroll
+            .scroll_to_item(row, ScrollStrategy::Nearest);
     }
 
     fn flash_active_row(&mut self, notebook_id: Uuid, rel_path: String, cx: &mut Context<Self>) {
@@ -472,7 +473,7 @@ impl AppShell {
         &mut self,
         notebook_id: Uuid,
         from: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(entry) = self
@@ -494,6 +495,7 @@ impl AppShell {
         root_expanded.insert(notebook_id);
         let mut expanded = HashMap::new();
         expanded.insert(notebook_id, entry.expanded.clone());
+        self.focus_panel(panel::MOVE_PICKER, window, cx);
         self.move_picker = Some(MovePickerDialog {
             source_notebook_id: notebook_id,
             source_rel: from.to_string(),
@@ -1275,6 +1277,11 @@ impl AppShell {
         let receiver = disk::submit(move || -> mdwork_core::Result<String> {
             let new_rel = notebook.rename_entry(&submitted_from, &to)?;
             rekey_mcp_permissions(perm_notebook, &submitted_from, &new_rel);
+            mdwork_core::mcp_renames::RenameJournal::record(
+                perm_notebook,
+                &submitted_from,
+                &new_rel,
+            );
             if let Some((parent, names)) = placement {
                 let mut order = notebook.load_tree_order();
                 order.set_names(parent, names);

@@ -1,0 +1,46 @@
+name: Bug 反馈
+description: 请填写问题标题、复现步骤与预期结果，并粘贴从墨笺复制的运行时信息。
+title:
+  description: 简要描述遇到的问题（必填）
+  validations:
+    required: true
+labels: ["bug"]
+body:
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: 复现步骤
+      description: 请按操作顺序描述如何触发该问题。
+      placeholder: |
+        1. 打开……
+        2. 点击……
+        3. 出现……
+    validations:
+      required: true
+  - type: textarea
+    id: expected-result
+    attributes:
+      label: 预期结果
+      description: 你期望软件表现成什么样？实际表现与预期的差异也请一并说明。
+    validations:
+      required: true
+  - type: textarea
+    id: crash-log
+    attributes:
+      label: 崩溃日志
+      description: 可选。如有崩溃、报错日志或截图，请粘贴到这里。
+    validations:
+      required: false
+  - type: textarea
+    id: runtime-info
+    attributes:
+      label: 运行时信息
+      description: 打开墨笺的「设置 → 关于」页面，滑到底部「运行时信息」卡片，点击「复制运行时信息」，然后粘贴到这里。
+      placeholder: |
+        MoJiān runtime info
+        Version: 1.3.4
+        Git commit: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        OS: windows
+        Architecture: x86_64
+    validations:
+      required: true

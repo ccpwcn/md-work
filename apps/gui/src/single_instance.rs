@@ -2,11 +2,11 @@ use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::sync::mpsc::{self, Receiver};
 
-use windows::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_BUSY, INVALID_HANDLE_VALUE};
 use windows::Win32::Storage::FileSystem::{PIPE_ACCESS_DUPLEX, ReadFile};
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE,
-    PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
 };
 use windows::core::HSTRING;
 
@@ -19,10 +19,20 @@ fn pipe_name() -> String {
 
 /// Delivers argv to the running instance. Returns false when no primary exists.
 pub fn try_forward(payload: &str) -> bool {
-    match OpenOptions::new().write(true).open(pipe_name()) {
-        Ok(mut pipe) => writeln!(pipe, "{payload}").is_ok(),
-        Err(_) => false,
+    let name = pipe_name();
+    for _ in 0..3 {
+        match OpenOptions::new().write(true).open(&name) {
+            Ok(mut pipe) => return writeln!(pipe, "{payload}").is_ok(),
+            Err(err) if err.raw_os_error() == Some(ERROR_PIPE_BUSY.0 as i32) => {
+                // 服务端在 Disconnect 与下一次 Connect 之间有空窗；等待并重试，
+                // 否则快速双击文件时第二个进程会误判为主实例并再开一个窗口。
+                let wide = HSTRING::from(name.as_str());
+                let _ = unsafe { WaitNamedPipeW(&wide, 0xFFFF_FFFF) };
+            }
+            Err(_) => return false,
+        }
     }
+    false
 }
 
 /// Starts the primary listener. The channel yields one payload per connection.

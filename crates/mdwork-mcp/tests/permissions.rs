@@ -506,7 +506,7 @@ async fn newly_created_notes_default_to_hidden() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn permission_changes_apply_to_new_sessions_only() {
+async fn permission_changes_apply_to_existing_sessions() {
     let root = temp_root();
     let notebook = setup_notebook(&root);
     save_tree(&root, &tree_with(&notebook, PermLevel::Read));
@@ -526,7 +526,7 @@ async fn permission_changes_apply_to_new_sessions_only() {
     )
     .await;
 
-    // 升级为删除：已连接的会话 A 不受影响，新会话 B 立即使用新权限。
+    // 升级为删除：已连接的会话在下一次请求也会看到新权限。
     save_tree(&root, &tree_with(&notebook, PermLevel::Delete));
     expect_ok(
         &peer_a,
@@ -534,11 +534,10 @@ async fn permission_changes_apply_to_new_sessions_only() {
         json!({ "notebook_id": nb, "path": "根.md" }),
     )
     .await;
-    expect_code(
+    expect_ok(
         &peer_a,
         "write_note",
-        json!({ "notebook_id": nb, "path": "根.md", "text": "x" }),
-        CODE_FORBIDDEN,
+        json!({ "notebook_id": nb, "path": "根.md", "text": "甲改写\n" }),
     )
     .await;
     let (peer_b, client_b, task_b) = connect(context(&root, full_token(&notebook))).await;
@@ -549,12 +548,13 @@ async fn permission_changes_apply_to_new_sessions_only() {
     )
     .await;
 
-    // 收回为全隐藏：B 继续使用旧快照，新会话 C 全部不可见。
+    // 收回为全隐藏：旧会话也立即失去访问权，新会话同样不可见。
     save_tree(&root, &PermissionTree::default());
-    expect_ok(
+    expect_code(
         &peer_b,
         "read_note",
         json!({ "notebook_id": nb, "path": "根.md" }),
+        CODE_FORBIDDEN,
     )
     .await;
     let (peer_c, client_c, task_c) = connect(context(&root, full_token(&notebook))).await;
@@ -573,7 +573,7 @@ async fn permission_changes_apply_to_new_sessions_only() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tampered_file_fails_closed_for_new_sessions_and_audits() {
+async fn tampered_file_fails_closed_for_all_sessions_and_audits() {
     let root = temp_root();
     let notebook = setup_notebook(&root);
     save_tree(&root, &tree_with(&notebook, PermLevel::Delete));
@@ -586,12 +586,13 @@ async fn tampered_file_fails_closed_for_new_sessions_and_audits() {
     )
     .await;
 
-    // 外部程序篡改权限文件：老会话不中断，新会话失效关闭。
+    // 外部程序篡改权限文件：所有会话下一次请求都失效关闭。
     std::fs::write(root.join("permissions.toml"), "forged = true").unwrap();
-    expect_ok(
+    expect_code(
         &peer_a,
         "read_note",
         json!({ "notebook_id": nb, "path": "根.md" }),
+        CODE_FORBIDDEN,
     )
     .await;
     let (peer_b, client_b, task_b) = connect(context(&root, full_token(&notebook))).await;

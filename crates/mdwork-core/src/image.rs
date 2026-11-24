@@ -98,7 +98,14 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
     let head: Vec<u8> = bytes.iter().copied().take(512).collect();
     let text = String::from_utf8_lossy(&head);
     let trimmed = text.trim_start_matches('\u{feff}').trim_start();
-    trimmed.starts_with("<svg") || (trimmed.starts_with("<?xml") && text.contains("<svg"))
+    let is_svg =
+        trimmed.starts_with("<svg") || (trimmed.starts_with("<?xml") && text.contains("<svg"));
+    // 脚本/DTD 的 SVG 不是静态图片，拒绝落盘为 assets 资源。
+    let lower = text.to_ascii_lowercase();
+    is_svg
+        && !lower.contains("<script")
+        && !lower.contains("<!doctype")
+        && !lower.contains("<foreignobject")
 }
 
 /// Where images are stored for a notebook.
@@ -121,7 +128,7 @@ pub fn save_asset(notebook_root: &Path, bytes: &[u8], kind: ImageKind) -> Result
             limit: IMAGE_MAX_BYTES,
         });
     }
-    if ImageKind::sniff(bytes) != Some(kind) && kind != ImageKind::Svg {
+    if ImageKind::sniff(bytes) != Some(kind) {
         return Err(Error::UnsupportedImage(
             "文件内容与图片格式不符".to_string(),
         ));

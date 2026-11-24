@@ -4,7 +4,6 @@ use std::sync::atomic::AtomicBool;
 
 use mdwork_core::bookmarks::Bookmarks;
 use mdwork_core::doc;
-use mdwork_core::mcp_permissions::{NodeKey, PermLevel};
 use mdwork_core::notebook::EntryKind;
 use mdwork_core::permissions::Scope;
 use mdwork_core::search::{SearchQuery, search_notebook_filtered};
@@ -277,10 +276,7 @@ impl MdworkServer {
             let visible_notes: Vec<_> = tree
                 .iter()
                 .filter(|item| {
-                    item.kind == EntryKind::Note
-                        && self
-                            .perms
-                            .allows(&NodeKey::entry(id, &item.rel_path), PermLevel::Read)
+                    item.kind == EntryKind::Note && self.note_readable(token, &id, &item.rel_path)
                 })
                 .collect();
             let note_count = visible_notes.len();

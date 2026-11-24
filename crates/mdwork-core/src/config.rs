@@ -720,9 +720,11 @@ impl AppConfig {
         theme: &Path,
         legacy: Option<&Path>,
     ) -> Result<Self> {
-        let all_missing = !core.is_file() && !runtime.is_file() && !theme.is_file();
+        // 升级中断可能只写出了部分 TOML；只要有一个缺失，就用旧 JSON 补齐
+        // 默认值，随后再用已存在的 TOML 覆盖，避免旧配置被整体丢弃。
+        let any_missing = !core.is_file() || !runtime.is_file() || !theme.is_file();
         let mut config = Self::default();
-        if all_missing && let Some(legacy) = legacy.filter(|path| path.is_file()) {
+        if any_missing && let Some(legacy) = legacy.filter(|path| path.is_file()) {
             match Self::read_legacy(legacy) {
                 Ok(mut loaded) => {
                     if loaded.panel_docks == PanelDocks::default() {
@@ -1459,6 +1461,16 @@ pub struct NotebookSession {
     pub cursors: BTreeMap<String, CursorPos>,
 }
 
+/// 一条「最近浏览」记录，按工作区会话持久化。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecentNoteRecord {
+    pub notebook: Uuid,
+    pub path: String,
+    /// UNIX 秒。
+    pub viewed_at: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Session {
@@ -1470,6 +1482,8 @@ pub struct Session {
     pub active_external: Option<String>,
     pub external_cursors: BTreeMap<String, CursorPos>,
     pub notebooks: Vec<NotebookSession>,
+    /// 最近浏览的笔记，最新在前；上限由 GUI 侧裁剪。
+    pub recent_notes: Vec<RecentNoteRecord>,
 }
 
 impl Default for Session {
@@ -1481,6 +1495,7 @@ impl Default for Session {
             external_notes: Vec::new(),
             active_external: None,
             external_cursors: BTreeMap::new(),
+            recent_notes: Vec::new(),
         }
     }
 }
@@ -1853,5 +1868,27 @@ mod tests {
         assert!(config.resolved_token().is_none());
         let debug = format!("{config:?}");
         assert!(!debug.contains("abc"));
+    }
+
+    #[test]
+    fn partial_migration_still_reads_legacy_settings() {
+        let dir = temp_dir();
+        let core = dir.join("core.toml");
+        let runtime = dir.join("runtime.toml");
+        let theme = dir.join("theme.toml");
+        let legacy = dir.join("config.json");
+        let legacy_config = AppConfig {
+            language: "en".to_string(),
+            theme: ThemePreference::Dark,
+            ..Default::default()
+        };
+        fs::write(&legacy, serde_json::to_vec_pretty(&legacy_config).unwrap()).unwrap();
+        // 模拟升级中断：theme.toml 已经写出，另外两个文件仍缺失。
+        fs::write(&theme, "# partially written\n").unwrap();
+
+        let loaded = AppConfig::load_files(&core, &runtime, &theme, Some(&legacy)).unwrap();
+        assert_eq!(loaded.language, "en");
+        assert_eq!(loaded.theme, ThemePreference::Dark);
+        fs::remove_dir_all(dir).unwrap();
     }
 }

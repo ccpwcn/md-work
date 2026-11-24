@@ -113,19 +113,35 @@ pub fn is_registered() -> bool {
         return false;
     };
     let expected = format!("\"{}\" \"%1\"", exe.to_string_lossy());
-    current_command().as_deref() == Some(expected.as_str())
+    if registry_string(
+        "Software\\Classes\\MoJian.Markdown\\shell\\open\\command",
+        None,
+    )
+    .as_deref()
+        != Some(expected.as_str())
+    {
+        return false;
+    }
+    // 右键 Verb 缺失或被篡改时也必须重新注册，否则菜单项永久消失。
+    let verb = format!("Software\\Classes\\SystemFileAssociations\\.md\\shell\\{VERB}");
+    registry_string(&verb, None).as_deref() == Some("用墨笺打开")
+        && registry_string(&format!("{verb}\\command"), None).as_deref() == Some(expected.as_str())
 }
 
-fn current_command() -> Option<String> {
-    // SAFETY: 键名是本地构造的 HSTRING，缓冲区长度按字节数传入，解码范围限于写回长度。
+fn registry_string(subkey: &str, name: Option<&str>) -> Option<String> {
+    // SAFETY: 键名/值名是本地构造的 HSTRING，缓冲区长度按字节数传入，解码范围限于写回长度。
     unsafe {
-        let subkey = HSTRING::from("Software\\Classes\\MoJian.Markdown\\shell\\open\\command");
+        let subkey = HSTRING::from(subkey);
+        let value_name = name.map(HSTRING::from);
         let mut buf = vec![0u16; 1024];
         let mut len = (buf.len() * 2) as u32;
         let status = RegGetValueW(
             HKEY_CURRENT_USER,
             &subkey,
-            PCWSTR::null(),
+            value_name
+                .as_ref()
+                .map(|name| PCWSTR(name.as_ptr()))
+                .unwrap_or(PCWSTR::null()),
             RRF_RT_REG_SZ,
             None,
             Some(buf.as_mut_ptr() as *mut _),

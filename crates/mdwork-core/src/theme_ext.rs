@@ -859,8 +859,16 @@ fn import_zed_files_in_dir(dir: &Path, scan: &mut ThemeScan) {
     files.sort();
     for json_path in files {
         let source = file_stem(&json_path);
-        let stem = format!("{}-zed", slugify(&source));
-        let target = dir.join(format!("{stem}.toml"));
+        let slug = slugify(&source);
+        // 纯中文/符号文件名会得到空 slug；用内容签名生成稳定后缀，避免
+        // 多个主题都落到 `-zed.toml` 并互相覆盖。
+        let stem = if slug.is_empty() {
+            format!("zed-{:016x}", content_signature(&json_path))
+        } else {
+            format!("{slug}-zed")
+        };
+        // 同名 TOML 可能是用户手工维护的，自动转换另起一个文件。
+        let target = unique_theme_path(dir, &stem);
         let json_mtime = fs::metadata(&json_path)
             .and_then(|meta| meta.modified())
             .ok();

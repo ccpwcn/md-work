@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
@@ -38,11 +39,17 @@ impl Default for TokensFile {
 
 pub struct TokenStore {
     path: PathBuf,
+    /// Serializes load-modify-save so a concurrent verify cannot resurrect a
+    /// token that was just revoked.
+    lock: Mutex<()>,
 }
 
 impl TokenStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            lock: Mutex::new(()),
+        }
     }
 
     pub fn default_path() -> PathBuf {
@@ -54,6 +61,7 @@ impl TokenStore {
     }
 
     pub fn list(&self) -> Result<Vec<TokenRecord>> {
+        let _guard = self.lock.lock().unwrap_or_else(|err| err.into_inner());
         Ok(self.load()?.tokens)
     }
 
@@ -69,6 +77,7 @@ impl TokenStore {
         if name.is_empty() {
             anyhow::bail!("令牌名称不能为空");
         }
+        let _guard = self.lock.lock().unwrap_or_else(|err| err.into_inner());
         let secret = permissions::new_secret();
         let mut record =
             TokenRecord::new(name, permissions::hash_secret(&secret), scopes, notebooks);
@@ -82,6 +91,7 @@ impl TokenStore {
     }
 
     pub fn update(&self, record: TokenRecord) -> Result<()> {
+        let _guard = self.lock.lock().unwrap_or_else(|err| err.into_inner());
         let mut file = self.load()?;
         let Some(existing) = file.tokens.iter_mut().find(|entry| entry.id == record.id) else {
             anyhow::bail!("令牌不存在");
@@ -91,6 +101,7 @@ impl TokenStore {
     }
 
     pub fn revoke(&self, id: &Uuid) -> Result<()> {
+        let _guard = self.lock.lock().unwrap_or_else(|err| err.into_inner());
         let mut file = self.load()?;
         let Some(existing) = file.tokens.iter_mut().find(|entry| entry.id == *id) else {
             anyhow::bail!("令牌不存在");
@@ -100,6 +111,7 @@ impl TokenStore {
     }
 
     pub fn delete(&self, id: &Uuid) -> Result<()> {
+        let _guard = self.lock.lock().unwrap_or_else(|err| err.into_inner());
         let mut file = self.load()?;
         file.tokens.retain(|entry| entry.id != *id);
         self.save(&file)
@@ -108,6 +120,7 @@ impl TokenStore {
     /// Resolves a bearer token to its record and refreshes `last_used`
     /// opportunistically.
     pub fn verify(&self, raw: &str) -> Result<TokenRecord> {
+        let _guard = self.lock.lock().unwrap_or_else(|err| err.into_inner());
         let (id, secret) = permissions::parse_token(raw).context("令牌格式无效")?;
         let mut file = self.load()?;
         let now = permissions::now_unix();

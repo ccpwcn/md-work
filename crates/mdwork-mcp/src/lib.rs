@@ -185,6 +185,9 @@ async fn authenticate_request(
     mut request: Request,
     next: Next,
 ) -> Response {
+    if !is_loopback_request(&request) {
+        return forbidden_response("MCP HTTP 仅接受本机请求");
+    }
     let presented = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -207,6 +210,49 @@ async fn authenticate_request(
     };
     request.extensions_mut().insert(caller);
     next.run(request).await
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let hostname = host
+        .rsplit_once(':')
+        .map(|(name, _)| name)
+        .unwrap_or(host)
+        .trim_matches(['[', ']']);
+    hostname.eq_ignore_ascii_case("127.0.0.1")
+        || hostname.eq_ignore_ascii_case("localhost")
+        || hostname.eq_ignore_ascii_case("::1")
+}
+
+fn is_loopback_request(request: &Request) -> bool {
+    let Some(host) = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    if !is_loopback_host(host) {
+        return false;
+    }
+    request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .is_none_or(|origin| {
+            let hostname = origin
+                .strip_prefix("http://")
+                .or_else(|| origin.strip_prefix("https://"))
+                .unwrap_or_default();
+            is_loopback_host(hostname)
+        })
+}
+
+fn forbidden_response(message: &str) -> Response {
+    let mut response = Response::new(axum::body::Body::from(format!(
+        "403 Forbidden: {message}\n"
+    )));
+    *response.status_mut() = StatusCode::FORBIDDEN;
+    response
 }
 
 fn unauthorized_response() -> Response {
@@ -254,5 +300,15 @@ mod tests {
         assert_eq!(TokenPolicy::default(), TokenPolicy::Optional);
         assert!(!TokenPolicy::default().requires_token());
         assert!(TokenPolicy::from_require_token(true).requires_token());
+    }
+
+    #[test]
+    fn only_loopback_hosts_are_accepted() {
+        for host in ["127.0.0.1:1234", "localhost:1234", "[::1]:1234"] {
+            assert!(is_loopback_host(host), "{host}");
+        }
+        for host in ["example.com", "127.0.0.1.evil.example", "0x7f000001:80"] {
+            assert!(!is_loopback_host(host), "{host}");
+        }
     }
 }

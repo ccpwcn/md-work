@@ -191,6 +191,7 @@ impl AppShell {
             self.recovery = Some(RecoveryDialog {
                 entries: initial.snapshots,
             });
+            self.focus_panel(panel::RECOVERY, window, cx);
         }
         if self.startup_first_run {
             self.pending_welcome = self.notebooks.first().and_then(|entry| {
@@ -294,21 +295,21 @@ impl AppShell {
                     });
                 }
                 let paths: Vec<String> = {
-                    let mut guard = pending.lock().expect("pending paths lock");
+                    let mut guard = pending.lock().unwrap_or_else(|err| err.into_inner());
                     std::mem::take(&mut *guard)
                 };
                 let (disk, theme_paths): (Vec<PathBuf>, Vec<PathBuf>) = this
                     .read_with(cx, |this, _| {
                         let mut disk = Vec::new();
                         if let Some(rx) = &this.changed {
-                            let rx = rx.lock().expect("watcher receiver lock");
+                            let rx = rx.lock().unwrap_or_else(|err| err.into_inner());
                             while let Ok(batch) = rx.try_recv() {
                                 disk.extend(batch);
                             }
                         }
                         let mut theme = Vec::new();
                         if let Some(rx) = &this.theme_changed {
-                            let rx = rx.lock().expect("theme watcher receiver lock");
+                            let rx = rx.lock().unwrap_or_else(|err| err.into_inner());
                             while let Ok(batch) = rx.try_recv() {
                                 theme.extend(batch);
                             }
@@ -791,6 +792,7 @@ impl AppShell {
     pub(super) fn persist_session(&mut self, cx: &App) {
         let mut session = Session {
             active_notebook: self.active_notebook,
+            recent_notes: self.session.recent_notes.clone(),
             ..Default::default()
         };
 

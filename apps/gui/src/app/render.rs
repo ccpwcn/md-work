@@ -122,6 +122,7 @@ impl AppShell {
                     .child(Input::new(&input).w_full())
                     .child(list),
             )
+            .focus_trap(panel::PALETTE, &self.panel_focus(panel::PALETTE))
             .into_any_element()
     }
 
@@ -278,6 +279,7 @@ impl AppShell {
                             ),
                     ),
             )
+            .focus_trap(panel::RECOVERY, &self.panel_focus(panel::RECOVERY))
             .into_any_element()
     }
 
@@ -350,6 +352,7 @@ impl AppShell {
                             ),
                     ),
             )
+            .focus_trap(panel::PROMPT, &self.panel_focus(panel::PROMPT))
             .into_any_element()
     }
 
@@ -652,6 +655,7 @@ impl AppShell {
                             ),
                     ),
             )
+            .focus_trap(panel::MOVE_PICKER, &self.panel_focus(panel::MOVE_PICKER))
             .into_any_element()
     }
 
@@ -740,6 +744,10 @@ impl AppShell {
                                     })),
                             ),
                     ),
+            )
+            .focus_trap(
+                panel::WORKSPACE_CONFIRM,
+                &self.panel_focus(panel::WORKSPACE_CONFIRM),
             )
             .into_any_element()
     }

@@ -102,7 +102,7 @@ impl AppShell {
     }
 
     /// 一键清理：先弹二次确认，真正删除时再重新扫描一次。
-    pub(super) fn request_asset_cleanup(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn request_asset_cleanup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(dialog) = self.image_settings.as_mut() else {
             return;
         };
@@ -113,6 +113,7 @@ impl AppShell {
             return;
         }
         dialog.cleanup.confirm = true;
+        self.focus_panel(panel::IMAGE_CLEANUP, window, cx);
         cx.notify();
     }
 
@@ -417,7 +418,9 @@ impl AppShell {
                             .icon(IconName::Trash)
                             .label(t!("image.cleanup_button").to_string())
                             .disabled(!can_clean)
-                            .on_click(cx.listener(|this, _, _, cx| this.request_asset_cleanup(cx))),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.request_asset_cleanup(window, cx)
+                            })),
                     ),
             )
             .into_any_element();
@@ -558,6 +561,10 @@ impl AppShell {
                                     ),
                             ),
                     ),
+            )
+            .focus_trap(
+                panel::IMAGE_CLEANUP,
+                &self.panel_focus(panel::IMAGE_CLEANUP),
             )
             .into_any_element()
     }

@@ -1441,9 +1441,11 @@ fn clone_style(style: &InlineStyle) -> InlineStyle {
     }
 }
 
-/// Resolves a markdown image source to a path without touching the disk; the
-/// caller checks existence on the background executor.
-pub fn resolve_image_path(src: &str, base: Option<&Path>) -> Option<PathBuf> {
+/// Resolves a markdown image source to a candidate path inside the notebook.
+/// Absolute paths (including UNC) are rejected: notes may come from an import,
+/// so they must not be able to read arbitrary local files. Like the Typst
+/// exporter, both the note directory and the notebook root are tried.
+pub fn resolve_image_path(src: &str, base: Option<&Path>, root: Option<&Path>) -> Option<PathBuf> {
     let lower = src.to_lowercase();
     if lower.starts_with("http://")
         || lower.starts_with("https://")
@@ -1455,18 +1457,53 @@ pub fn resolve_image_path(src: &str, base: Option<&Path>) -> Option<PathBuf> {
     let decoded = percent_decode(src);
     let path = PathBuf::from(decoded.replace('/', std::path::MAIN_SEPARATOR_STR));
     if path.is_absolute() {
-        Some(path)
-    } else {
-        base.map(|base| base.join(path))
+        return None;
     }
+    let base = base?;
+    let allowed_root = root.unwrap_or(base);
+    let mut candidates = vec![base.join(&path)];
+    if let Some(root) = root.filter(|root| *root != base) {
+        candidates.push(root.join(&path));
+    }
+    for candidate in candidates {
+        if let Ok(real) = std::fs::canonicalize(&candidate)
+            && real.is_file()
+            && preview_path_under(allowed_root, &real)
+        {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn preview_path_under(root: &Path, path: &Path) -> bool {
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let root = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let path = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    path == root || path.starts_with(&format!("{root}\\"))
 }
 
 /// Resolves path + natural pixel size on a background thread.
 ///
 /// Dimension probe failure (e.g. SVG) still yields a usable path with `0×0`,
 /// so the image can paint; layout then falls back without aspect-ratio.
-pub fn resolve_preview_image(src: &str, base: Option<&Path>) -> Option<PreviewImage> {
-    let path = resolve_image_path(src, base).filter(|path| path.is_file())?;
+pub fn resolve_preview_image(
+    src: &str,
+    base: Option<&Path>,
+    root: Option<&Path>,
+) -> Option<PreviewImage> {
+    let path = resolve_image_path(src, base, root)?;
+    if !path.is_file() {
+        return None;
+    }
     let (width, height) = imagesize::size(&path)
         .ok()
         .map(|size| (size.width as u32, size.height as u32))

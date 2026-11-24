@@ -161,6 +161,11 @@ impl AppShell {
         if pending.is_empty() {
             return;
         }
+        let generation = self
+            .preview_cache
+            .as_ref()
+            .map(|cache| (cache.doc, cache.revision));
+        let pending_keys: Vec<_> = pending.iter().map(|(key, _, _)| *key).collect();
         // 所有公式合并成一个后台任务、完成后只通知一次：
         // 逐个任务各自 `cx.notify()` 会让大文档预览在打开时
         // 反复重建整棵元素树。
@@ -187,6 +192,17 @@ impl AppShell {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                let current = this
+                    .preview_cache
+                    .as_ref()
+                    .map(|cache| (cache.doc, cache.revision));
+                if current != generation {
+                    for key in pending_keys {
+                        this.math_pending.remove(&key);
+                    }
+                    cx.notify();
+                    return;
+                }
                 for (key, path) in results {
                     this.math_pending.remove(&key);
                     this.math.insert(key, path);
@@ -214,9 +230,16 @@ impl AppShell {
         if sources.is_empty() {
             return;
         }
-        let base = self
-            .active_doc_entity()
-            .and_then(|doc| doc.read(cx).path.parent().map(Path::to_path_buf));
+        let doc = self.active_doc_entity().cloned();
+        let (base, root) = doc
+            .map(|doc| {
+                let doc = doc.read(cx);
+                (
+                    doc.path.parent().map(Path::to_path_buf),
+                    doc.notebook_root.clone(),
+                )
+            })
+            .unwrap_or((None, None));
         let mut pending = Vec::new();
         for src in sources {
             let key = preview::image_key(&src, base.as_deref());
@@ -228,6 +251,11 @@ impl AppShell {
         if pending.is_empty() {
             return;
         }
+        let generation = self
+            .preview_cache
+            .as_ref()
+            .map(|cache| (cache.doc, cache.revision));
+        let pending_keys: Vec<_> = pending.iter().map(|(key, _)| *key).collect();
         // 与公式同理：整批图片只重绘一次，避免 README 这类
         // 含大量徽章图片的文档在打开时连续触发全量重绘。
         cx.spawn(async move |this, cx| {
@@ -237,12 +265,30 @@ impl AppShell {
                     pending
                         .into_iter()
                         .map(|(key, src)| {
-                            (key, preview::resolve_preview_image(&src, base.as_deref()))
+                            (
+                                key,
+                                preview::resolve_preview_image(
+                                    &src,
+                                    base.as_deref(),
+                                    root.as_deref(),
+                                ),
+                            )
                         })
                         .collect::<Vec<_>>()
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                let current = this
+                    .preview_cache
+                    .as_ref()
+                    .map(|cache| (cache.doc, cache.revision));
+                if current != generation {
+                    for key in pending_keys {
+                        this.images_pending.remove(&key);
+                    }
+                    cx.notify();
+                    return;
+                }
                 for (key, resolved) in results {
                     this.images_pending.remove(&key);
                     this.image_paths.insert(key, resolved);
@@ -279,19 +325,6 @@ impl AppShell {
             return;
         }
         self.copy_preview_text(&selected, PreviewCopyKind::Text, cx);
-    }
-
-    pub(super) fn copy_preview(&mut self, cx: &mut Context<Self>) {
-        self.ensure_preview(cx);
-        let Some(text) = self
-            .preview_cache
-            .as_ref()
-            .map(|cache| cache.ir.to_plain_text())
-        else {
-            return;
-        };
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.flash_copied(cx);
     }
 
     /// 预览区的右键操作：复制选中的渲染文本

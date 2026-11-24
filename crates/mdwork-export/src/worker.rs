@@ -62,6 +62,7 @@ impl ExportJob {
             Ok(child) => child,
             Err(err) => {
                 let _ = fs::remove_dir_all(&control_dir);
+                let _ = fs::remove_dir_all(&payload_dir);
                 return Err(err).with_context(|| format!("无法启动 {}", cli.display()));
             }
         };
@@ -82,7 +83,7 @@ impl ExportJob {
             let mut saw_done = false;
             let mut saw_error = false;
             if let Some(stdout) = stdout {
-                for line in BufReader::new(stdout).lines().map_while(|line| line.ok()) {
+                for line in BufReader::new(stdout).lines().filter_map(|line| line.ok()) {
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
                         continue;
@@ -99,13 +100,13 @@ impl ExportJob {
                     }
                 }
             }
-            let status = {
-                let mut slot = thread_child.lock().expect("export child lock");
-                match slot.take() {
-                    Some(mut child) => child.wait().ok(),
-                    None => None,
-                }
-            };
+            // 先在锁内取出句柄，再在锁外 wait：否则 cancel()/Drop 会与
+            // 阻塞的 wait() 争用同一把锁，UI 线程可能永久卡住。
+            let child_handle = thread_child
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .take();
+            let status = child_handle.and_then(|mut child| child.wait().ok());
             if !thread_cancelled.load(Ordering::SeqCst) {
                 let stderr =
                     fs::read_to_string(thread_control.join("stderr.log")).unwrap_or_default();
@@ -137,7 +138,7 @@ impl ExportJob {
     }
 
     pub fn drain(&self) -> Vec<ExportEvent> {
-        let mut queue = self.events.lock().expect("export events lock");
+        let mut queue = self.events.lock().unwrap_or_else(|err| err.into_inner());
         std::mem::take(&mut *queue)
     }
 
@@ -155,7 +156,7 @@ impl ExportJob {
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
-        let mut slot = self.child.lock().expect("export child lock");
+        let mut slot = self.child.lock().unwrap_or_else(|err| err.into_inner());
         if let Some(mut child) = slot.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -289,14 +290,8 @@ fn status_code(status: std::process::ExitStatus) -> String {
 
 impl Drop for ExportJob {
     fn drop(&mut self) {
-        if self
-            .child
-            .lock()
-            .map(|slot| slot.is_some())
-            .unwrap_or(false)
-        {
-            self.cancel();
-        }
+        // cancel() 是幂等的；直接调用避免先持锁再进入 cancel 的嵌套加锁。
+        self.cancel();
     }
 }
 

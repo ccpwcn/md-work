@@ -372,7 +372,8 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
     assert_eq!(notebooks["notebooks"][0]["name"], "工作笔记");
 
     let info = expect_ok(&peer, "notebook_info", json!({ "notebook_id": nb })).await;
-    assert_eq!(info["note_count"], 3);
+    // 统计必须与令牌的 note_deny 一致，不能泄露被拒绝笔记的存在。
+    assert_eq!(info["note_count"], 2);
     assert_eq!(info["folder_count"], 1);
 
     let listing = expect_ok(&peer, "list_notes", json!({ "notebook_id": nb })).await;
@@ -512,7 +513,10 @@ async fn read_tools_filter_acl_enforce_scopes_and_audit_without_bodies() {
     );
     assert!(recent.iter().any(|entry| {
         entry.tool == "search_notes"
-            && entry.query.as_deref() == Some("ALPHA")
+            && entry
+                .query
+                .as_deref()
+                .is_some_and(|query| query.starts_with("sha256:"))
             && entry.path.is_none()
     }));
     assert!(recent.iter().any(|entry| entry.result == "error:FORBIDDEN"));

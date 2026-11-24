@@ -42,6 +42,7 @@ impl PreviewFrameSelection {
     }
 
     /// 当前收集的选区片段数量（用于回归测试验证重绘不会累积 runs）。
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.runs.len()
     }

@@ -10,6 +10,7 @@ use mdwork_core::TextEncoding;
 use mdwork_core::bookmarks::Bookmarks;
 use mdwork_core::doc::{self, EncodingHint, Eol};
 use mdwork_core::mcp_permissions::{NodeKey, PermLevel};
+use mdwork_core::mcp_renames::RenameJournal;
 use mdwork_core::permissions::Scope;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::ErrorData;
@@ -366,6 +367,7 @@ impl MdworkServer {
 
             // 权限记录按路径存放：不迁移会让新路径默认隐藏、旧路径留下残留授权。
             self.rekey_permissions(id, &from, &moved);
+            RenameJournal::record(id, &from, &moved);
 
             let mut marks = Bookmarks::load(&notebook).map_err(core_error)?;
             marks.rekey(&from, &moved);

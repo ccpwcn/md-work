@@ -358,6 +358,7 @@ impl AppShell {
             self.request_editor_focus(cx);
         }
         if changed {
+            self.record_recent_note(cx);
             self.reveal_active(cx);
             self.persist_session(cx);
         }
@@ -553,11 +554,39 @@ impl AppShell {
         }
     }
 
+    /// 把当前活动笔记写入「最近浏览」历史，供 Ctrl+E 面板使用。
+    pub(super) fn record_recent_note(&mut self, cx: &App) {
+        let Some(doc) = self.active_doc_entity() else {
+            return;
+        };
+        let doc = doc.read(cx);
+        let Some(notebook) = doc.notebook_id else {
+            return;
+        };
+        let path = doc.rel_path.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let records = &mut self.session.recent_notes;
+        records.retain(|record| !(record.notebook == notebook && record.path == path));
+        records.insert(
+            0,
+            RecentNoteRecord {
+                notebook,
+                path,
+                viewed_at: now,
+            },
+        );
+        records.truncate(200);
+    }
+
     pub(super) fn activate_doc(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.docs.len() {
             return;
         }
         self.active_doc = Some(index);
+        self.record_recent_note(cx);
         self.sync_tree_selection_to_active_doc(cx);
         if let Some(id) = self.docs[index].read(cx).notebook_id {
             self.active_notebook = Some(id);
@@ -626,6 +655,11 @@ impl AppShell {
         }
         if self.settings.is_some()
             || self.palette.is_some()
+            || self.recent_notes.is_some()
+            || self
+                .image_settings
+                .as_ref()
+                .is_some_and(|dialog| dialog.cleanup.confirm)
             || self.prompt.is_some()
             || self.move_picker.is_some()
             || self.export.is_some()

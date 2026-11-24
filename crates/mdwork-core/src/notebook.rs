@@ -8,6 +8,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::atomic::write_atomic;
+use crate::bookmarks::{Bookmark, Bookmarks};
 use crate::doc::{self, DecodedDoc, EncodingHint, Eol, TextEncoding};
 use crate::paths::{ASSETS_DIR, META_DIR, NOTEBOOK_FILE};
 use crate::toml_io;
@@ -110,6 +111,99 @@ pub fn remove_encoding_hint(root: &Path, rel_path: &str) -> Result<()> {
     file.save(&path)
 }
 
+fn path_or_child(rel: &str, parent: &str) -> bool {
+    rel == parent
+        || rel
+            .strip_prefix(parent)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Collects metadata that must travel with an entry into the trash so that
+/// restoring it does not leave stale hints behind or lose bookmarks.
+fn trash_extras(root: &Path, rel: &str) -> (Vec<Bookmark>, Option<EncodingHint>) {
+    let bookmarks = Notebook::open(root)
+        .ok()
+        .and_then(|notebook| Bookmarks::load(&notebook).ok())
+        .map(|marks| {
+            marks
+                .entries
+                .into_iter()
+                .filter(|entry| path_or_child(&entry.rel_path, rel))
+                .collect()
+        })
+        .unwrap_or_default();
+    let encoding_hint = load_encoding_map(root).get(&encoding_key(rel)).copied();
+    (bookmarks, encoding_hint)
+}
+
+fn remove_trash_extras(root: &Path, item: &TrashItem) {
+    if !item.bookmarks.is_empty()
+        && let Ok(notebook) = Notebook::open(root)
+        && let Ok(mut marks) = Bookmarks::load(&notebook)
+    {
+        let before = marks.entries.len();
+        for bookmark in &item.bookmarks {
+            marks.remove(&bookmark.rel_path, bookmark.heading.as_deref());
+        }
+        if marks.entries.len() != before
+            && let Err(err) = marks.save(&notebook)
+        {
+            tracing::warn!(error = %err, "删除后更新书签失败");
+        }
+    }
+    if item.encoding_hint.is_some() {
+        let path = encoding_file_path(root);
+        let mut file = EncodingFile::load(&path);
+        let before = file.files.len();
+        file.files
+            .retain(|key, _| !path_or_child(key, &encoding_key(&item.rel_path)));
+        if file.files.len() != before
+            && let Err(err) = file.save(&path)
+        {
+            tracing::warn!(error = %err, "删除后更新编码提示失败");
+        }
+    }
+}
+
+fn restore_trash_extras(root: &Path, item: &TrashItem, target_rel: &str) {
+    let rekey = |rel: &str| {
+        if rel == item.rel_path {
+            target_rel.to_string()
+        } else if let Some(rest) = rel.strip_prefix(&format!("{}/", item.rel_path)) {
+            format!("{target_rel}/{rest}")
+        } else {
+            rel.to_string()
+        }
+    };
+    if !item.bookmarks.is_empty()
+        && let Ok(notebook) = Notebook::open(root)
+        && let Ok(mut marks) = Bookmarks::load(&notebook)
+    {
+        let mut changed = false;
+        for bookmark in &item.bookmarks {
+            let mut restored = bookmark.clone();
+            restored.rel_path = rekey(&bookmark.rel_path);
+            let duplicate = marks.entries.iter().any(|current| {
+                current.rel_path == restored.rel_path
+                    && current.heading == restored.heading
+                    && current.line == restored.line
+            });
+            if !duplicate {
+                marks.entries.push(restored);
+                changed = true;
+            }
+        }
+        if changed && let Err(err) = marks.save(&notebook) {
+            tracing::warn!(error = %err, "恢复后重建书签失败");
+        }
+    }
+    if let Some(hint) = item.encoding_hint
+        && let Err(err) = store_encoding_hint(root, target_rel, hint)
+    {
+        tracing::warn!(error = %err, "恢复后重建编码提示失败");
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Marker {
     pub format: String,
@@ -159,6 +253,12 @@ pub struct TrashItem {
     pub rel_path: String,
     pub kind: EntryKind,
     pub deleted_at: u64,
+    /// 删除时随条目一起移走的书签，恢复时按实际落盘路径重建。
+    #[serde(default)]
+    pub bookmarks: Vec<Bookmark>,
+    /// 删除时该笔记（或文件夹）的编码提示。
+    #[serde(default)]
+    pub encoding_hint: Option<EncodingHint>,
 }
 
 impl Notebook {
@@ -257,6 +357,7 @@ impl Notebook {
     pub fn rename_display_name(&mut self, name: &str) -> Result<()> {
         let display = sanitize_display_name(name);
         let previous_root = self.root.clone();
+        let previous_name = self.marker.name.clone();
         let folder_renamed = self.rename_root_folder(&display)?;
 
         self.marker.name = display;
@@ -271,6 +372,7 @@ impl Notebook {
                     );
                 } else {
                     self.root = previous_root;
+                    self.marker.name = previous_name;
                 }
             }
             return Err(err);
@@ -710,15 +812,19 @@ impl Notebook {
             EntryKind::Note
         };
 
+        let (bookmarks, encoding_hint) = trash_extras(&self.root, &rel);
         let item = TrashItem {
             id: Uuid::new_v4(),
             rel_path: rel,
             kind,
             deleted_at: now_unix(),
+            bookmarks,
+            encoding_hint,
         };
         let item_dir = self.trash_dir().join(item.id.to_string());
         fs::create_dir_all(&item_dir)?;
         fs::rename(&source, item_dir.join("payload"))?;
+        remove_trash_extras(&self.root, &item);
         toml_io::save(&item_dir.join(TRASH_META_FILE), &item)?;
         if let Err(err) =
             crate::order::forget_child(&self.root, &item.rel_path, kind == EntryKind::Folder)
@@ -773,6 +879,7 @@ impl Notebook {
         }
         fs::rename(item_dir.join("payload"), &target)?;
         fs::remove_dir_all(&item_dir)?;
+        restore_trash_extras(&self.root, &item, &target_rel);
         if let Err(err) = crate::order::place_child(
             &self.root,
             crate::order::parent_rel(&target_rel),
@@ -1218,10 +1325,7 @@ mod tests {
             notebook.normalize_note_rel("v1.2 计划").unwrap(),
             "v1.2 计划.md"
         );
-        assert_eq!(
-            notebook.normalize_note_rel("第1.章").unwrap(),
-            "第1.章.md"
-        );
+        assert_eq!(notebook.normalize_note_rel("第1.章").unwrap(), "第1.章.md");
         assert_eq!(
             notebook.normalize_note_rel("报告.final.MD").unwrap(),
             "报告.final.MD"
@@ -1231,9 +1335,7 @@ mod tests {
         assert_eq!(created, "v1.2 计划.md");
         assert!(root.join(&created).is_file());
 
-        let renamed = notebook
-            .rename_entry(&created, "第1.章")
-            .unwrap();
+        let renamed = notebook.rename_entry(&created, "第1.章").unwrap();
         assert_eq!(renamed, "第1.章.md");
         assert!(root.join(&renamed).is_file());
         fs::remove_dir_all(root).unwrap();
@@ -1267,6 +1369,36 @@ mod tests {
         assert_eq!(restored, "note.md");
         assert!(notebook.note_path("note.md").unwrap().exists());
         assert!(notebook.list_trash().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restore_rebuilds_bookmarks_and_encoding_hint() {
+        let (root, notebook) = temp_notebook();
+        notebook.create_note("旧.md", "x").unwrap();
+        let mut marks = Bookmarks::load(&notebook).unwrap();
+        assert!(marks.toggle_note("旧.md", "标题"));
+        marks.save(&notebook).unwrap();
+        let hint = EncodingHint {
+            encoding: TextEncoding::Gb18030,
+            bom: false,
+            eol: Eol::Crlf,
+        };
+        notebook.remember_encoding("旧.md", hint).unwrap();
+
+        let item = notebook.delete_entry("旧.md").unwrap();
+        assert!(Bookmarks::load(&notebook).unwrap().entries.is_empty());
+        assert_eq!(notebook.encoding_hint("旧.md"), None);
+        notebook.create_note("旧.md", "新内容").unwrap();
+        let restored = notebook.restore_trash_item(&item.id).unwrap();
+        assert_eq!(restored, "旧 (restored).md");
+        assert!(
+            Bookmarks::load(&notebook)
+                .unwrap()
+                .note(&restored)
+                .is_some()
+        );
+        assert_eq!(notebook.encoding_hint(&restored), Some(hint));
         fs::remove_dir_all(root).unwrap();
     }
 

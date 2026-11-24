@@ -26,6 +26,7 @@ impl AppShell {
         {
             self.official_doc_warned.insert(kind);
             self.official_doc_alerts.push(alert);
+            self.focus_panel(panel::OFFICIAL_DOC, window, cx);
         }
         if let Some(index) = self
             .docs
@@ -147,6 +148,7 @@ impl AppShell {
                             ),
                     ),
             )
+            .focus_trap(panel::OFFICIAL_DOC, &self.panel_focus(panel::OFFICIAL_DOC))
             .into_any_element()
     }
 }

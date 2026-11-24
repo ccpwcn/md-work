@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
-use gpui_kit::base::{ElementExt as _, InteractiveElementExt as _, ScrollableMask, StyledExt as _};
+use gpui_kit::base::{
+    ElementExt as _, FocusTrapElement as _, InteractiveElementExt as _, ScrollableMask,
+    StyledExt as _,
+};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{
@@ -21,7 +24,7 @@ use mdwork_core::archive::{self, Conflict, ConflictPolicy, ImportMode, ImportOpt
 use mdwork_core::bookmarks::Bookmarks;
 use mdwork_core::config::{
     AppConfig, BookmarkMarker, CursorPos, NotebookSession, PanelArrangement, PanelDock, PanelKind,
-    Session, ThemePreference,
+    RecentNoteRecord, Session, ThemePreference,
 };
 use mdwork_core::doc::{Eol, TextEncoding};
 use mdwork_core::image::{self, ImageHost, ImageKind};
@@ -60,6 +63,7 @@ mod palette;
 mod panels;
 mod previewer;
 mod prompt;
+mod recent_notes;
 mod render;
 mod searcher;
 mod settings;
@@ -79,6 +83,24 @@ pub(crate) use window_place::restore_window;
 const PANEL_MIN_WIDTH: f32 = 240.0;
 const PANEL_MAX_WIDTH: f32 = 560.0;
 const PANEL_RAIL_WIDTH: f32 = 40.0;
+
+/// Stable ids for the panels that own a Tab focus trap. The id doubles as the
+/// element id registered with GPUI's focus-trap manager, so it must be unique.
+pub(super) mod panel {
+    pub const MAIN: &str = "main-panel";
+    pub const EXPORT: &str = "export-panel";
+    pub const ZIP: &str = "zip-panel";
+    pub const SETTINGS: &str = "settings-panel";
+    pub const IMAGE_CLEANUP: &str = "image-cleanup-panel";
+    pub const RECOVERY: &str = "recovery-panel";
+    pub const PROMPT: &str = "prompt-panel";
+    pub const MOVE_PICKER: &str = "move-picker-panel";
+    pub const WORKSPACE_CONFIRM: &str = "workspace-confirm-panel";
+    pub const DELETE_CONFIRM: &str = "delete-confirm-panel";
+    pub const PALETTE: &str = "palette-panel";
+    pub const RECENT_NOTES: &str = "recent-notes-panel";
+    pub const OFFICIAL_DOC: &str = "official-doc-panel";
+}
 
 /// 行/标签下标及其最近一次绘制区域，供拖拽命中测试使用。
 type PaintedBounds = Arc<Mutex<Vec<(usize, Bounds<Pixels>)>>>;
@@ -285,6 +307,8 @@ struct ExportDialog {
     footer_input: Entity<InputState>,
     output_input: Entity<InputState>,
     job: Option<ExportJob>,
+    /// Incremented every time export starts so stale async start tasks are ignored.
+    generation: u64,
     busy: bool,
     confirm_overwrite: bool,
     stage: Option<String>,
@@ -527,6 +551,34 @@ struct Palette {
     selected: usize,
 }
 
+/// Ctrl+E「最近笔记」面板的排序方式。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecentNotesSort {
+    Viewed,
+    Modified,
+    Created,
+}
+
+/// 面板右侧的一行：笔记本内的笔记或文件夹。
+struct RecentNoteRow {
+    notebook: Uuid,
+    path: String,
+    label: String,
+    is_folder: bool,
+    stamp: u64,
+}
+
+struct RecentNotes {
+    input: Entity<InputState>,
+    sort: RecentNotesSort,
+    /// 排序/过滤后的全部行，按笔记本分组展示。
+    rows: Vec<RecentNoteRow>,
+    /// 左栏笔记本（按其中第一行出现顺序）。
+    notebooks: Vec<Uuid>,
+    notebook_index: usize,
+    selected: usize,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum McpTab {
     Server,
@@ -647,6 +699,9 @@ pub struct AppShell {
     /// 预览区的焦点句柄：GPUI 的按键动作只会沿焦点链分发，
     /// 预览态必须有一个已挂载的焦点目标，Ctrl+C 才能到达复制 handler。
     preview_focus: FocusHandle,
+    /// Each visible panel owns a stable focus handle. `focus_trap` uses it to
+    /// confine Tab navigation to that panel instead of leaking into the main UI.
+    panel_focus: HashMap<&'static str, FocusHandle>,
     /// 创建 `preview_view` 时使用的渲染配置，用于在设置变化时重建它。
     preview_render_config: Option<(bool, String, f32)>,
     /// 状态栏全文统计的缓存，键为 `(文档实体、文本修订号)`。
@@ -710,6 +765,7 @@ pub struct AppShell {
     tree_clipboard: Option<TreeClipboard>,
     workspace_confirm: Option<WorkspaceConfirm>,
     palette: Option<Palette>,
+    recent_notes: Option<RecentNotes>,
     recovery: Option<RecoveryDialog>,
     scan_issues: Vec<String>,
     dirty: crate::dirty::DirtyRegistry,
@@ -899,6 +955,17 @@ enum DiskRead {
 }
 
 impl AppShell {
+    /// Handle backing a panel's focus trap. Stable for the lifetime of the shell.
+    pub(super) fn panel_focus(&self, id: &'static str) -> FocusHandle {
+        self.panel_focus[id].clone()
+    }
+
+    /// Put keyboard focus inside a panel when it opens. Without this, Tab would
+    /// follow the still-focused main UI even though the panel is on screen.
+    pub(super) fn focus_panel(&self, id: &'static str, window: &mut Window, cx: &mut App) {
+        self.panel_focus[id].focus(window, cx);
+    }
+
     /// 编辑/预览模式保存在每个 `Doc` 上，切换标签页时
     /// 模式随标签一起切换，而不是共用一个窗口级标志。
     pub(super) fn is_preview_mode(&self, cx: &App) -> bool {
@@ -1033,6 +1100,24 @@ impl AppShell {
             selection_overlay: None,
             preview_frame: None,
             preview_focus: cx.focus_handle(),
+            panel_focus: [
+                panel::MAIN,
+                panel::EXPORT,
+                panel::ZIP,
+                panel::SETTINGS,
+                panel::IMAGE_CLEANUP,
+                panel::RECOVERY,
+                panel::PROMPT,
+                panel::MOVE_PICKER,
+                panel::WORKSPACE_CONFIRM,
+                panel::DELETE_CONFIRM,
+                panel::PALETTE,
+                panel::RECENT_NOTES,
+                panel::OFFICIAL_DOC,
+            ]
+            .into_iter()
+            .map(|id| (id, cx.focus_handle()))
+            .collect(),
             preview_render_config: None,
             status_stats: None,
             math: HashMap::new(),
@@ -1080,6 +1165,7 @@ impl AppShell {
             tree_clipboard: None,
             workspace_confirm: None,
             palette: None,
+            recent_notes: None,
             recovery: None,
             scan_issues: Vec::new(),
             dirty: crate::dirty::DirtyRegistry::new(),
@@ -1251,7 +1337,9 @@ impl Render for AppShell {
             // Input Escape propagates when clean_on_escape is off; cancel
             // in-place rename / notebook rename instead of leaving focus stuck.
             .on_action(cx.listener(|this, _: &InputEscape, _window, cx| {
-                if this.move_picker.is_some() {
+                if this.recent_notes.is_some() {
+                    this.close_recent_notes(cx);
+                } else if this.move_picker.is_some() {
                     this.close_move_picker(cx);
                 } else if this.renaming.is_some() {
                     this.cancel_rename(cx);
@@ -1277,6 +1365,16 @@ impl Render for AppShell {
                     return;
                 }
                 this.open_palette(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::OpenRecentNotes, window, cx| {
+                if this.palette.is_some() || this.prompt.is_some() || this.move_picker.is_some() {
+                    return;
+                }
+                if this.recent_notes.is_some() {
+                    this.close_recent_notes(cx);
+                    return;
+                }
+                this.open_recent_notes(window, cx)
             }))
             .on_action(cx.listener(|this, _: &crate::NewNote, window, cx| {
                 if this.palette.is_some() || this.prompt.is_some() {
@@ -1379,11 +1477,17 @@ impl Render for AppShell {
         if self.palette.is_some() {
             root = root.child(self.render_palette(cx));
         }
+        if self.recent_notes.is_some() {
+            root = root.child(self.render_recent_notes(cx));
+        }
         // 校验弹窗放在最上层：即使设置面板或恢复对话框同时打开也能看到。
         if !self.official_doc_alerts.is_empty() {
             root = root.child(self.render_official_doc_alert(cx));
         }
-        root
+        // The whole main UI is one panel; confine Tab to it when no overlay
+        // holds focus. Overlays register their own, nested focus traps.
+        let main_focus = self.panel_focus(panel::MAIN);
+        root.focus_trap(panel::MAIN, &main_focus).into_any_element()
     }
 }
 

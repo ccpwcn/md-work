@@ -26,6 +26,7 @@ pub struct LoadedPermissions {
 }
 
 /// 签名权限存储：permissions.toml + permissions.toml.sig + permissions.key。
+#[derive(Debug, Clone)]
 pub struct PermissionStore {
     path: PathBuf,
 }

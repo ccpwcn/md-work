@@ -242,7 +242,7 @@ fn perm_display_label(display: PermDisplay) -> String {
     }
 }
 
-fn perm_level_icon(level: PermLevel) -> IconName {
+pub(super) fn perm_level_icon(level: PermLevel) -> IconName {
     match level {
         PermLevel::Hidden => IconName::EyeOff,
         PermLevel::Read => IconName::Eye,
@@ -1519,6 +1519,83 @@ impl AppShell {
         cx.notify();
     }
 
+    /// 树行右键菜单展示当前授权等级。设置面板打开时直接用它的编辑态，
+    /// 否则从磁盘重读（权限变更始终即时落盘）。
+    pub(super) fn mcp_perm_level_for(&self, key: &NodeKey) -> PermLevel {
+        if let Some(dialog) = &self.mcp_settings {
+            return dialog.perms.level(key);
+        }
+        PermissionStore::new(PermissionStore::default_path())
+            .load()
+            .tree
+            .level(key)
+    }
+
+    /// 笔记树右键「MCP 授权」使用的快捷授权：不依赖设置面板是否已打开，
+    /// 直接改同一份权限文件并重建签名。
+    pub(super) fn quick_mcp_grant(
+        &mut self,
+        key: NodeKey,
+        level: PermLevel,
+        cx: &mut Context<Self>,
+    ) {
+        let descendants = self
+            .notebooks
+            .iter()
+            .find(|entry| entry.notebook.marker.id == key.notebook)
+            .map(|entry| perm_descendants(key.notebook, &entry.tree, &key))
+            .unwrap_or_default();
+        let loaded = PermissionStore::new(PermissionStore::default_path()).load();
+        let mut tree = loaded.tree;
+        tree.set_level(&key, level, &descendants);
+        if let Some(dialog) = self.mcp_settings.as_mut() {
+            dialog.perms = tree.clone();
+            dialog.perms_tampered = false;
+            dialog.message = Some(t!("mcp.perm.saved").to_string());
+            dialog.error = None;
+        }
+        let receiver = disk::submit(move || {
+            PermissionStore::new(PermissionStore::default_path())
+                .save(&tree)
+                .map_err(|err| err.to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let outcome = match receiver.await {
+                Ok(outcome) => outcome,
+                Err(_) => return,
+            };
+            let _ = this.update(cx, |this, cx| {
+                match outcome {
+                    Ok(()) => {
+                        this.notify_success(t!("mcp.perm.saved").to_string(), cx);
+                    }
+                    Err(message) => {
+                        this.notify_error(
+                            t!("mcp.perm.save_error", message = message).to_string(),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 从树菜单跳到设置面板的 MCP 权限页。
+    pub(super) fn open_tree_mcp_permissions(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_settings(window, cx);
+        if let Some(dialog) = self.settings.as_mut() {
+            dialog.tab = SettingsTab::Mcp;
+        }
+        self.set_mcp_tab(McpTab::Permissions, cx);
+        cx.notify();
+    }
+
     pub(super) fn set_mcp_perm_level(
         &mut self,
         key: NodeKey,
@@ -1691,13 +1768,7 @@ impl AppShell {
                                     .child(entry.result.clone()),
                             ),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .truncate()
-                            .child(client),
-                    )
+                    .child(div().text_xs().text_color(muted).truncate().child(client))
                     .child(
                         div()
                             .text_xs()

@@ -28,6 +28,7 @@ gpui_kit::actions!(
         SaveDoc,
         TogglePreview,
         OpenPalette,
+        OpenRecentNotes,
         NewNote,
         ToggleBold,
         ToggleItalic,
@@ -86,7 +87,10 @@ fn main() {
         let pending = pending.clone();
         std::thread::spawn(move || {
             while let Ok(path) = rx.recv() {
-                pending.lock().expect("pending paths lock").push(path);
+                pending
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(path);
             }
         });
     }
@@ -105,6 +109,10 @@ fn main() {
                 KeyBinding::new("ctrl-s", SaveDoc, None),
                 KeyBinding::new("ctrl-t", TogglePreview, None),
                 KeyBinding::new("ctrl-shift-p", OpenPalette, None),
+                KeyBinding::new("ctrl-e", OpenRecentNotes, None),
+                // 输入框默认把 Ctrl+E 绑定为「移到行尾」，会吞掉全局快捷键；
+                // 同上下文再绑一次，让焦点在编辑区时也能打开最近的笔记。
+                KeyBinding::new("ctrl-e", OpenRecentNotes, Some("Input")),
                 KeyBinding::new("ctrl-n", NewNote, None),
                 KeyBinding::new("ctrl-b", ToggleBold, None),
                 KeyBinding::new("ctrl-i", ToggleItalic, None),

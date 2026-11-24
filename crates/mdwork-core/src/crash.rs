@@ -220,8 +220,22 @@ pub fn report_pending_in(dir: &Path, config: &CrashReportConfig) -> ReportSummar
         let _ = std::fs::remove_file(disabled_path(dir));
     }
 
+    let api_base = config.api_base.trim().trim_end_matches('/');
+    if !api_base.eq_ignore_ascii_case(crate::config::DEFAULT_GITEE_API) {
+        summary.skipped = "崩溃上报地址不在允许列表中，已取消上报".to_string();
+        tracing::warn!("{}", summary.skipped);
+        return summary;
+    }
     let repo = config.repo.trim().trim_matches('/').to_string();
-    if !repo.contains('/') || repo.split('/').any(|part| part.trim().is_empty()) {
+    let repo_parts: Vec<&str> = repo.split('/').collect();
+    if repo_parts.len() != 2
+        || repo_parts.iter().any(|part| {
+            part.is_empty()
+                || !part
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+        })
+    {
         summary.skipped = format!("崩溃上报仓库无效：{}", config.repo);
         tracing::warn!("{}", summary.skipped);
         return summary;
@@ -233,10 +247,7 @@ pub fn report_pending_in(dir: &Path, config: &CrashReportConfig) -> ReportSummar
         return summary;
     }
 
-    let url = format!(
-        "{}/repos/{repo}/issues",
-        config.api_base.trim().trim_end_matches('/')
-    );
+    let url = format!("{}/repos/{repo}/issues", api_base);
     let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
 
     for path in pending {
@@ -310,6 +321,21 @@ fn upload_one(
         .unwrap_or_default();
 
     let title = format!("[崩溃] {} ({version}, {os}/{arch})", truncate(message, 80));
+    // 只上报脱敏后的字段：本地记录保留完整堆栈供排查，公开 issue 不携带
+    // 构建机绝对路径或未截断的 panic payload。
+    let safe = json!({
+        "version": version,
+        "os": os,
+        "arch": arch,
+        "thread": thread,
+        "timestamp_ms": timestamp,
+        "message": truncate(message, 200),
+        "location": truncate(location, 200),
+        "backtrace": sanitize_backtrace(
+            record.get("backtrace").and_then(|value| value.as_str()).unwrap_or("")
+        ),
+    });
+    let safe_text = serde_json::to_string_pretty(&safe).unwrap_or_default();
     let body = format!(
         "### 自动上报的崩溃日志\n\n\
          - 版本：`{version}`\n\
@@ -317,8 +343,8 @@ fn upload_one(
          - 时间戳（毫秒）：`{timestamp}`\n\
          - 线程：`{thread}`\n\
          - 位置：`{location}`\n\n\
-         ### 崩溃详情\n\n```json\n{raw}\n```\n\n\
-         > 本 Issue 由墨笺在启动时自动创建；日志仅包含崩溃堆栈，不包含笔记内容。\n"
+         ### 崩溃详情\n\n```json\n{safe_text}\n```\n\n\
+         > 本 Issue 由墨笺在启动时自动创建；日志仅包含脱敏后的崩溃堆栈，不包含笔记内容。\n"
     );
 
     match agent.post(url).send_form(&[
@@ -360,6 +386,24 @@ fn read_response(response: ureq::Response) -> String {
     let mut bytes = Vec::new();
     let _ = std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes);
     String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn sanitize_backtrace(backtrace: &str) -> String {
+    let mut out = Vec::new();
+    for line in backtrace.lines().take(40) {
+        let trimmed = line.trim_start();
+        let cleaned = if trimmed.starts_with("at ") {
+            format!(
+                "{}{}",
+                &line[..line.len() - trimmed.len()],
+                "at <source redacted>"
+            )
+        } else {
+            line.to_string()
+        };
+        out.push(truncate(&cleaned, 200));
+    }
+    out.join("\n")
 }
 
 fn truncate(text: &str, limit: usize) -> String {

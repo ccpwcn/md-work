@@ -540,8 +540,39 @@ fn parse_paired_box(raw: &str, tag: &str) -> Option<(ElementAttrs, String)> {
     }
     let body_start = start + open_pat.len() + gt + 1;
     let close_pat = format!("</{tag}>");
-    let rest_lower = raw[body_start..].to_ascii_lowercase();
-    let end_rel = rest_lower.rfind(&close_pat)?;
+    // 用标签栈找与起始标签配对的闭合位置；rfind 会把多个同级盒
+    // （`<div>A</div> <div>B</div>`）吞并成一个。
+    let mut depth = 1usize;
+    let mut pos = body_start;
+    let mut end_rel = None;
+    while pos < lower.len() {
+        let Some(rel) = lower[pos..].find('<') else {
+            break;
+        };
+        let index = pos + rel;
+        if lower[index..].starts_with(&close_pat) {
+            depth -= 1;
+            if depth == 0 {
+                end_rel = Some(index - body_start);
+                break;
+            }
+            pos = index + close_pat.len();
+            continue;
+        }
+        if lower[index..].starts_with(&open_pat) {
+            let after = &lower[index + open_pat.len()..];
+            if after.starts_with('>')
+                || after
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_ascii_whitespace())
+            {
+                depth += 1;
+            }
+        }
+        pos = index + 1;
+    }
+    let end_rel = end_rel?;
     let body = &raw[body_start..body_start + end_rel];
     Some((
         element_attrs_from_map(&attrs),
@@ -771,8 +802,14 @@ mod tests {
 
     #[test]
     fn parses_font_weight_keywords_and_numbers() {
-        assert_eq!(parse_style_decls("font-weight: bold").font_weight, Some(700));
-        assert_eq!(parse_style_decls("FONT-WEIGHT: normal").font_weight, Some(400));
+        assert_eq!(
+            parse_style_decls("font-weight: bold").font_weight,
+            Some(700)
+        );
+        assert_eq!(
+            parse_style_decls("FONT-WEIGHT: normal").font_weight,
+            Some(400)
+        );
         assert_eq!(parse_style_decls("font-weight: 650").font_weight, Some(650));
         assert_eq!(parse_style_decls("font-weight: lighter").font_weight, None);
         assert_eq!(parse_style_decls("font-weight: 1000").font_weight, None);
@@ -791,5 +828,11 @@ mod tests {
         assert_eq!(style.font_weight, Some(700));
         let style = sheet.resolve(None, &["soft".into()], &StyleDecls::default());
         assert_eq!(style.font_weight, Some(300));
+    }
+
+    #[test]
+    fn sibling_divs_are_not_merged() {
+        let (_, text) = parse_paired_box("<div>A</div> <div>B</div>", "div").unwrap();
+        assert_eq!(text, "A");
     }
 }

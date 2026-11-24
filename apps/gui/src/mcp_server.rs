@@ -1,7 +1,7 @@
 //! Keeps the loopback MCP HTTP server (`md-work-cli mcp serve --http`) alive
 //! for as long as the GUI runs, and stops it when md-work exits.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 #[cfg(windows)]
@@ -12,6 +12,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub struct McpHttp {
     pub port: u16,
     child: Option<Child>,
+    stderr_log: Option<PathBuf>,
     pub error: Option<String>,
 }
 
@@ -20,6 +21,7 @@ impl McpHttp {
         Self {
             port,
             child: None,
+            stderr_log: None,
             error: None,
         }
     }
@@ -32,19 +34,18 @@ impl McpHttp {
     pub fn start(&mut self, port: u16, workspace: Option<&Path>, require_token: bool) -> bool {
         self.stop();
         self.port = port;
-        match std::net::TcpListener::bind(("127.0.0.1", port)) {
-            Ok(listener) => drop(listener),
-            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
-                tracing::warn!(port, "无法启动 MCP 服务：端口已被占用");
-                self.error = Some(format!("端口 {port} 已被占用，请换一个端口。"));
-                return false;
-            }
+        // 不在父进程里预占端口：bind→drop→spawn 之间存在竞态，且子进程
+        // 真正绑定失败时只靠轮询发现。直接让子进程绑定，并保留 stderr。
+        let log_path =
+            std::env::temp_dir().join(format!("md-work-mcp-{}-{port}.log", std::process::id()));
+        let stderr = match std::fs::File::create(&log_path) {
+            Ok(file) => file,
             Err(err) => {
-                tracing::warn!(port, error = %err, "无法监听 MCP 端口");
-                self.error = Some(format!("无法监听端口 {port}：{err}"));
+                tracing::warn!(port, error = %err, "无法创建 MCP 日志");
+                self.error = Some(format!("无法创建 MCP 日志：{err}"));
                 return false;
             }
-        }
+        };
         let cli = match crate::app::cli_path() {
             Ok(path) => path,
             Err(message) => {
@@ -71,7 +72,7 @@ impl McpHttp {
             .env("MDWORK_PARENT_PID", std::process::id().to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(stderr));
         if let Some(workspace) = workspace {
             command.env("MDWORK_WORKSPACE", workspace);
         }
@@ -81,6 +82,7 @@ impl McpHttp {
             Ok(child) => {
                 tracing::info!(port, pid = child.id(), cli = %cli.display(), "MCP HTTP 服务已启动");
                 self.child = Some(child);
+                self.stderr_log = Some(log_path);
                 self.error = None;
                 true
             }
@@ -90,6 +92,17 @@ impl McpHttp {
                 false
             }
         }
+    }
+
+    fn startup_hint(&self) -> String {
+        let Some(path) = &self.stderr_log else {
+            return String::new();
+        };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return String::new();
+        };
+        let tail: Vec<&str> = text.lines().rev().take(3).collect();
+        tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
     }
 
     pub fn stop(&mut self) {
@@ -108,8 +121,13 @@ impl McpHttp {
         match child.try_wait() {
             Ok(None) => true,
             Ok(Some(status)) => {
-                tracing::warn!(port = self.port, status = %status, "MCP 服务已退出");
-                self.error = Some(format!("MCP 服务已退出（{status}）"));
+                let hint = self.startup_hint();
+                tracing::warn!(port = self.port, status = %status, hint = %hint, "MCP 服务已退出");
+                self.error = Some(if hint.is_empty() {
+                    format!("MCP 服务已退出（{status}）")
+                } else {
+                    format!("MCP 服务已退出（{status}）：{hint}")
+                });
                 self.child = None;
                 false
             }

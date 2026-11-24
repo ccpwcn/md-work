@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use mdwork_core::notebook::Notebook;
 use mdwork_render::preview::PreviewIr;
 use mdwork_render::typst::{self, DocMeta, ExportOptions};
@@ -55,6 +55,55 @@ pub struct ExportRequest {
     /// directory next to the output so it can clean up after canceling.
     #[serde(default)]
     pub temp_dir: Option<PathBuf>,
+}
+
+impl ExportRequest {
+    /// Validates fields coming from `request.json`, which may be edited by
+    /// another process or produced by a mismatched CLI/GUI version.
+    pub fn validate(&self) -> Result<()> {
+        if self.note_rel.trim().is_empty() {
+            bail!("导出请求缺少笔记路径");
+        }
+        if self.output.file_name().is_none() {
+            bail!("导出请求缺少输出文件名");
+        }
+        let extension = self
+            .output
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if extension != self.format.extension() {
+            bail!(
+                "输出扩展名 .{} 与导出格式 {} 不一致",
+                extension,
+                self.format.extension()
+            );
+        }
+        let options = &self.options;
+        let finite = |name: &str, value: f32, min: f32, max: f32| -> Result<()> {
+            if !value.is_finite() || !(min..=max).contains(&value) {
+                bail!("导出参数 {name} 超出范围");
+            }
+            Ok(())
+        };
+        finite("纸张宽度", options.custom_width_mm, 10.0, 2_000.0)?;
+        finite("纸张高度", options.custom_height_mm, 10.0, 2_000.0)?;
+        finite("上边距", options.margin_top_mm, 0.0, 300.0)?;
+        finite("下边距", options.margin_bottom_mm, 0.0, 300.0)?;
+        finite("左边距", options.margin_left_mm, 0.0, 300.0)?;
+        finite("右边距", options.margin_right_mm, 0.0, 300.0)?;
+        finite("正文字号", options.font_size_pt, 4.0, 96.0)?;
+        finite("行距", options.line_height, 0.5, 4.0)?;
+        finite("代码字号", options.code_size_pt, 4.0, 96.0)?;
+        if !(1..=100).contains(&options.image_max_width_pct) {
+            bail!("导出参数图片宽度百分比超出范围");
+        }
+        if !(36..=1_200).contains(&options.png_dpi) {
+            bail!("导出参数 DPI 超出范围");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +166,7 @@ pub fn run(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Result
 }
 
 fn run_inner(request: &ExportRequest, emit: &mut dyn FnMut(ExportEvent)) -> Result<ExportOutcome> {
+    request.validate()?;
     emit(ExportEvent::Stage {
         stage: "read".to_string(),
     });
@@ -340,10 +390,47 @@ fn move_files(staged: &[PathBuf], targets: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// Atomically replace `target` with `source` (Windows `rename` cannot overwrite).
+/// Atomically replace `target` with `source`. Removing the old file first can
+/// leave the user with no output at all when the rename then fails.
 fn replace_file(source: &Path, target: &Path) -> Result<()> {
-    if target.exists() {
-        fs::remove_file(target).with_context(|| format!("无法覆盖 {}", target.display()))?;
+    mdwork_core::atomic::replace_atomic(source, target)
+        .with_context(|| format!("无法写入 {}", target.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> ExportRequest {
+        ExportRequest {
+            notebook_root: PathBuf::from("."),
+            note_rel: "笔记.md".to_string(),
+            notebook_name: String::new(),
+            title: String::new(),
+            format: ExportFormat::Pdf,
+            output: PathBuf::from("out.pdf"),
+            options: ExportOptions::default(),
+            markdown: None,
+            temp_dir: None,
+        }
     }
-    fs::rename(source, target).with_context(|| format!("无法写入 {}", target.display()))
+
+    #[test]
+    fn validates_output_extension() {
+        let mut request = request();
+        assert!(request.validate().is_ok());
+        request.output.set_extension("txt");
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn validates_numeric_options() {
+        let mut zero_dpi = request();
+        zero_dpi.options.png_dpi = 0;
+        assert!(zero_dpi.validate().is_err());
+
+        let mut zero_width = request();
+        zero_width.options.image_max_width_pct = 0;
+        assert!(zero_width.validate().is_err());
+    }
 }

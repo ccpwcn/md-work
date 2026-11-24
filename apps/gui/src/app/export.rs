@@ -114,6 +114,7 @@ impl AppShell {
         if self.export.is_some() {
             return;
         }
+        self.focus_panel(panel::EXPORT, window, cx);
         let options = prefs.export.clone();
         let stem = Path::new(&note_rel)
             .file_stem()
@@ -153,6 +154,7 @@ impl AppShell {
             footer_input,
             output_input,
             job: None,
+            generation: 0,
             busy: false,
             confirm_overwrite: false,
             stage: None,
@@ -288,7 +290,9 @@ impl AppShell {
 
         // Mark busy and return quickly so the frame can paint before we clone
         // markdown / write request.json / spawn the CLI.
-        if let Some(dialog) = self.export.as_mut() {
+        let generation = if let Some(dialog) = self.export.as_mut() {
+            dialog.generation = dialog.generation.wrapping_add(1);
+            let generation = dialog.generation;
             dialog.busy = true;
             dialog.confirm_overwrite = false;
             dialog.stage = Some("read".to_string());
@@ -299,7 +303,10 @@ impl AppShell {
             dialog
                 .output_input
                 .update(cx, |state, cx| state.set_value(display, window, cx));
-        }
+            generation
+        } else {
+            return;
+        };
         cx.notify();
 
         if let Some(id) = notebook_id {
@@ -328,7 +335,7 @@ impl AppShell {
             let prepared = this
                 .update(cx, |this, _cx| {
                     let dialog = this.export.as_ref()?;
-                    if !dialog.busy {
+                    if !dialog.busy || dialog.generation != generation {
                         return None;
                     }
                     Some(ExportRequest {
@@ -360,7 +367,7 @@ impl AppShell {
                     }
                     return;
                 };
-                if !dialog.busy {
+                if !dialog.busy || dialog.generation != generation {
                     if let Ok(job) = result {
                         job.cancel();
                     }
@@ -1141,6 +1148,7 @@ impl AppShell {
                             }),
                     ),
             )
+            .focus_trap(panel::EXPORT, &self.panel_focus(panel::EXPORT))
             .into_any_element()
     }
 }

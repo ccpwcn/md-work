@@ -65,12 +65,26 @@ pub fn scan(workspace_root: &Path, notebook_roots: &[PathBuf]) -> UnusedAssetRep
                 continue;
             }
         };
-        // 笔记可能是 GB18030 等编码；文件名一律是 ASCII/UTF-8，按字节
-        // 有损解码后再小写，不会影响路径片段的匹配。
-        let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+        // 笔记可能是 GB18030/UTF-16 等编码；按有损字节解码会把非 ASCII
+        // 文件名变成 U+FFFD，导致仍在使用的中文图片被误判为未引用。
+        // chardetng 对很短的 GB18030 文本可能误判为 Windows-1252；同时尝试
+        // GB18030 解码，任一解读中的引用都算「已使用」，宁可少删。
+        let text = crate::doc::decode(&bytes).text.to_ascii_lowercase();
         collect_references(&text, &mut references);
         note_text.push_str(&text);
         note_text.push('\n');
+        let gb_hint = crate::doc::EncodingHint {
+            encoding: crate::doc::TextEncoding::Gb18030,
+            ..Default::default()
+        };
+        let gb_text = crate::doc::decode_with_hint(&bytes, Some(gb_hint))
+            .text
+            .to_ascii_lowercase();
+        if gb_text != text {
+            collect_references(&gb_text, &mut references);
+            note_text.push_str(&gb_text);
+            note_text.push('\n');
+        }
     }
 
     for root in notebook_roots {
@@ -316,6 +330,26 @@ mod tests {
 
         let report = scan(&root, &[first.clone(), second.clone()]);
         assert!(report.files.is_empty(), "跨笔记本引用必须算作已使用");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn gb18030_note_keeps_chinese_asset() {
+        let root = temp_workspace("gb18030");
+        let notebook = root.join("notebook");
+        let asset = notebook.join("assets").join("中文 图.png");
+        std::fs::write(&asset, b"used").unwrap();
+        let encoded = crate::doc::encode_text(
+            "![图](assets/中文%20图.png)\n",
+            crate::doc::TextEncoding::Gb18030,
+            false,
+            crate::doc::Eol::Lf,
+        )
+        .unwrap();
+        std::fs::write(notebook.join("note.md"), encoded).unwrap();
+
+        let report = scan(&root, std::slice::from_ref(&notebook));
+        assert!(report.files.is_empty(), "非 UTF-8 笔记中的中文引用不能误删");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

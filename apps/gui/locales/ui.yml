@@ -194,21 +194,36 @@ settings.about.github_hint:
 settings.about.github_open:
   en: "Open in browser"
   zh-CN: "在浏览器中打开"
+settings.about.runtime:
+  en: "Runtime information"
+  zh-CN: "运行时信息"
+settings.about.runtime_hint:
+  en: "Copy these details when reporting a bug."
+  zh-CN: "反馈 bug 时可复制以下信息，便于定位问题。"
+settings.about.runtime_version:
+  en: "App version"
+  zh-CN: "软件版本"
 settings.about.commit:
-  en: "Build commit"
-  zh-CN: "构建提交"
-settings.about.commit_hint:
-  en: "Last commit in the source repository. Copy the hash when reporting an issue."
-  zh-CN: "源码仓库最后一次提交，反馈问题时可复制此哈希定位版本。"
-settings.about.commit_copy:
-  en: "Copy commit hash"
-  zh-CN: "复制提交哈希"
-settings.about.commit_copied:
-  en: "Commit hash copied to clipboard"
-  zh-CN: "已复制提交哈希"
-settings.about.commit_unknown:
+  en: "Git commit"
+  zh-CN: "Git 提交"
+settings.about.runtime_os:
+  en: "Operating system"
+  zh-CN: "操作系统"
+settings.about.runtime_arch:
+  en: "Architecture"
+  zh-CN: "系统架构"
+settings.about.runtime_copy:
+  en: "Copy runtime information"
+  zh-CN: "复制运行时信息"
+settings.about.runtime_copied:
+  en: "Runtime information copied to clipboard"
+  zh-CN: "已复制运行时信息"
+settings.about.runtime_unknown:
   en: "Unavailable"
   zh-CN: "未知"
+settings.about.open_crashes:
+  en: "View crash logs"
+  zh-CN: "查看崩溃日志"
 settings.typography:
   en: "Fonts"
   zh-CN: "字体"
@@ -1700,6 +1715,12 @@ tree.new_sibling_folder:
 tree.more:
   en: "More"
   zh-CN: "更多"
+tree.mcp_auth:
+  en: "MCP Access"
+  zh-CN: "MCP 授权"
+tree.mcp_auth_manage:
+  en: "Open permission settings..."
+  zh-CN: "打开权限设置..."
 tree.new_subfolder:
   en: "New subfolder here"
   zh-CN: "新建子文件夹"
@@ -1901,6 +1922,24 @@ encoding.failed:
 palette.placeholder:
   en: "Type a command…"
   zh-CN: "输入命令…"
+recent.title:
+  en: "Recent Notes"
+  zh-CN: "最近的笔记"
+recent.placeholder:
+  en: "Filter recent notes…"
+  zh-CN: "筛选笔记…"
+recent.empty:
+  en: "No matching notes"
+  zh-CN: "没有匹配的笔记"
+recent.viewed:
+  en: "Recently viewed"
+  zh-CN: "最近浏览"
+recent.modified:
+  en: "Recently modified"
+  zh-CN: "最近修改"
+recent.created:
+  en: "Recently created"
+  zh-CN: "最近创建"
 palette.empty:
   en: "No matching command"
   zh-CN: "没有匹配的命令"

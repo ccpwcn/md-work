@@ -1,5 +1,6 @@
 //! Append-only MCP audit log: one JSON object per tool call, monthly files,
-//! 90-day retention. Note bodies and secrets are never recorded.
+//! 90-day retention. Note bodies, secrets and raw search queries are never
+//! recorded; queries are stored as a short digest plus their length.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
@@ -74,11 +75,27 @@ impl AuditEntry {
         self.result = format!("error:{code}");
         self
     }
+
+    /// Replaces a raw search query with a digest so secrets typed into search
+    /// are not persisted in plaintext audit files.
+    fn redacted(&self) -> Self {
+        let mut redacted = self.clone();
+        if let Some(query) = &self.query {
+            let digest = mdwork_core::doc::sha256_hex(query.as_bytes());
+            redacted.query = Some(format!(
+                "sha256:{}:len{}",
+                &digest[..16],
+                query.chars().count()
+            ));
+        }
+        redacted
+    }
 }
 
 pub struct AuditLog {
     dir: PathBuf,
     last_prune: Mutex<u64>,
+    write: Mutex<()>,
 }
 
 impl AuditLog {
@@ -86,6 +103,7 @@ impl AuditLog {
         Self {
             dir: dir.into(),
             last_prune: Mutex::new(0),
+            write: Mutex::new(()),
         }
     }
 
@@ -98,10 +116,11 @@ impl AuditLog {
     }
 
     pub fn append(&self, entry: &AuditEntry) -> Result<()> {
+        let _guard = self.write.lock().unwrap_or_else(|err| err.into_inner());
         fs::create_dir_all(&self.dir)
             .with_context(|| format!("创建审计目录 {}", self.dir.display()))?;
         let path = self.dir.join(format!("{}.jsonl", month_key(entry.time)));
-        let mut line = serde_json::to_string(entry)?;
+        let mut line = serde_json::to_string(&entry.redacted())?;
         line.push('\n');
         let mut file = OpenOptions::new()
             .create(true)
@@ -162,7 +181,10 @@ impl AuditLog {
     fn prune_due(&self) {
         let now = now_unix();
         {
-            let mut last = self.last_prune.lock().unwrap();
+            let mut last = self
+                .last_prune
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
             if now.saturating_sub(*last) < PRUNE_INTERVAL_SECS {
                 return;
             }
@@ -312,5 +334,25 @@ mod tests {
         assert!(log.recent(10).unwrap().is_empty());
         assert_eq!(log.prune().unwrap(), 0);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn search_query_is_hashed_in_audit_file() {
+        let (dir, log) = temp_log();
+        let mut entry = AuditEntry::new("search_notes", "代理");
+        entry.query = Some("MY_SECRET_PHRASE".to_string());
+        log.append(&entry).unwrap();
+
+        let path = dir.join(format!("{}.jsonl", month_key(now_unix())));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("MY_SECRET_PHRASE"));
+        let parsed = &log.recent(1).unwrap()[0];
+        assert!(
+            parsed
+                .query
+                .as_deref()
+                .is_some_and(|q| q.starts_with("sha256:"))
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

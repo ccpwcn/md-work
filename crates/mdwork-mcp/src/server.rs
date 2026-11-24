@@ -2,12 +2,13 @@
 //! note resources.
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, UNIX_EPOCH};
 
 use mdwork_core::config::AppConfig;
 use mdwork_core::dirty::DirtyState;
 use mdwork_core::mcp_permissions::{NodeKey, PermLevel, PermissionTree};
+use mdwork_core::mcp_renames::RenameJournal;
 use mdwork_core::notebook::Notebook;
 use mdwork_core::permissions::{Scope, TokenRecord};
 use mdwork_core::workspace::Workspace;
@@ -151,12 +152,61 @@ pub fn resolve_workspace_root() -> PathBuf {
     }
 }
 
+/// Permission tree that follows changes to the signed permissions file even
+/// inside a long-lived HTTP/stdio session.
+#[derive(Clone)]
+pub(crate) struct LivePermissions {
+    store: PermissionStore,
+    audit: Arc<AuditLog>,
+    cached: Arc<Mutex<(u64, PermissionTree)>>,
+}
+
+impl LivePermissions {
+    fn new(store: PermissionStore, audit: Arc<AuditLog>) -> Self {
+        let cached = (permission_stamp(store.path()), store.load().tree);
+        Self {
+            store,
+            audit,
+            cached: Arc::new(Mutex::new(cached)),
+        }
+    }
+
+    pub(crate) fn allows(&self, key: &NodeKey, level: PermLevel) -> bool {
+        let mut cached = self.cached.lock().unwrap_or_else(|err| err.into_inner());
+        let stamp = permission_stamp(self.store.path());
+        if stamp != cached.0 {
+            let loaded = self.store.load();
+            if loaded.tampered {
+                tracing::warn!("MCP 权限文件校验失败，按全部隐藏处理");
+                log_quietly(
+                    &self.audit,
+                    &AuditEntry::new("permissions/load", "").error("TAMPERED"),
+                );
+            }
+            *cached = (stamp, loaded.tree);
+        }
+        cached.1.allows(key, level)
+    }
+}
+
+fn permission_stamp(path: &std::path::Path) -> u64 {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return 0;
+    };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    modified ^ meta.len()
+}
+
 #[derive(Clone)]
 pub struct MdworkServer {
     pub(crate) ctx: Arc<ServerContext>,
     pub(crate) tool_router: ToolRouter<Self>,
-    /// 会话级权限快照：建立会话时加载一次，之后的权限变更只影响新会话。
-    pub(crate) perms: Arc<PermissionTree>,
+    pub(crate) perms: LivePermissions,
 }
 
 impl MdworkServer {
@@ -176,10 +226,11 @@ impl MdworkServer {
         }
         let mut tool_router = Self::read_router();
         tool_router.merge(Self::write_router());
+        let audit = ctx.audit.clone();
         Self {
             ctx,
             tool_router,
-            perms: Arc::new(loaded.tree),
+            perms: LivePermissions::new(store, audit),
         }
     }
 
@@ -272,6 +323,7 @@ impl MdworkServer {
         path: &str,
     ) -> Result<String, ErrorData> {
         let rel = notebook.normalize_note_rel(path).map_err(core_error)?;
+        let rel = self.resolve_renamed(notebook, &rel);
         if !token.allows_note(&notebook.marker.id, &rel) {
             return Err(forbidden("note is not allowed for this token"));
         }
@@ -285,6 +337,31 @@ impl MdworkServer {
             return Err(forbidden("note is hidden by the permission tree"));
         }
         Ok(rel)
+    }
+
+    /// Agent 上下文里可能还留着改名前的路径。旧路径已不存在且改名记录能命中
+    /// 时跟随到新路径，避免写工具在旧路径新建空笔记（表现为 No Content）。
+    fn resolve_renamed(&self, notebook: &Notebook, rel: &str) -> String {
+        if notebook
+            .to_path(rel)
+            .map(|path| path.exists())
+            .unwrap_or(false)
+        {
+            return rel.to_string();
+        }
+        let Some(next) = RenameJournal::load().resolve(notebook.marker.id, rel) else {
+            return rel.to_string();
+        };
+        if notebook
+            .to_path(&next)
+            .map(|path| path.is_file())
+            .unwrap_or(false)
+        {
+            tracing::info!(notebook = %notebook.marker.id, from = %rel, to = %next, "MCP 路径跟随改名");
+            next
+        } else {
+            rel.to_string()
+        }
     }
 
     /// 路径在磁盘上是否已存在（新建与缺失走不同的授权/报错路径）。
@@ -391,9 +468,14 @@ impl MdworkServer {
     /// True while the GUI still holds unsaved edits for this note. Stale
     /// markers from a crashed GUI are ignored via a pid liveness probe.
     pub(crate) fn note_is_dirty(&self, notebook_id: &Uuid, rel_path: &str) -> bool {
-        let state = match &self.ctx.dirty_path {
-            Some(path) => DirtyState::load_from(path).unwrap_or_default(),
-            None => DirtyState::load(),
+        let loaded = match &self.ctx.dirty_path {
+            Some(path) => DirtyState::load_from(path),
+            None => DirtyState::load_from(&DirtyState::path()),
+        };
+        let Ok(state) = loaded else {
+            // 标记文件损坏时宁可拒绝写入，也不能覆盖编辑器中未保存的缓冲。
+            tracing::warn!("未保存标记无法读取，拒绝外部写入");
+            return true;
         };
         if state.pid == 0 || !crate::process::alive(state.pid) {
             return false;

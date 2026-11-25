@@ -28,6 +28,11 @@ impl AppShell {
         if self.settings.is_some() {
             return;
         }
+        // 与「最近笔记」面板同理：模态层卸载后焦点不会自动回到原处，
+        // 这里先记下来，关闭设置时原样恢复。
+        let previous_focus = window
+            .focused(cx)
+            .or_else(|| Some(self.panel_focus(panel::MAIN)));
         self.focus_panel(panel::SETTINGS, window, cx);
         self.open_image_settings(window, cx);
         self.open_mcp_settings(window, cx);
@@ -62,6 +67,7 @@ impl AppShell {
         });
         self.settings = Some(SettingsDialog {
             tab: SettingsTab::Workspace,
+            previous_focus,
             workspace_name,
             ui_font,
             note_font,
@@ -318,9 +324,12 @@ impl AppShell {
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_typography(window, cx);
         self.apply_workspace_name(cx);
-        self.settings = None;
+        let previous_focus = self.settings.take().and_then(|dialog| dialog.previous_focus);
         self.image_settings = None;
         self.mcp_settings = None;
+        if let Some(handle) = previous_focus {
+            window.focus(&handle, cx);
+        }
         cx.notify();
     }
 

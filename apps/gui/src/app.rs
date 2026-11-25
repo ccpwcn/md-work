@@ -416,6 +416,8 @@ enum SettingsTab {
 
 struct SettingsDialog {
     tab: SettingsTab,
+    /// 打开设置前的焦点，关闭时还回去，避免焦点悬空导致 Ctrl+E 等快捷键失灵。
+    previous_focus: Option<FocusHandle>,
     workspace_name: Entity<InputState>,
     ui_font: Entity<InputState>,
     note_font: Entity<InputState>,
@@ -565,17 +567,18 @@ struct RecentNoteRow {
     path: String,
     label: String,
     is_folder: bool,
-    stamp: u64,
+    /// (排序时间, 同秒内的记录顺序)；越大越靠前。
+    stamp: (u64, u64),
 }
 
 struct RecentNotes {
     input: Entity<InputState>,
+    /// 面板打开前的焦点，ESC / 点遮罩关闭后原样还回去；
+    /// 编辑区会重新出现输入光标，Ctrl+E 也不会因焦点悬空而失效。
+    previous_focus: Option<FocusHandle>,
     sort: RecentNotesSort,
-    /// 排序/过滤后的全部行，按笔记本分组展示。
+    /// 排序/过滤后的全部行，单栏展示，标签为「笔记本/文件夹/笔记」全名。
     rows: Vec<RecentNoteRow>,
-    /// 左栏笔记本（按其中第一行出现顺序）。
-    notebooks: Vec<Uuid>,
-    notebook_index: usize,
     selected: usize,
 }
 
@@ -771,6 +774,8 @@ pub struct AppShell {
     dirty: crate::dirty::DirtyRegistry,
     mcp: crate::mcp_server::McpHttp,
     mcp_live: bool,
+    /// MCP 子进程启停被挪到后台线程；用序号丢弃过期的回调结果。
+    mcp_generation: u64,
     selection_sig: Option<(usize, usize)>,
     initializing: bool,
     reload_generation: u64,
@@ -1171,6 +1176,7 @@ impl AppShell {
             dirty: crate::dirty::DirtyRegistry::new(),
             mcp: crate::mcp_server::McpHttp::new(mcp_port),
             mcp_live: false,
+            mcp_generation: 0,
             selection_sig: None,
             initializing: true,
             reload_generation: 0,
@@ -1336,9 +1342,9 @@ impl Render for AppShell {
             .text_color(cx.theme().foreground)
             // Input Escape propagates when clean_on_escape is off; cancel
             // in-place rename / notebook rename instead of leaving focus stuck.
-            .on_action(cx.listener(|this, _: &InputEscape, _window, cx| {
+            .on_action(cx.listener(|this, _: &InputEscape, window, cx| {
                 if this.recent_notes.is_some() {
-                    this.close_recent_notes(cx);
+                    this.close_recent_notes(window, cx);
                 } else if this.move_picker.is_some() {
                     this.close_move_picker(cx);
                 } else if this.renaming.is_some() {
@@ -1371,7 +1377,7 @@ impl Render for AppShell {
                     return;
                 }
                 if this.recent_notes.is_some() {
-                    this.close_recent_notes(cx);
+                    this.close_recent_notes(window, cx);
                     return;
                 }
                 this.open_recent_notes(window, cx)

@@ -87,7 +87,7 @@ impl AppShell {
                     .tooltip(format!("{} (Ctrl+E)", t!("recent.title")))
                     .on_click(cx.listener(|this, _, window, cx| {
                         if this.recent_notes.is_some() {
-                            this.close_recent_notes(cx);
+                            this.close_recent_notes(window, cx);
                         } else {
                             this.open_recent_notes(window, cx);
                         }

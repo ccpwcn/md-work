@@ -174,6 +174,9 @@ impl AppShell {
         {
             self.active_doc = Some(index);
             self.active_notebook = Some(notebook.marker.id);
+            // 已打开的标签页从树/面板再次点开时走的是这条提前返回分支，
+            // 也必须记入最近浏览，否则历史会一直是空的。
+            self.record_recent_note(cx);
             self.persist_session(cx);
             self.reveal_active(cx);
             self.apply_pending_jump(window, cx);

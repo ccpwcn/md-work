@@ -1414,33 +1414,80 @@ impl AppShell {
         cx.notify();
     }
 
-    /// 开关即时启停：以前勾了开关还要点「应用」才生效，切换标签页就丢改动。
-    pub(super) fn toggle_mcp_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.config.mcp_http = enabled;
+    /// 在后台线程停止/启动 MCP 子进程。Debug 构建里 CreateProcess 加载
+    /// md-work-cli.exe 会占住 UI 线程数秒，开关点击后界面会短暂假死。
+    pub(super) fn restart_mcp(&mut self, enabled: bool, cx: &mut Context<Self>) {
         let port = self.config.mcp_port.max(1);
         let require_token = self.config.mcp_require_token;
         let workspace = self.current_workspace_root();
-        self.save_config(cx);
-        self.mcp.stop();
+        self.mcp_generation = self.mcp_generation.wrapping_add(1);
+        let generation = self.mcp_generation;
+        let mut mcp = std::mem::replace(&mut self.mcp, crate::mcp_server::McpHttp::new(port));
         self.mcp_live = false;
-        let mut message = None;
-        let mut error = None;
-        if enabled {
-            if self.mcp.start(port, workspace.as_deref(), require_token) {
-                self.mcp_live = true;
-                message = Some(t!("mcp.started", port = port).to_string());
-            } else {
-                error = self.mcp.error.clone();
-            }
-        } else {
-            message = Some(t!("mcp.stopped").to_string());
-        }
+        self.mcp.error = None;
+
+        // 先把开关和「正在…」反馈画出来，不等子进程启动完成。
         if let Some(dialog) = self.mcp_settings.as_mut() {
             dialog.enabled = enabled;
-            dialog.message = message;
-            dialog.error = error;
+            dialog.require_token = require_token;
+            dialog.message = Some(
+                if enabled {
+                    t!("mcp.starting")
+                } else {
+                    t!("mcp.stopping")
+                }
+                .to_string(),
+            );
+            dialog.error = None;
         }
         cx.notify();
+
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    mcp.stop();
+                    let live = if enabled {
+                        mcp.start(port, workspace.as_deref(), require_token)
+                    } else {
+                        false
+                    };
+                    let error = if enabled && !live {
+                        mcp.error.clone()
+                    } else {
+                        None
+                    };
+                    (mcp, live, error)
+                })
+                .await;
+            let _ = weak.update(cx, |this, cx| {
+                // 期间又点了开关：旧任务的子进程交给 drop 回收，结论丢弃。
+                if this.mcp_generation != generation {
+                    return;
+                }
+                let (mcp, live, error) = outcome;
+                this.mcp = mcp;
+                this.mcp_live = live;
+                if let Some(dialog) = this.mcp_settings.as_mut() {
+                    dialog.message = if enabled {
+                        live.then(|| t!("mcp.started", port = port).to_string())
+                    } else {
+                        Some(t!("mcp.stopped").to_string())
+                    };
+                    dialog.error = error;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 开关即时启停：以前勾了开关还要点「应用」才生效，切换标签页就丢改动。
+    pub(super) fn toggle_mcp_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.config.mcp_http = enabled;
+        self.save_config(cx);
+        self.restart_mcp(enabled, cx);
     }
 
     /// 令牌策略切换即时生效：重启 HTTP 子进程，已连接的客户端会断开。
@@ -1448,26 +1495,12 @@ impl AppShell {
     pub(super) fn toggle_mcp_require_token(&mut self, required: bool, cx: &mut Context<Self>) {
         self.config.mcp_require_token = required;
         self.save_config(cx);
-        let mut message = None;
-        let mut error = None;
         if self.config.mcp_http {
-            let port = self.config.mcp_port.max(1);
-            let workspace = self.current_workspace_root();
-            self.mcp.stop();
-            self.mcp_live = false;
-            if self.mcp.start(port, workspace.as_deref(), required) {
-                self.mcp_live = true;
-                message = Some(t!("mcp.started", port = port).to_string());
-            } else {
-                error = self.mcp.error.clone();
-            }
-        }
-        if let Some(dialog) = self.mcp_settings.as_mut() {
+            self.restart_mcp(true, cx);
+        } else if let Some(dialog) = self.mcp_settings.as_mut() {
             dialog.require_token = required;
-            dialog.message = message;
-            dialog.error = error;
+            cx.notify();
         }
-        cx.notify();
     }
 
     pub(super) fn set_mcp_perm_mode(&mut self, mode: GrantMode, cx: &mut Context<Self>) {
@@ -2387,28 +2420,7 @@ impl AppShell {
         self.config.mcp_http = enabled;
         self.config.mcp_require_token = require_token;
         self.save_config(cx);
-        let workspace = self.current_workspace_root();
-        let mut message = None;
-        self.mcp.stop();
-        self.mcp_live = false;
-        if enabled {
-            if self.mcp.start(port, workspace.as_deref(), require_token) {
-                self.mcp_live = true;
-                message = Some(t!("mcp.started", port = port).to_string());
-            }
-        } else {
-            message = Some(t!("mcp.stopped").to_string());
-        }
-        let error = if enabled && !self.mcp_live {
-            self.mcp.error.clone()
-        } else {
-            None
-        };
-        if let Some(dialog) = self.mcp_settings.as_mut() {
-            dialog.error = error;
-            dialog.message = message;
-        }
-        cx.notify();
+        self.restart_mcp(enabled, cx);
     }
 
     pub(super) fn refresh_mcp_audit(&mut self, cx: &mut Context<Self>) {

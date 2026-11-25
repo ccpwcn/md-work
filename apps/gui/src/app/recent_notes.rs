@@ -1,16 +1,26 @@
-//! Ctrl+E「最近笔记」面板：左栏笔记本，右栏笔记/文件夹。
+//! Ctrl+E「最近笔记」面板：单栏跨笔记本列表，按右上角排序依据倒序。
 
 use std::collections::HashMap;
 
 use super::util::*;
 use super::*;
 
+/// 第一帧最多绘制多少行；超出的行靠关键字过滤定位，避免 Debug 构建卡顿。
+const RECENT_VISIBLE_LIMIT: usize = 80;
+
 impl AppShell {
     pub(super) fn open_recent_notes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.recent_notes.is_some() {
             return;
         }
-        self.focus_panel(panel::RECENT_NOTES, window, cx);
+        // 面板的 focus_trap 会接管键盘焦点；先把原焦点记下来，取消时还回去。
+        // 没有显式焦点时退回主面板，避免关闭后焦点悬空导致快捷键失灵。
+        let previous_focus = window
+            .focused(cx)
+            .or_else(|| Some(self.panel_focus(panel::MAIN)));
+        // 只把焦点交给面板里的输入框；先 focus_panel 再 focus 输入框会在同一
+        // 次按键里改两次焦点、排两帧，Debug 构建下就是那一下迟滞感。
+        // 焦点陷阱在浮层上，输入焦点在其内部，Tab 仍被限制在面板里。
         // 不启用 clean_on_escape：它会吞掉 Escape，使浮层的关闭快捷键失效。
         let input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("recent.placeholder").to_string())
@@ -36,18 +46,33 @@ impl AppShell {
         .detach();
         self.recent_notes = Some(RecentNotes {
             input,
+            previous_focus,
             sort: RecentNotesSort::Viewed,
             rows: Vec::new(),
-            notebooks: Vec::new(),
-            notebook_index: 0,
             selected: 0,
         });
         self.refresh_recent_notes(cx);
     }
 
-    pub(super) fn close_recent_notes(&mut self, cx: &mut Context<Self>) {
-        if self.recent_notes.take().is_some() {
+    /// 只是移除面板状态，不碰焦点。选中笔记打开时用：焦点由打开笔记的流程接管。
+    fn take_recent_notes(&mut self, cx: &mut Context<Self>) -> Option<RecentNotes> {
+        let panel = self.recent_notes.take();
+        if panel.is_some() {
             cx.notify();
+        }
+        panel
+    }
+
+    /// 取消面板（ESC / 点遮罩 / 再次 Ctrl+E）：焦点回到打开面板前的位置。
+    pub(super) fn close_recent_notes(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = self.take_recent_notes(cx)
+            && let Some(handle) = panel.previous_focus
+        {
+            window.focus(&handle, cx);
         }
     }
 
@@ -60,9 +85,9 @@ impl AppShell {
             ),
             None => return,
         };
-        // 浏览顺序用记录里的下标（0 最新）而不是秒级时间戳：同一秒内打开
-        // 多篇笔记时时间戳相同，会退化成按名字排序，刚打开的反而落到下面。
-        let viewed: HashMap<(Uuid, &str), u64> = self
+        // 以 viewed_at 为主、记录顺序为辅：跨会话的时间戳不会失真，
+        // 同一秒内打开多篇时仍按「后打开的在前」排列。
+        let viewed: HashMap<(Uuid, &str), (u64, u64)> = self
             .session
             .recent_notes
             .iter()
@@ -70,47 +95,49 @@ impl AppShell {
             .map(|(index, record)| {
                 (
                     (record.notebook, record.path.as_str()),
-                    u64::MAX - index as u64,
+                    (record.viewed_at, u64::MAX - index as u64),
                 )
             })
             .collect();
         let mut rows = Vec::new();
         for entry in &self.notebooks {
             let id = entry.notebook.marker.id;
+            let notebook_name = entry.notebook.display_name();
             for row in &entry.rows {
-                if !query.is_empty() && fuzzy_score(&row.name.to_lowercase(), &query).is_none() {
+                // 单栏展示全名：笔记本/文件夹/笔记名称（笔记去掉 .md）。
+                let mut path = row.rel_path.replace('\\', "/");
+                if row.kind == EntryKind::Note {
+                    path = path.strip_suffix(".md").unwrap_or(&path).to_string();
+                }
+                let label = format!("{notebook_name}/{path}");
+                if !query.is_empty() && fuzzy_score(&label.to_lowercase(), &query).is_none() {
                     continue;
                 }
                 let stamp = match sort {
-                    RecentNotesSort::Viewed => viewed
-                        .get(&(id, row.rel_path.as_str()))
-                        .copied()
-                        .unwrap_or(0),
-                    RecentNotesSort::Modified => row.modified,
-                    RecentNotesSort::Created => row.created,
+                    // 没有浏览记录的笔记不参与「最近浏览」，否则会退化成
+                    // 按全名字母序，看起来像被当成最近访问过。
+                    RecentNotesSort::Viewed => {
+                        let Some(stamp) = viewed.get(&(id, row.rel_path.as_str())).copied() else {
+                            continue;
+                        };
+                        stamp
+                    }
+                    RecentNotesSort::Modified => (row.modified, 0),
+                    RecentNotesSort::Created => (row.created, 0),
                 };
                 rows.push(RecentNoteRow {
                     notebook: id,
                     path: row.rel_path.clone(),
-                    label: row.name.clone(),
+                    label,
                     is_folder: row.kind == EntryKind::Folder,
                     stamp,
                 });
             }
         }
+        // 跨笔记本按右上角的排序依据统一倒序；同分时按全名排，保持结果稳定。
         rows.sort_by(|a, b| b.stamp.cmp(&a.stamp).then_with(|| a.label.cmp(&b.label)));
-        let mut notebooks = Vec::new();
-        for row in &rows {
-            if !notebooks.contains(&row.notebook) {
-                notebooks.push(row.notebook);
-            }
-        }
         if let Some(panel) = self.recent_notes.as_mut() {
             panel.rows = rows;
-            panel.notebooks = notebooks;
-            panel.notebook_index = panel
-                .notebook_index
-                .min(panel.notebooks.len().saturating_sub(1));
             panel.selected = 0;
         }
         cx.notify();
@@ -122,19 +149,8 @@ impl AppShell {
                 return;
             }
             panel.sort = sort;
-            panel.notebook_index = 0;
         }
         self.refresh_recent_notes(cx);
-    }
-
-    pub(super) fn select_recent_notebook(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(panel) = self.recent_notes.as_mut()
-            && index < panel.notebooks.len()
-        {
-            panel.notebook_index = index;
-            panel.selected = 0;
-            cx.notify();
-        }
     }
 
     pub(super) fn select_recent_note(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -144,17 +160,12 @@ impl AppShell {
         }
     }
 
-    /// 上下移动选中笔记，左右切换笔记本。
+    /// 上下在单栏列表内移动选中项。
     pub(super) fn recent_notes_step(&mut self, key: &str, cx: &mut Context<Self>) {
         let Some(panel) = self.recent_notes.as_ref() else {
             return;
         };
-        let id = panel.notebooks.get(panel.notebook_index).copied();
-        let len = panel
-            .rows
-            .iter()
-            .filter(|row| Some(row.notebook) == id)
-            .count();
+        let len = panel.rows.len();
         match key {
             "up" if len > 0 => {
                 let next = (panel.selected as i64 - 1).rem_euclid(len as i64) as usize;
@@ -163,12 +174,6 @@ impl AppShell {
             "down" if len > 0 => {
                 let next = (panel.selected as i64 + 1).rem_euclid(len as i64) as usize;
                 self.select_recent_note(next, cx);
-            }
-            "left" if panel.notebook_index > 0 => {
-                self.select_recent_notebook(panel.notebook_index - 1, cx);
-            }
-            "right" if panel.notebook_index + 1 < panel.notebooks.len() => {
-                self.select_recent_notebook(panel.notebook_index + 1, cx);
             }
             _ => {}
         }
@@ -183,18 +188,15 @@ impl AppShell {
             let Some(panel) = self.recent_notes.as_ref() else {
                 return;
             };
-            let id = panel.notebooks.get(panel.notebook_index).copied();
             panel
                 .rows
-                .iter()
-                .filter(|row| Some(row.notebook) == id)
-                .nth(panel.selected)
+                .get(panel.selected)
                 .map(|row| (row.notebook, row.path.clone(), row.is_folder))
         };
         let Some((notebook, path, is_folder)) = target else {
             return;
         };
-        self.close_recent_notes(cx);
+        self.take_recent_notes(cx);
         if is_folder {
             self.expand_to(notebook, &path);
             self.select_tree_entry(notebook, &path, EntryKind::Folder, cx);
@@ -209,22 +211,13 @@ impl AppShell {
         };
         let input = panel.input.clone();
         let sort = panel.sort;
-        let notebook_index = panel.notebook_index;
         let selected = panel.selected;
-        let active_id = panel.notebooks.get(notebook_index).copied();
-        let notebooks: Vec<(usize, Uuid, String, usize)> = panel
-            .notebooks
-            .iter()
-            .enumerate()
-            .map(|(index, id)| {
-                let count = panel.rows.iter().filter(|row| row.notebook == *id).count();
-                (index, *id, self.notebook_name(*id), count)
-            })
-            .collect();
+        // 单栏列表只画前面若干行，更多内容靠关键字过滤定位，
+        // 避免 Debug 构建首帧排版卡顿。
         let rows: Vec<(usize, String, bool)> = panel
             .rows
             .iter()
-            .filter(|row| Some(row.notebook) == active_id)
+            .take(RECENT_VISIBLE_LIMIT)
             .enumerate()
             .map(|(index, row)| (index, row.label.clone(), row.is_folder))
             .collect();
@@ -238,39 +231,10 @@ impl AppShell {
         let hover = cx.theme().list_hover;
         let shell = cx.entity();
 
-        let mut left = div().v_flex().w(px(210.)).flex_shrink_0().gap_0p5();
-        for (index, _id, name, count) in notebooks {
-            let click_shell = shell.clone();
-            left = left.child(
-                div()
-                    .id(format!("recent-notebook-{index}"))
-                    .h(px(28.))
-                    .w_full()
-                    .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(if index == notebook_index {
-                        active
-                    } else {
-                        cx.theme().transparent
-                    })
-                    .hover(move |style| style.bg(hover))
-                    .on_click(move |_, _, cx| {
-                        click_shell.update(cx, |this, cx| this.select_recent_notebook(index, cx));
-                    })
-                    .child(Icon::new(IconName::BookOpen).xsmall().text_color(muted))
-                    .child(div().flex_1().min_w_0().truncate().text_sm().child(name))
-                    .child(div().text_xs().text_color(muted).child(count.to_string())),
-            );
-        }
-
-        let mut right = div().v_flex().flex_1().min_w_0().gap_0p5();
+        let mut list = div().v_flex().flex_1().min_w_0().gap_0p5();
         for (index, label, is_folder) in rows {
             let click_shell = shell.clone();
-            right = right.child(
+            list = list.child(
                 div()
                     .id(format!("recent-note-{index}"))
                     .h(px(28.))
@@ -307,13 +271,18 @@ impl AppShell {
             );
         }
         if panel.rows.is_empty() {
-            right = right.child(
+            let empty_hint = if sort == RecentNotesSort::Viewed {
+                t!("recent.no_history").to_string()
+            } else {
+                t!("recent.empty").to_string()
+            };
+            list = list.child(
                 div()
                     .px_3()
                     .py_2()
                     .text_xs()
                     .text_color(muted)
-                    .child(t!("recent.empty").to_string()),
+                    .child(empty_hint),
             );
         }
 
@@ -362,14 +331,14 @@ impl AppShell {
             .occlude()
             .on_mouse_down(MouseButton::Left, {
                 let shell = shell.clone();
-                move |_, _, cx| {
-                    shell.update(cx, |this, cx| this.close_recent_notes(cx));
+                move |_, window, cx| {
+                    shell.update(cx, |this, cx| this.close_recent_notes(window, cx));
                 }
             })
-            .on_key_down(move |event: &KeyDownEvent, _, cx| {
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 let key_shell = key_shell.clone();
                 key_shell.update(cx, |this, cx| match event.keystroke.key.as_str() {
-                    "escape" => this.close_recent_notes(cx),
+                    "escape" => this.close_recent_notes(window, cx),
                     "up" | "down" | "left" | "right" => {
                         this.recent_notes_step(&event.keystroke.key, cx)
                     }
@@ -402,13 +371,8 @@ impl AppShell {
                         div()
                             .flex_1()
                             .min_h_0()
-                            .h_flex()
-                            .items_start()
-                            .gap_2()
                             .overflow_hidden()
-                            .child(left)
-                            .child(div().w(px(1.)).h_full().bg(border).flex_shrink_0())
-                            .child(right),
+                            .child(list),
                     ),
             )
             .focus_trap(panel::RECENT_NOTES, &self.panel_focus(panel::RECENT_NOTES))

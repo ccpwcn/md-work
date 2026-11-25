@@ -1603,20 +1603,36 @@ impl AppShell {
             status = status.child(group().child(t!("status.no_doc").to_string()));
         }
 
-        let mcp_status: AnyElement = if self.mcp_live {
-            div()
-                .child(t!("status.mcp.on", port = self.mcp.port).to_string())
-                .into_any_element()
+        // 状态栏只是「墨笺拉起的 HTTP 子进程是否存活」的只读指示，不是开关；
+        // 鼠标停留时说明判断依据，避免被误认为点了就能启停 MCP。
+        let (mcp_label, mcp_color, mcp_tip) = if self.mcp_live {
+            (
+                t!("status.mcp.on", port = self.mcp.port).to_string(),
+                None,
+                t!("status.mcp.tip.on", port = self.mcp.port).to_string(),
+            )
         } else if self.config.mcp_http && self.mcp.error.is_some() {
-            div()
-                .text_color(danger)
-                .child(t!("status.mcp.error").to_string())
-                .into_any_element()
+            (
+                t!("status.mcp.error").to_string(),
+                Some(danger),
+                t!("status.mcp.tip.error").to_string(),
+            )
         } else {
-            div()
-                .child(t!("status.mcp.off").to_string())
-                .into_any_element()
+            (
+                t!("status.mcp.off").to_string(),
+                None,
+                t!("status.mcp.tip.off").to_string(),
+            )
         };
+        let mcp_status: AnyElement = div()
+            .id("status-mcp")
+            .when_some(mcp_color, |el, color| el.text_color(color))
+            .tooltip(move |window, cx| {
+                let tip = mcp_tip.clone();
+                Tooltip::element(move |_, _cx| div().child(tip.clone())).build(window, cx)
+            })
+            .child(mcp_label)
+            .into_any_element();
         // MCP 服务状态自成一组，分隔线始终贴着它靠右显示。
         status = status
             .child(div().flex_1())

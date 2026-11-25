@@ -2,7 +2,6 @@ use super::previewer::PreviewCopyKind;
 use super::util::*;
 use super::*;
 use crate::print::{self, PrintResult};
-use gpui_kit::base::TextSelection;
 use gpui_kit::component::input::{Redo, Undo};
 
 impl AppShell {
@@ -67,24 +66,23 @@ impl AppShell {
                         .ghost()
                         .compact()
                         .label(copy_label)
+                        .tooltip(t!("preview.copy_hint").to_string())
                         .dropdown_caret(true)
                         .dropdown_menu({
                             let shell = shell.clone();
-                            let copy_label = t!("preview.context_copy").to_string();
-                            let markdown_label = t!("preview.context_copy_markdown").to_string();
-                            move |menu, window, cx| {
-                                // 与预览页右键菜单一致：有选中就复制选区，
-                                // 没有选中则复制全文（含整篇 Markdown 源码）。
-                                let selected =
-                                    TextSelection::selected_text(window, cx).trim().to_string();
+                            let copy_label = t!("preview.copy").to_string();
+                            let markdown_label = t!("preview.copy_all_markdown").to_string();
+                            // GPUI 的窗口级选区在左键按下时就会清空，点工具栏按钮
+                            // 时选区已经不在了。这里明确只做全文复制，不再读选区；
+                            // 选区复制由右键菜单和 Ctrl+C 承担。
+                            move |menu, _window, _cx| {
                                 let text_shell = shell.clone();
-                                let text_selected = selected.clone();
                                 let markdown_shell = shell.clone();
                                 menu.item(PopupMenuItem::new(copy_label.clone()).on_click(
                                     move |_, _, cx| {
                                         let _ = text_shell.update(cx, |this, cx| {
                                             this.copy_preview_text(
-                                                &text_selected,
+                                                "",
                                                 PreviewCopyKind::Text,
                                                 cx,
                                             );
@@ -96,7 +94,7 @@ impl AppShell {
                                         move |_, _, cx| {
                                             let _ = markdown_shell.update(cx, |this, cx| {
                                                 this.copy_preview_text(
-                                                    &selected,
+                                                    "",
                                                     PreviewCopyKind::Markdown,
                                                     cx,
                                                 );

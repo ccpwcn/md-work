@@ -86,6 +86,15 @@ status.mcp.off:
 status.mcp.error:
   en: "MCP error"
   zh-CN: "MCP 异常"
+status.mcp.tip.on:
+  en: "MCP on: md-work-cli.exe is serving HTTP on 127.0.0.1:%{port}. Read-only status; change it in Settings → MCP. AI clients' stdio sessions are not affected."
+  zh-CN: "MCP 已开启：md-work-cli.exe 正在 127.0.0.1:%{port} 提供 HTTP 服务。此为只读状态，开关在「设置 → MCP」；AI 客户端自行拉起的 stdio 会话不受影响。"
+status.mcp.tip.off:
+  en: "MCP off: no md-work-cli.exe HTTP server was started by MoJiān. Read-only status; turn it on in Settings → MCP. AI clients' stdio sessions are not affected."
+  zh-CN: "MCP 已关闭：没有由墨笺拉起的 md-work-cli.exe HTTP 服务。此为只读状态，可在「设置 → MCP」开启；AI 客户端自行拉起的 stdio 会话不受影响。"
+status.mcp.tip.error:
+  en: "MCP error: the md-work-cli.exe HTTP server failed to start or exited. Read-only status; see Settings → MCP for details."
+  zh-CN: "MCP 异常：md-work-cli.exe HTTP 服务启动失败或已退出。此为只读状态，详情见「设置 → MCP」。"
 conflict.modified:
   en: "\"%{title}\" changed on disk. Reloading discards your edits; keeping yours overwrites the file on save."
   zh-CN: "「%{title}」已在磁盘上被修改。重新加载会丢弃当前编辑，保留我的会在保存时覆盖磁盘文件。"
@@ -686,6 +695,12 @@ preview.edit:
 preview.copy:
   en: "Copy all"
   zh-CN: "复制全文"
+preview.copy_all_markdown:
+  en: "Copy all as Markdown"
+  zh-CN: "复制全文为 Markdown"
+preview.copy_hint:
+  en: "Copies the whole document. To copy a selection, select text and use the right-click menu or Ctrl+C."
+  zh-CN: "复制整篇文档。复制选区请用右键菜单或 Ctrl+C。"
 preview.context_copy:
   en: "Copy"
   zh-CN: "复制"
@@ -1349,6 +1364,12 @@ mcp.apply:
 mcp.started:
   en: "MCP server started on port %{port}."
   zh-CN: "MCP 服务已在端口 %{port} 启动。"
+mcp.starting:
+  en: "Starting local MCP service…"
+  zh-CN: "正在启动本地 MCP 服务…"
+mcp.stopping:
+  en: "Stopping local MCP service…"
+  zh-CN: "正在停止本地 MCP 服务…"
 mcp.stopped:
   en: "MCP server is not running."
   zh-CN: "MCP 服务未运行。"
@@ -1931,6 +1952,9 @@ recent.placeholder:
 recent.empty:
   en: "No matching notes"
   zh-CN: "没有匹配的笔记"
+recent.no_history:
+  en: "No viewed notes yet. Open a note to add it to this list, or switch the sort to modified/created."
+  zh-CN: "暂无浏览记录。打开一篇笔记后会加入此列表，也可将排序切换到最近修改/最近创建。"
 recent.viewed:
   en: "Recently viewed"
   zh-CN: "最近浏览"
